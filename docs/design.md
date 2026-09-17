@@ -60,7 +60,7 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 
 ## 8. 里程碑
 
-**M1（本仓库当前）**：sdk / api / runtime / projector / plugin-cli / 三个示例插件 / 种子应用 / 插件模板。清单投影、多模块部署元数据、Versions API 客户端已实现但**未对线上 API 实测**。
+**M1（本仓库当前）**：sdk / api / runtime / projector / plugin-cli / 四个示例插件 / 种子应用 / 插件模板。平台能力覆盖见 `capabilities.md`：按键（自动升级 markdown）、`buttons` 匹配器与交互自动 ack、event_id 被动回复、引用、视频/语音/文件、流式（单聊）、撤回、输入中、群管理。清单投影、多模块部署元数据、Versions API 客户端已实现但**未对线上 API 实测**。
 
 **M2**：面板（Workers Static Assets）、D1 清单存储与 KV 快照发布、面板内安装（npm 搜索 → 拉制品 → 投影 → 自我部署 → 健康检查 → 切流量，SSE 进度）、自愈对比。
 

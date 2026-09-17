@@ -8,12 +8,16 @@ export {
   type TokenProvider,
   type TokenProviderOptions,
 } from './token.js'
-export { QQBotClient, type QQBotClientOptions } from './client.js'
+export { QQBotClient, DEFAULT_BASE_URL, type QQBotClientOptions } from './client.js'
+export { createGroupApi } from './group.js'
 export {
   OpCode,
   MsgType,
   FileType,
+  extractRefIndex,
   type WebhookPayload,
   type RawMessageEvent,
+  type RawInteractionEvent,
+  type RawGroupEvent,
   type CallbackVerifyData,
 } from './types.js'

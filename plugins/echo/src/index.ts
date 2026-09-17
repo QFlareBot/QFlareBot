@@ -38,8 +38,9 @@ export default definePlugin<Config>({
   events: [
     {
       event: 'qq.group.robot_added',
+      // 入群事件支持 event_id 被动回复，不消耗主动消息额度
       async handler({ session }) {
-        await session.send('大家好，发送 /echo 试试')
+        await session.reply('大家好，发送 /echo 试试')
       },
     },
   ],

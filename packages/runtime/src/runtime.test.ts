@@ -172,7 +172,7 @@ describe('webhook', () => {
     expect(installs).toEqual(['echo'])
     expect(calls).toEqual(['echo:你好 世界'])
     expect(qq.sent).toHaveLength(1)
-    expect(qq.sent[0]!.url).toBe('https://api.sgroup.qq.com/v2/groups/G1/messages')
+    expect(qq.sent[0]!.url).toBe('https://api.bot.qq.com/v2/groups/G1/messages')
     expect(qq.sent[0]!.body).toMatchObject({ msg_type: 0, content: '[echo] 你好 世界', msg_seq: 1 })
     expect(String(qq.sent[0]!.body.msg_id)).toMatch(/^ROBOT1\.0_/)
     expect(env.KV.store.get('rt:installed:echo')).toBe('1.0.0')
@@ -192,9 +192,13 @@ describe('dispatcher（经 /admin/test-event 干跑）', () => {
     )
     expect(res.status).toBe(200)
     return (await res.json()) as {
+      session: { event: string; scene: string; canReply: boolean; interaction: { type: string; buttonId: string } | null }
       matched: Array<{ plugin: string; kind: string; name: string }>
       errors: Array<{ plugin: string; stage: string; message: string }>
-      outbox: Array<{ message: unknown; msgSeq?: number }>
+      outbox: Array<{ target: { scene: string; id: string }; message: unknown; options?: { messageId?: string; eventId?: string; msgSeq?: number } }>
+      acks: Array<{ interactionId: string; code: number }>
+      recalls: string[]
+      streams: Array<{ index: number; content: string; final: boolean }>
     }
   }
 
@@ -216,7 +220,7 @@ describe('dispatcher（经 /admin/test-event 干跑）', () => {
     env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 1, plugins: { echo: { enabled: true, config: { prefix: '>>' } } } }))
 
     const alias = await testEvent(runtime, env, { content: '/say hi' })
-    expect(alias.outbox[0]).toMatchObject({ message: '>> hi', msgSeq: 1 })
+    expect(alias.outbox[0]).toMatchObject({ message: '>> hi', options: { msgSeq: 1 } })
 
     const regex = await testEvent(runtime, env, { content: 'PING' })
     expect(regex.matched[0]).toMatchObject({ kind: 'regex' })
@@ -225,7 +229,7 @@ describe('dispatcher（经 /admin/test-event 干跑）', () => {
     const event = await testEvent(runtime, env, { rawType: 'GROUP_ADD_ROBOT', content: '' })
     expect(event.matched[0]).toMatchObject({ kind: 'event', name: 'qq.group.robot_added' })
     expect(event.outbox[0]).toMatchObject({ message: '大家好' })
-    expect(event.outbox[0]!.msgSeq).toBeUndefined()
+    expect(event.outbox[0]!.options).toBeUndefined()
   })
 
   it('中间件可以短路，禁用的插件不参与', async () => {
@@ -277,6 +281,131 @@ describe('dispatcher（经 /admin/test-event 干跑）', () => {
     env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 1, plugins: {}, safeMode: true }))
     const r = await testEvent(runtime, env, { content: '/echo x' })
     expect(r.matched).toEqual([])
+  })
+})
+
+
+describe('交互与扩展能力（干跑）', () => {
+  async function testEvent(runtime: ReturnType<typeof createRuntime>, env = createEnv(), body: Record<string, unknown>) {
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/test-event`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer admin-token' },
+        body: JSON.stringify(body),
+      }),
+      env,
+      createExecutionContext(),
+    )
+    return (await res.json()) as {
+      session: { event: string; scene: string; canReply: boolean; interaction: { type: string; buttonId: string } | null }
+      matched: Array<{ plugin: string; kind: string; name: string }>
+      errors: Array<{ plugin: string; stage: string; message: string }>
+      outbox: Array<{ target: { scene: string; id: string }; message: unknown; options?: { messageId?: string; eventId?: string; msgSeq?: number } }>
+      acks: Array<{ interactionId: string; code: number }>
+      recalls: string[]
+      streams: Array<{ index: number; content: string; final: boolean }>
+    }
+  }
+
+  const panel = definePlugin({
+    name: 'panel',
+    version: '1.0.0',
+    buttons: {
+      confirm: {
+        dataPattern: '^order:',
+        async handler({ session, buttonData }) {
+          await session.reply(`已确认 ${buttonData}`)
+        },
+      },
+      deny: { async handler() { return 4 } },
+      manual: {
+        async handler({ interaction, session }) {
+          await interaction.ack(3)
+          await session.reply('手动 ack')
+        },
+      },
+    },
+    events: [
+      {
+        event: 'qq.group.robot_added',
+        async handler({ session }) {
+          await session.reply('感谢邀请（event_id 被动回复）')
+        },
+      },
+    ],
+    commands: {
+      quote: { async handler({ session }) { await session.reply({ text: '引用你', quote: true }) } },
+      undo: {
+        async handler({ session }) {
+          await session.reply('先发一条')
+          await session.recall()
+        },
+      },
+      stream: {
+        async handler({ session }) {
+          const w = session.stream()
+          await w.write('你')
+          await w.end('好')
+        },
+      },
+    },
+  })
+
+  it('按键点击：识别场景与用户、匹配 buttons、处理器未 ack 时自动以 0 回应', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const r = await testEvent(runtime, undefined, { buttonId: 'confirm', buttonData: 'order:42', scene: 'group', targetId: 'G9', userId: 'U9' })
+    expect(r.session).toMatchObject({ event: 'qq.interaction', scene: 'group', canReply: true, interaction: { type: 'button', buttonId: 'confirm' } })
+    expect(r.matched).toEqual([{ plugin: 'panel', kind: 'button', name: 'confirm' }])
+    expect(r.outbox[0]).toMatchObject({ target: { scene: 'group', id: 'G9' }, message: '已确认 order:42', options: { msgSeq: 1 } })
+    expect(r.outbox[0]!.options!.eventId).toMatch(/^INTERACTION_CREATE:/)
+    expect(r.outbox[0]!.options!.messageId).toBeUndefined()
+    expect(r.acks).toEqual([{ interactionId: expect.any(String), code: 0 }])
+  })
+
+  it('dataPattern 不匹配不命中，但仍自动 ack；返回值作为 code；手动 ack 不重复', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const miss = await testEvent(runtime, undefined, { buttonId: 'confirm', buttonData: 'other' })
+    expect(miss.matched).toEqual([])
+    expect(miss.acks.map((a) => a.code)).toEqual([0])
+
+    const deny = await testEvent(runtime, undefined, { buttonId: 'deny', scene: 'c2c', userId: 'U1' })
+    expect(deny.session.scene).toBe('c2c')
+    expect(deny.acks.map((a) => a.code)).toEqual([4])
+
+    const manual = await testEvent(runtime, undefined, { buttonId: 'manual' })
+    expect(manual.acks.map((a) => a.code)).toEqual([3])
+    expect(manual.outbox).toHaveLength(1)
+  })
+
+  it('GROUP_ADD_ROBOT 等事件可用 event_id 被动回复', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const r = await testEvent(runtime, undefined, { rawType: 'GROUP_ADD_ROBOT', content: '' })
+    expect(r.session.canReply).toBe(true)
+    expect(r.outbox[0]!.options).toMatchObject({ eventId: expect.stringMatching(/^GROUP_ADD_ROBOT:/), msgSeq: 1 })
+  })
+
+  it('quote: true 解析为 message_scene.ext 里的 msg_idx；无 msg_idx 时静默去掉', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const withRef = await testEvent(runtime, undefined, { content: '/quote', raw: { message_scene: { ext: ['msg_idx=REFIDX_abc', 'auth_token=x'] } } })
+    expect(withRef.outbox[0]!.message).toEqual({ text: '引用你', quote: 'REFIDX_abc' })
+    const noRef = await testEvent(runtime, undefined, { content: '/quote' })
+    expect(noRef.outbox[0]!.message).toEqual({ text: '引用你' })
+  })
+
+  it('recall 默认撤回最后一条成功发送的消息', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const r = await testEvent(runtime, undefined, { content: '/undo' })
+    expect(r.recalls).toEqual(['dry-run-1'])
+  })
+
+  it('stream：单聊分片下发，群聊退化为一次性回复', async () => {
+    const runtime = createRuntime({ plugins: [panel] })
+    const c2c = await testEvent(runtime, undefined, { content: '/stream', scene: 'c2c', userId: 'U1' })
+    expect(c2c.streams).toEqual([{ index: 0, content: '你', final: false }, { index: 1, content: '好', final: true }])
+    expect(c2c.outbox).toEqual([])
+    const group = await testEvent(runtime, undefined, { content: '/stream' })
+    expect(group.streams).toEqual([])
+    expect(group.outbox[0]!.message).toBe('你好')
   })
 })
 

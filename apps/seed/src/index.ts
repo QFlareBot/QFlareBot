@@ -5,8 +5,9 @@
 import { createRuntime } from '@qqbot/runtime'
 import echo from 'qqbot-plugin-echo'
 import image from 'qqbot-plugin-image'
+import keyboard from 'qqbot-plugin-keyboard'
 import multiReply from 'qqbot-plugin-multi-reply'
 
 export default createRuntime({
-  plugins: [echo, multiReply, image],
+  plugins: [echo, multiReply, image, keyboard],
 })

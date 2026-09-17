@@ -1,4 +1,4 @@
-import { isMessageEvent, type Logger, type PluginDefinition, type Session } from '@qqbot/sdk'
+import { isMessageEvent, type InteractionCode, type Logger, type PluginDefinition, type Session } from '@qqbot/sdk'
 import type { ContextFactory } from './context.js'
 import { errorInfo } from './logger.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
@@ -16,7 +16,7 @@ export interface DispatchDeps {
 
 export interface MatchRecord {
   plugin: string
-  kind: 'command' | 'regex' | 'event'
+  kind: 'command' | 'regex' | 'event' | 'button'
   name: string
 }
 
@@ -57,6 +57,10 @@ export function parseCommand(
     return { word, args, argText: rest.slice(word.length).trim() }
   }
   return null
+}
+
+function toInteractionCode(code: number): InteractionCode {
+  return code >= 0 && code <= 5 && Number.isInteger(code) ? (code as InteractionCode) : 1
 }
 
 export function isEnabled(snapshot: Snapshot, name: string): boolean {
@@ -120,6 +124,34 @@ function collectCandidates(
       }
     }
 
+    const interaction = session.interaction
+    if (interaction && (interaction.type === 'button' || interaction.type === 'menu')) {
+      for (const [buttonId, rule] of Object.entries(def.buttons ?? {})) {
+        if (buttonId !== interaction.buttonId) continue
+        if (rule.dataPattern && !compileRegex(rule.dataPattern).test(interaction.buttonData)) continue
+        if (!sceneAllowed(rule.scenes, session)) continue
+        candidates.push({
+          plugin: name,
+          kind: 'button',
+          name: buttonId,
+          priority: priorityOf(deps.snapshot, name, rule.priority),
+          block: rule.block ?? true,
+          registered,
+          run: async (ctx) => {
+            const code = await rule.handler({
+              session,
+              ctx,
+              interaction,
+              buttonId: interaction.buttonId,
+              buttonData: interaction.buttonData,
+            })
+            // 处理器返回 code 即视为回应；未返回则留给分发结束后的自动 ack
+            if (typeof code === 'number') await interaction.ack(toInteractionCode(code))
+          },
+        })
+      }
+    }
+
     for (const rule of def.events ?? []) {
       const events = Array.isArray(rule.event) ? rule.event : [rule.event]
       if (!events.includes(session.event)) continue
@@ -142,7 +174,10 @@ function collectCandidates(
 /** 事件分发：中间件链 → 匹配器；任何插件的异常只记录、不影响其他插件 */
 export async function dispatch(session: Session, deps: DispatchDeps): Promise<DispatchReport> {
   const report: DispatchReport = { matched: [], errors: [] }
-  if (deps.snapshot.safeMode) return report
+  if (deps.snapshot.safeMode) {
+    await session.interaction?.ack(0).catch(() => false)
+    return report
+  }
 
   const enabled = deps.registry.all().filter((p) => isEnabled(deps.snapshot, p.manifest.name))
   const loaded = await Promise.all(enabled.map(async (registered) => ({ registered, def: await registered.load() })))
@@ -194,5 +229,11 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   }
 
   await run(0)
+
+  // 按钮/菜单必须回应平台，否则客户端一直转圈；插件没处理就替它回应成功
+  const interaction = session.interaction
+  if (interaction && (interaction.type === 'button' || interaction.type === 'menu') && !interaction.acked) {
+    await interaction.ack(0).catch((err) => fail('runtime', 'ack', err))
+  }
   return report
 }

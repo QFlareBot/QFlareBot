@@ -19,10 +19,11 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/runtime` | `@qqbot/runtime` | Worker 运行时：Webhook 网关、分发器、上下文注入、快照、管理 API、Cron 分发 |
 | `packages/projector` | `@qqbot/projector` | 清单 → bundle 投影、Cloudflare Versions API 部署、`qqbot-project` CLI |
 | `packages/plugin-cli` | `@qqbot/plugin-cli` | `qqbot-plugin build`：把插件打成单文件 ESM 并抽出 manifest.json |
-| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image |
+| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
 | `templates/plugin` | — | 插件仓库模板（含发布 workflow） |
 | `docs/design.md` | — | 设计决策记录 |
+| `docs/capabilities.md` | — | QQ 平台能力 → 插件契约对照表（哪些已封装、哪些走 `api.raw`） |
 
 ## 快速开始（本地）
 
@@ -63,7 +64,32 @@ export default definePlugin<{ greeting: string }>({
 })
 ```
 
-插件拿到的全部能力都来自注入的 `session` 与 `ctx`（`kv` / `db` / `api` / `logger` / `service()`），不 import 运行时。复制 `templates/plugin` 起一个仓库，`qqbot-plugin build` 产出 `dist/plugin.js` + `dist/manifest.json`，推 `v*` 标签即发布到 npm。
+按键与回调：
+
+```ts
+import { button, keyboard } from '@qqbot/sdk'
+
+commands: {
+  menu: {
+    async handler({ session }) {
+      await session.reply({
+        text: '请选择',
+        keyboard: keyboard([[button.callback('确认', 'order:1', { id: 'confirm' }), button.link('帮助', 'https://…')]]),
+      })
+    },
+  },
+},
+buttons: {
+  confirm: {
+    async handler({ session, buttonData }) {
+      await session.reply(`已确认 ${buttonData}`)   // 走 event_id 被动回复
+      return 0                                       // 回应平台的 code；不返回则自动 0
+    },
+  },
+},
+```
+
+插件拿到的全部能力都来自注入的 `session` 与 `ctx`（`kv` / `db` / `api` / `logger` / `service()`），不 import 运行时。`session` 还提供 `typing()`、`stream()`、`recall()`、`quote`、`interaction`；`ctx.api.group.*` 是群管理接口。完整对照见 `docs/capabilities.md`。复制 `templates/plugin` 起一个仓库，`qqbot-plugin build` 产出 `dist/plugin.js` + `dist/manifest.json`，推 `v*` 标签即发布到 npm。
 
 ## 部署模型
 
@@ -83,6 +109,6 @@ export default definePlugin<{ greeting: string }>({
 
 ## 状态
 
-M1：契约、运行时、投影器、CLI、示例、种子均已实现，单测 100+，`wrangler dev` 下静态入口与投影产物都已跑通。Cloudflare Versions API 部署按文档实现，**尚未对线上实测**。面板、D1 清单存储与面板内安装在 M2。详见 `docs/design.md`。
+M1：契约、运行时、投影器、CLI、示例、种子均已实现，按键/交互回调/event_id 被动回复/引用/多媒体/流式/撤回/群管理已暴露给插件，单测 120，`wrangler dev` 下静态入口与投影产物都已跑通。Cloudflare Versions API 部署按文档实现，**尚未对线上实测**。面板、D1 清单存储与面板内安装在 M2。详见 `docs/design.md`。
 
 > `@qqbot` 这个 npm scope 只是占位，发布前请改成你自己的。

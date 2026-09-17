@@ -1,4 +1,12 @@
-import type { OutgoingMessage, SendResult, SendTarget, ImageSource } from './session.js'
+import type {
+  ImageSource,
+  InteractionCode,
+  MediaSource,
+  OutgoingMessage,
+  SendOptions,
+  SendResult,
+  SendTarget,
+} from './session.js'
 
 export type Awaitable<T> = T | Promise<T>
 
@@ -30,7 +38,75 @@ export interface ScopedDB {
 export interface UploadedMedia {
   fileInfo: string
   fileUuid: string
+  /** 秒；0 表示长期有效 */
   ttl: number
+}
+
+export interface StreamChunkOptions extends SendOptions {
+  /** 首片不传；后续片带上首片返回的 messageId */
+  streamId?: string
+  index: number
+  /** 是否为最后一片 */
+  final: boolean
+  markdown?: boolean
+}
+
+// ---------- 群管理（机器人需为群管理员；部分接口平台内邀开放） ----------
+
+export interface GroupMember {
+  member_openid: string
+  username: string
+  member_role: 'member' | 'admin' | 'owner' | string
+  bot: boolean
+  joined_at: string
+  union_openid?: string
+}
+
+export interface JoinRequest {
+  join_request_id: string
+  member_openid: string
+  username?: string
+  apply_at?: string
+  apply_source?: 'self_apply' | 'invited' | string
+  invited_by?: string
+  bot?: boolean
+  risk_tips?: string
+  verify_info?: {
+    method?: string
+    verify_message?: string
+    review_qa_list?: Array<{ question: string; answer: string }>
+  }
+  [key: string]: unknown
+}
+
+export type MuteOp =
+  | { op: 'add' | 'update'; memberOpenid: string; expireAt: Date | string }
+  | { op: 'del'; memberOpenid: string }
+
+export interface GroupApi {
+  info(groupOpenid: string): Promise<Record<string, unknown>>
+  botState(groupOpenid: string): Promise<Record<string, unknown>>
+  /** 逐页拉取成员，每页最多 30 */
+  members(groupOpenid: string, cursor?: string): Promise<{ members: GroupMember[]; nextCursor: string }>
+  member(groupOpenid: string, memberOpenid: string): Promise<GroupMember>
+  /** 单次最多 20 人 */
+  removeMembers(
+    groupOpenid: string,
+    memberOpenids: string[],
+    options?: { addToBlacklist?: boolean },
+  ): Promise<{ failedBlacklist: string[] }>
+  blacklist(groupOpenid: string): Promise<Record<string, unknown>>
+  updateBlacklist(groupOpenid: string, op: 'add' | 'del', memberOpenids: string[]): Promise<{ failed: string[] }>
+  /** 单次最多 20 条；最长 30 天 */
+  mute(groupOpenid: string, ops: MuteOp[]): Promise<void>
+  muteState(groupOpenid: string): Promise<Record<string, unknown>>
+  joinRequests(groupOpenid: string): Promise<JoinRequest[]>
+  reviewJoinRequest(
+    groupOpenid: string,
+    memberOpenid: string,
+    decision: { approve: true } | { approve: false; reason?: string; addToBlacklist?: boolean },
+    joinRequestId?: string,
+  ): Promise<void>
 }
 
 /** QQ OpenAPI 访问口。`raw` 永远可用，框架未封装的接口直接调它 */
@@ -40,12 +116,18 @@ export interface BotApi {
     path: string,
     body?: unknown,
   ): Promise<{ status: number; data: T }>
-  sendMessage(
-    target: SendTarget,
-    message: OutgoingMessage,
-    options?: { messageId?: string; msgSeq?: number },
-  ): Promise<SendResult>
-  uploadMedia(target: SendTarget, image: ImageSource): Promise<UploadedMedia>
+  sendMessage(target: SendTarget, message: OutgoingMessage, options?: SendOptions): Promise<SendResult>
+  /** 上传富媒体，返回可放入 media.file_info 的凭证 */
+  uploadMedia(target: SendTarget, media: MediaSource | ImageSource): Promise<UploadedMedia>
+  /** 单聊"正在输入"状态 */
+  typing(userOpenid: string, seconds?: number, options?: SendOptions): Promise<SendResult>
+  /** 流式消息单片（仅单聊）；一般用 session.stream() */
+  streamChunk(userOpenid: string, content: string, options: StreamChunkOptions): Promise<SendResult>
+  /** 撤回 2 分钟内的消息；群管理员可撤回普通成员的消息 */
+  recallMessage(target: SendTarget, messageId: string): Promise<boolean>
+  /** 回应交互事件（按钮/菜单） */
+  ackInteraction(interactionId: string, code?: InteractionCode): Promise<boolean>
+  readonly group: GroupApi
 }
 
 /**

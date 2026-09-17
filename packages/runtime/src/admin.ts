@@ -1,5 +1,5 @@
 import { createTokenProvider, type WebhookPayload } from '@qqbot/api'
-import type { Logger, OutgoingMessage, SendTarget } from '@qqbot/sdk'
+import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { error, json, matchPath, readJson } from './http.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
@@ -19,40 +19,86 @@ function authorized(request: Request, token: string): boolean {
   return header === `Bearer ${token}`
 }
 
-/** 模拟事件：捕获插件的出站消息而不真正调用 QQ */
-function recordingSender(): Sender & { outbox: Array<{ target: SendTarget; message: OutgoingMessage; msgSeq?: number }> } {
-  const outbox: Array<{ target: SendTarget; message: OutgoingMessage; msgSeq?: number }> = []
+/** 模拟事件：捕获插件的全部出站动作而不真正调用 QQ */
+interface Outbox {
+  messages: Array<{ target: SendTarget; message: OutgoingMessage; options?: SendOptions }>
+  acks: Array<{ interactionId: string; code: number }>
+  recalls: string[]
+  streams: Array<{ index: number; content: string; final: boolean }>
+}
+
+function recordingSender(): Sender & { outbox: Outbox } {
+  const outbox: Outbox = { messages: [], acks: [], recalls: [], streams: [] }
+  const ok = (id: string): SendResult => ({ ok: true, status: 200, messageId: id, raw: null })
   return {
     outbox,
-    async sendMessage(target, message, opts) {
-      outbox.push({ target, message, ...(opts?.msgSeq !== undefined ? { msgSeq: opts.msgSeq } : {}) })
-      return { ok: true, status: 200, messageId: `dry-run-${outbox.length}`, raw: null }
+    async sendMessage(target, message, options) {
+      outbox.messages.push({ target, message, ...(options ? { options } : {}) })
+      return ok(`dry-run-${outbox.messages.length}`)
+    },
+    async typing() {
+      return ok('dry-run-typing')
+    },
+    async streamChunk(_user, content, options) {
+      outbox.streams.push({ index: options.index, content, final: options.final })
+      return ok('dry-run-stream')
+    },
+    async recallMessage(_target, id) {
+      outbox.recalls.push(id)
+      return true
+    },
+    async ackInteraction(interactionId, code = 0) {
+      outbox.acks.push({ interactionId, code })
+      return true
     },
   }
 }
 
-/** 把面板/curl 传来的简化事件包装成 QQ 原始 payload */
+/**
+ * 把面板/curl 传来的简化事件包装成 QQ 原始 payload。
+ * 传 `buttonId` 即构造 INTERACTION_CREATE；否则按 scene 构造消息事件。
+ */
 function fakePayload(body: Record<string, unknown>): WebhookPayload {
   const scene = (body.scene as string) ?? 'group'
   const targetId = (body.targetId as string) ?? 'test-group'
   const userId = (body.userId as string) ?? 'test-user'
-  const content = (body.content as string) ?? ''
+  const id = `test-${Date.now()}`
+  const timestamp = new Date().toISOString()
+  const extra = typeof body.raw === 'object' && body.raw ? (body.raw as object) : {}
+
+  if (typeof body.buttonId === 'string') {
+    return {
+      op: 0,
+      id: `INTERACTION_CREATE:${id}`,
+      t: 'INTERACTION_CREATE',
+      d: {
+        id,
+        type: 11,
+        scene,
+        chat_type: scene === 'group' ? 1 : scene === 'c2c' ? 2 : 0,
+        timestamp,
+        data: { type: 11, resolved: { button_id: body.buttonId, button_data: (body.buttonData as string) ?? '' } },
+        ...(scene === 'group' ? { group_openid: targetId, group_member_openid: userId } : { user_openid: userId }),
+        ...extra,
+      },
+    }
+  }
+
   const rawType =
     (body.rawType as string) ??
     ({ group: 'GROUP_AT_MESSAGE_CREATE', c2c: 'C2C_MESSAGE_CREATE', guild: 'AT_MESSAGE_CREATE' }[scene] ?? 'GROUP_AT_MESSAGE_CREATE')
-  const id = `test-${Date.now()}`
   return {
     op: 0,
     id: `${rawType}:${id}`,
     t: rawType,
     d: {
       id: `ROBOT-TEST-${id}`,
-      content,
-      timestamp: new Date().toISOString(),
+      content: (body.content as string) ?? '',
+      timestamp,
       author: { id: userId, member_openid: userId, user_openid: userId, username: (body.userName as string) ?? '测试用户' },
       ...(scene === 'group' ? { group_openid: targetId } : {}),
       ...(scene === 'guild' ? { channel_id: targetId, guild_id: (body.guildId as string) ?? 'test-guild' } : {}),
-      ...(typeof body.raw === 'object' && body.raw ? (body.raw as object) : {}),
+      ...extra,
     },
   }
 }
@@ -64,7 +110,7 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * PUT  /admin/snapshot            整体覆盖快照
  * PATCH /admin/plugins/:name      修改单个插件的 enabled / config / priority
  * PUT  /admin/bot                 保存 AppID/AppSecret（先向 QQ 换 token 验证）
- * POST /admin/test-event          注入模拟事件并返回插件的出站消息（不真正发送）
+ * POST /admin/test-event          注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  */
 export async function handleAdmin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
   const token = scope.env.ADMIN_TOKEN
@@ -139,10 +185,20 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const { session, report } = await scope.dispatchPayload(fakePayload(body), sender)
     return json({
       ok: true,
-      session: { event: session.event, scene: session.scene, content: session.content, userId: session.userId },
+      session: {
+        event: session.event,
+        scene: session.scene,
+        content: session.content,
+        userId: session.userId,
+        canReply: session.canReply,
+        interaction: session.interaction ? { type: session.interaction.type, buttonId: session.interaction.buttonId } : null,
+      },
       matched: report.matched,
       errors: report.errors,
-      outbox: sender.outbox,
+      outbox: sender.outbox.messages,
+      acks: sender.outbox.acks,
+      recalls: sender.outbox.recalls,
+      streams: sender.outbox.streams,
     })
   }
 

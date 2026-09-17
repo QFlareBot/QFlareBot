@@ -1,6 +1,7 @@
 import type { EventName } from './events.js'
 import {
   API_VERSION,
+  type ButtonSpec,
   type CommandSpec,
   type CronSpec,
   type JsonSchema,
@@ -30,6 +31,7 @@ export interface Manifest {
   commands: Array<CommandSpec & { name: string }>
   regex: RegexSpec[]
   events: Array<{ event: EventName[]; priority?: number; block?: boolean }>
+  buttons: Array<ButtonSpec & { id: string }>
   cron: CronSpec[]
   routes: RouteSpec[]
   hasMiddleware: boolean
@@ -67,6 +69,7 @@ export function extractManifest(
     events: (def.events ?? []).map(({ handler: _h, event, ...spec }) =>
       compact({ event: Array.isArray(event) ? event : [event], ...spec }),
     ),
+    buttons: Object.entries(def.buttons ?? {}).map(([id, { handler: _h, ...spec }]) => compact({ id, ...spec })),
     cron: (def.cron ?? []).map(({ handler: _h, ...spec }) => spec),
     routes: (def.routes ?? []).map(({ handler: _h, ...spec }) => spec),
     hasMiddleware: typeof def.middleware === 'function',
@@ -101,6 +104,14 @@ export function validateManifest(m: Manifest): string[] {
       new RegExp(r.pattern, r.flags)
     } catch {
       errors.push(`正则非法：/${r.pattern}/${r.flags ?? ''}`)
+    }
+  }
+  for (const b of m.buttons) {
+    if (!b.dataPattern) continue
+    try {
+      new RegExp(b.dataPattern)
+    } catch {
+      errors.push(`按键 ${b.id} 的 dataPattern 非法：${b.dataPattern}`)
     }
   }
   for (const c of m.cron) {

@@ -35,6 +35,9 @@ importers:
       qqbot-plugin-image:
         specifier: workspace:*
         version: link:../../plugins/image
+      qqbot-plugin-keyboard:
+        specifier: workspace:*
+        version: link:../../plugins/keyboard
       qqbot-plugin-multi-reply:
         specifier: workspace:*
         version: link:../../plugins/multi-reply
@@ -99,6 +102,15 @@ importers:
         version: link:../../packages/sdk
 
   plugins/image:
+    devDependencies:
+      '@qqbot/plugin-cli':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cli
+      '@qqbot/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
+  plugins/keyboard:
     devDependencies:
       '@qqbot/plugin-cli':
         specifier: workspace:*

@@ -1,12 +1,12 @@
 import type { EventName } from './events.js'
-import type { Scene, Session } from './session.js'
+import type { Interaction, InteractionCode, Scene, Session } from './session.js'
 import type { Awaitable, PluginContext } from './context.js'
 
 /** 当前契约版本；契约破坏性变更时递增，旧版本由独立的 compat 包适配 */
 export const API_VERSION = 1 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
-export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin'
+export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'
 
 export type JsonSchema = Record<string, unknown>
 
@@ -41,6 +41,15 @@ export interface RegexInput<C = unknown> {
 export interface EventInput<C = unknown> {
   session: Session
   ctx: PluginContext<C>
+}
+
+export interface ButtonInput<C = unknown> {
+  session: Session
+  ctx: PluginContext<C>
+  interaction: Interaction
+  /** 命中的按键 id */
+  buttonId: string
+  buttonData: string
 }
 
 export interface MiddlewareInput<C = unknown> {
@@ -87,6 +96,19 @@ export interface EventSpec extends Pick<MatchOptions, 'priority' | 'block'> {
 
 export interface EventRule<C = unknown> extends EventSpec {
   handler(input: EventInput<C>): Awaitable<void>
+}
+
+export interface ButtonSpec extends Pick<MatchOptions, 'priority' | 'block' | 'scenes'> {
+  /** 按 button_data 匹配的正则；不填则只按 key（按键 id）匹配 */
+  dataPattern?: string
+}
+
+/**
+ * 回调按键处理器。返回值作为回应平台的 code（0 成功 · 1 失败 · 2 频繁 · 3 重复 · 4 无权限 · 5 仅管理员）；
+ * 不返回且未手动 ack 时，运行时自动以 0 回应。类型放宽为 number 是为了让 `return 4` 不需要 as const。
+ */
+export interface ButtonRule<C = unknown> extends ButtonSpec {
+  handler(input: ButtonInput<C>): Awaitable<void | InteractionCode | number>
 }
 
 export interface CronSpec {
@@ -150,6 +172,8 @@ export interface PluginDefinition<C = unknown> {
   commands?: Record<string, Command<C>>
   regex?: RegexRule<C>[]
   events?: EventRule<C>[]
+  /** 回调按键（action.type = 1）；key 为发送时设置的按键 id */
+  buttons?: Record<string, ButtonRule<C>>
   cron?: CronJob<C>[]
   routes?: Route<C>[]
   middleware?: Middleware<C>

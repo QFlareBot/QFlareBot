@@ -78,3 +78,47 @@ describe('testing.runCommand', () => {
     expect(session.replies).toEqual(['你好 世界'])
   })
 })
+
+describe('keyboard builder', async () => {
+  const { button, keyboard } = await import('./keyboard.js')
+  it('生成符合平台结构的键盘', () => {
+    const kb = keyboard([[button.command('图片', '/image', { enter: true }), button.callback('确认', 'ok', { id: 'confirm', style: 4, modal: '确定？' })], [button.link('文档', 'https://bot.q.qq.com')]])
+    expect(kb).toEqual({
+      content: {
+        rows: [
+          {
+            buttons: [
+              { render_data: { label: '图片' }, action: { type: 2, data: '/image', enter: true, permission: { type: 2 } } },
+              { id: 'confirm', render_data: { label: '确认', style: 4 }, action: { type: 1, data: 'ok', permission: { type: 2 }, modal: { content: '确定？' } } },
+            ],
+          },
+          { buttons: [{ render_data: { label: '文档' }, action: { type: 0, data: 'https://bot.q.qq.com', permission: { type: 2 } } }] },
+        ],
+      },
+    })
+  })
+})
+
+describe('buttons 清单', async () => {
+  const { runButton } = await import('./testing.js')
+  const p = definePlugin({
+    name: 'btn',
+    version: '1.0.0',
+    buttons: {
+      confirm: { dataPattern: '^ok', handler: async ({ session, buttonData }) => { await session.reply(`收到 ${buttonData}`); return 0 } },
+      deny: { handler: async () => 4 },
+    },
+  })
+  it('抽取与校验', () => {
+    const m = extractManifest(p, {})
+    expect(m.buttons).toEqual([{ id: 'confirm', dataPattern: '^ok' }, { id: 'deny' }])
+    m.buttons.push({ id: 'bad', dataPattern: '(' })
+    expect(validateManifest(m).some((e) => e.includes('dataPattern'))).toBe(true)
+  })
+  it('runButton 驱动处理器', async () => {
+    const { session, code } = await runButton(p, 'confirm', 'ok:1')
+    expect(session.replies).toEqual(['收到 ok:1'])
+    expect(code).toBe(0)
+    expect((await runButton(p, 'deny')).code).toBe(4)
+  })
+})

@@ -15,6 +15,7 @@
     "@qqbot/runtime": "workspace:*",
     "qqbot-plugin-echo": "workspace:*",
     "qqbot-plugin-image": "workspace:*",
+    "qqbot-plugin-keyboard": "workspace:*",
     "qqbot-plugin-multi-reply": "workspace:*"
   },
   "devDependencies": {
