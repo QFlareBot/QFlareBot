@@ -1,0 +1,28 @@
+{
+  "name": "@qqbot/api",
+  "version": "0.1.0",
+  "description": "QQ 机器人 OpenAPI 客户端：Ed25519 验签、AccessToken、消息与富媒体（基于 fetch 与 WebCrypto）",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@qqbot/sdk": "workspace:*"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

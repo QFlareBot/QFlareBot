@@ -1,0 +1,23 @@
+{
+  "name": "@qqbot/seed",
+  "private": true,
+  "version": "0.1.0",
+  "description": "种子应用：Fork 后连接 Cloudflare 即可部署的 QQ 机器人 Worker",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "project": "pnpm -w -r --filter 'qqbot-plugin-*' --filter @qqbot/runtime build && qqbot-project build --manifest qqbot.manifest.json --wrangler wrangler.jsonc --out dist",
+    "deploy:projected": "pnpm project && wrangler deploy --config wrangler.generated.jsonc"
+  },
+  "dependencies": {
+    "@qqbot/runtime": "workspace:*",
+    "qqbot-plugin-echo": "workspace:*",
+    "qqbot-plugin-image": "workspace:*",
+    "qqbot-plugin-multi-reply": "workspace:*"
+  },
+  "devDependencies": {
+    "@qqbot/projector": "workspace:*"
+  }
+}

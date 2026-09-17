@@ -1,0 +1,29 @@
+{
+  "name": "@qqbot/projector",
+  "version": "0.1.0",
+  "description": "把部署清单投影为可部署的 Worker bundle，并通过 Cloudflare Versions API 部署（零运行时依赖）",
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "qqbot-project": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@qqbot/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@qqbot/plugin-cli",
+  "version": "0.1.0",
+  "description": "QQ 机器人插件构建工具：打包为自包含的单文件 ESM 并抽取 manifest.json",
+  "type": "module",
+  "bin": {
+    "qqbot-plugin": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/cli.ts src/index.ts src/stubs/cloudflare-workers.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist --external:esbuild --sourcemap --log-level=warning",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@qqbot/sdk": "workspace:*",
+    "esbuild": "^0.28.0"
+  }
+}

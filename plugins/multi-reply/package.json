@@ -1,0 +1,19 @@
+{
+  "name": "qqbot-plugin-multi-reply",
+  "version": "0.1.0",
+  "description": "示例插件：同一条消息连续被动回复（msg_seq）",
+  "type": "module",
+  "keywords": ["qqbot-plugin"],
+  "files": ["dist"],
+  "exports": "./src/index.ts",
+  "publishConfig": { "exports": "./dist/plugin.js" },
+  "scripts": {
+    "build": "qqbot-plugin build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@qqbot/plugin-cli": "workspace:*",
+    "@qqbot/sdk": "workspace:*"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "core": { "version": "0.1.0", "source": "file:../../packages/runtime/dist/runtime.js" },
+  "plugins": [
+    { "name": "echo", "version": "0.1.0", "source": "file:../../plugins/echo/dist/plugin.js", "enabled": true, "manifest": "file:../../plugins/echo/dist/manifest.json" },
+    { "name": "multi-reply", "version": "0.1.0", "source": "file:../../plugins/multi-reply/dist/plugin.js", "enabled": true, "manifest": "file:../../plugins/multi-reply/dist/manifest.json" },
+    { "name": "image", "version": "0.1.0", "source": "file:../../plugins/image/dist/plugin.js", "enabled": true, "manifest": "file:../../plugins/image/dist/manifest.json" }
+  ]
+}

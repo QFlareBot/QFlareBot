@@ -1,0 +1,4 @@
+# 复制为 .dev.vars 供 wrangler dev 使用；线上用 `wrangler secret put` 写入
+BOT_APPID=你的AppID
+BOT_SECRET=你的AppSecret
+ADMIN_TOKEN=随机长字符串

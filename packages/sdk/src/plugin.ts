@@ -1,0 +1,170 @@
+import type { EventName } from './events.js'
+import type { Scene, Session } from './session.js'
+import type { Awaitable, PluginContext } from './context.js'
+
+/** 当前契约版本；契约破坏性变更时递增，旧版本由独立的 compat 包适配 */
+export const API_VERSION = 1 as const
+
+/** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
+export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin'
+
+export type JsonSchema = Record<string, unknown>
+
+/** 所有匹配器共享的调度字段 */
+export interface MatchOptions {
+  /** 数值越大越先执行，默认 0 */
+  priority?: number
+  /** 命中后是否阻止后续匹配器，命令默认 true，其余默认 false */
+  block?: boolean
+  /** 只在这些场景生效，默认全部 */
+  scenes?: Scene[]
+}
+
+// ---------- 输入对象：所有处理器只接收一个对象参数，便于向前兼容 ----------
+
+export interface CommandInput<C = unknown> {
+  session: Session
+  ctx: PluginContext<C>
+  /** 实际命中的命令名或别名 */
+  command: string
+  args: string[]
+  /** 命令名之后的原始文本 */
+  argText: string
+}
+
+export interface RegexInput<C = unknown> {
+  session: Session
+  ctx: PluginContext<C>
+  match: RegExpMatchArray
+}
+
+export interface EventInput<C = unknown> {
+  session: Session
+  ctx: PluginContext<C>
+}
+
+export interface MiddlewareInput<C = unknown> {
+  session: Session
+  ctx: PluginContext<C>
+}
+
+export interface CronInput<C = unknown> {
+  ctx: PluginContext<C>
+  job: string
+  scheduledAt: number
+}
+
+export interface RouteInput<C = unknown> {
+  ctx: PluginContext<C>
+  request: Request
+  params: Record<string, string>
+}
+
+// ---------- 匹配器定义 ----------
+
+export interface CommandSpec extends MatchOptions {
+  description?: string
+  usage?: string
+  aliases?: string[]
+}
+
+export interface Command<C = unknown> extends CommandSpec {
+  handler(input: CommandInput<C>): Awaitable<void>
+}
+
+export interface RegexSpec extends MatchOptions {
+  pattern: string
+  flags?: string
+}
+
+export interface RegexRule<C = unknown> extends RegexSpec {
+  handler(input: RegexInput<C>): Awaitable<void>
+}
+
+export interface EventSpec extends Pick<MatchOptions, 'priority' | 'block'> {
+  event: EventName | EventName[]
+}
+
+export interface EventRule<C = unknown> extends EventSpec {
+  handler(input: EventInput<C>): Awaitable<void>
+}
+
+export interface CronSpec {
+  name: string
+  /** 标准 5 段 cron，由运行时统一的 Cron Trigger 分发 */
+  cron: string
+}
+
+export interface CronJob<C = unknown> extends CronSpec {
+  handler(input: CronInput<C>): Awaitable<void>
+}
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export interface RouteSpec {
+  method: HttpMethod
+  /** 相对路径，运行时挂载到 `/p/<插件名>/` 下；支持 `:param` */
+  path: string
+}
+
+export interface Route<C = unknown> extends RouteSpec {
+  handler(input: RouteInput<C>): Awaitable<Response>
+}
+
+export type Middleware<C = unknown> = (
+  input: MiddlewareInput<C>,
+  next: () => Promise<void>,
+) => Awaitable<void>
+
+export interface Hooks<C = unknown> {
+  /** 每次 isolate 冷启动，只做轻量初始化 */
+  onBoot?(ctx: PluginContext<C>): Awaitable<void>
+  /** 首次安装后第一次运行（建表等，需幂等） */
+  onInstall?(ctx: PluginContext<C>): Awaitable<void>
+  onEnable?(ctx: PluginContext<C>): Awaitable<void>
+  onDisable?(ctx: PluginContext<C>): Awaitable<void>
+  /** 卸载前在旧版本中执行，可选清理数据 */
+  onUninstall?(ctx: PluginContext<C>, options: { purgeData: boolean }): Awaitable<void>
+}
+
+// ---------- 插件定义 ----------
+
+export interface PluginDefinition<C = unknown> {
+  /** 唯一标识，建议与 npm 包名（去 scope）一致 */
+  name: string
+  /** 构建时由 package.json 补齐 */
+  version?: string
+  apiVersion?: typeof API_VERSION
+  displayName?: string
+  description?: string
+  permissions?: Permission[]
+  /** JSON Schema，面板据此渲染配置表单 */
+  configSchema?: JsonSchema
+  defaultConfig?: C
+  /** 依赖的服务或插件及其版本范围 */
+  depends?: Record<string, string>
+  conflicts?: string[]
+  /** 兼容的运行时版本范围 */
+  coreRange?: string
+
+  commands?: Record<string, Command<C>>
+  regex?: RegexRule<C>[]
+  events?: EventRule<C>[]
+  cron?: CronJob<C>[]
+  routes?: Route<C>[]
+  middleware?: Middleware<C>
+  hooks?: Hooks<C>
+  /** 向其他插件提供服务；key 为服务名 */
+  services?: Record<string, (ctx: PluginContext<C>) => unknown>
+  /** 自带的 Durable Object 类；投影时加前缀重导出并注册 */
+  durableObjects?: Record<string, unknown>
+}
+
+/** 处理器参数是逆变的，收集不同 Config 的插件时用这个类型 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPluginDefinition = PluginDefinition<any>
+
+/** 恒等函数，只为类型推导与将来的构建期识别 */
+export function definePlugin<C = unknown>(definition: PluginDefinition<C>): PluginDefinition<C> {
+  return definition
+}

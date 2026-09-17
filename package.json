@@ -1,0 +1,30 @@
+{
+  "name": "qqbot-workers",
+  "private": true,
+  "version": "0.1.0",
+  "description": "运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架",
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/**' run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "pnpm --filter @qqbot/seed dev",
+    "deploy": "pnpm --filter @qqbot/seed deploy",
+    "clean": "pnpm -r exec rm -rf dist .wrangler"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250917.0",
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.86.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
