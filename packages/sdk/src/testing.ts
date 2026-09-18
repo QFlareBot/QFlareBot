@@ -17,6 +17,8 @@ import type {
   StreamWriter,
 } from './session.js'
 import type { ButtonInput, CommandInput, PluginDefinition } from './plugin.js'
+import { normalizePlugin } from './normalize.js'
+import { deliverReply } from './reply.js'
 
 export interface MockSessionOptions {
   content?: string
@@ -300,7 +302,7 @@ export async function runCommand<C>(
   argText = '',
   options: { session?: MockSessionOptions; ctx?: MockContextOptions<C> } = {},
 ): Promise<MockSession> {
-  const cmd = plugin.commands?.[command]
+  const cmd = normalizePlugin(plugin).commands.find((c) => c.name === command || c.aliases?.includes(command))
   if (!cmd) throw new Error(`插件 ${plugin.name} 没有命令 ${command}`)
   const session = createMockSession({ content: `/${command} ${argText}`.trim(), ...options.session })
   const ctx = createMockContext(plugin, options.ctx)
@@ -311,7 +313,8 @@ export async function runCommand<C>(
     args: argText.trim() ? argText.trim().split(/\s+/) : [],
     argText: argText.trim(),
   }
-  await cmd.handler(input)
+  // 与运行时一致：返回值即回复
+  await deliverReply(session, await cmd.handler(input))
   return session
 }
 
@@ -322,7 +325,7 @@ export async function runButton<C>(
   buttonData = '',
   options: { session?: MockSessionOptions; ctx?: MockContextOptions<C> } = {},
 ): Promise<{ session: MockSession; code: number | undefined }> {
-  const rule = plugin.buttons?.[buttonId]
+  const rule = normalizePlugin(plugin).buttons.find((b) => b.id === buttonId)
   if (!rule) throw new Error(`插件 ${plugin.name} 没有按键 ${buttonId}`)
   const session = createMockSession({
     messageId: null,
@@ -331,6 +334,8 @@ export async function runButton<C>(
   })
   const ctx = createMockContext(plugin, options.ctx)
   const input: ButtonInput<C> = { session, ctx, interaction: session.interaction!, buttonId, buttonData }
-  const code = await rule.handler(input)
-  return { session, code: typeof code === 'number' ? code : undefined }
+  const result = await rule.handler(input)
+  if (typeof result === 'number') return { session, code: result }
+  await deliverReply(session, result)
+  return { session, code: undefined }
 }

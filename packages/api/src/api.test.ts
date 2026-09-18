@@ -198,3 +198,16 @@ describe('结果型方法不抛异常', () => {
     expect(await c.recallMessage({ scene: 'group', id: 'G' }, 'M')).toBe(false)
   })
 })
+
+describe('fetch 的 this 绑定', () => {
+  it('把带 this 检查的 fetch 存进客户端后调用不会触发 Illegal invocation', async () => {
+    // 模拟 workerd 对原生 fetch 的 this 检查
+    function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>): Promise<Response> {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation')
+      return Promise.resolve(jsonResponse({ id: 'ok' }))
+    }
+    const c = new QQBotClient({ appId: 'a', secret: 's', fetchImpl: strictFetch as typeof fetch, tokenProvider: { get: async () => 't', invalidate: async () => {} } })
+    const r = await c.sendMessage({ scene: 'c2c', id: 'U' }, 'hi')
+    expect(r.ok).toBe(true)
+  })
+})

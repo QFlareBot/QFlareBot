@@ -57,7 +57,9 @@ export class CloudflareWorkersApi {
   constructor(opts: CloudflareWorkersApiOptions) {
     this.#accountId = opts.accountId
     this.#token = opts.apiToken
-    this.#fetch = opts.fetchImpl ?? fetch
+    // 包一层箭头函数：全局 fetch 以属性形式被 this.#fetch() 调用时 workerd 会抛 Illegal invocation
+    const impl = opts.fetchImpl ?? fetch
+    this.#fetch = (input, init) => impl(input, init)
     this.#baseUrl = (opts.baseUrl ?? CLOUDFLARE_API_BASE).replace(/\/+$/, '')
   }
 

@@ -98,7 +98,9 @@ export class QQBotClient implements BotApi {
 
   constructor(options: QQBotClientOptions) {
     this.appId = options.appId
-    this.fetchImpl = options.fetchImpl ?? fetch
+    // 不能把全局 fetch 直接存成属性再 this.fetchImpl() 调用：workerd 会因 this 不是全局对象抛 Illegal invocation
+    const impl = options.fetchImpl ?? fetch
+    this.fetchImpl = (input, init) => impl(input, init)
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL
     this.tokens =
       options.tokenProvider ??

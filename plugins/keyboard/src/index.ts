@@ -65,12 +65,10 @@ export default definePlugin<Config>({
   },
 
   buttons: {
-    // 不返回 code：运行时自动以 0 回应平台
-    ping: {
-      async handler({ session, ctx, buttonId, buttonData }) {
-        await recordClick(ctx, { buttonId, buttonData, userId: session.userId, at: Date.now() })
-        await session.reply(`收到回调，data = ${buttonData}`)
-      },
+    // 返回消息即回复；没返回 code 时运行时自动以 0 回应平台
+    ping: async ({ session, ctx, buttonId, buttonData }) => {
+      await recordClick(ctx, { buttonId, buttonData, userId: session.userId, at: Date.now() })
+      return `收到回调，data = ${buttonData}`
     },
     // 返回 code 作为对平台的回应
     danger: {
@@ -82,11 +80,7 @@ export default definePlugin<Config>({
       },
     },
     // code 4：客户端提示"没有权限"，不再发消息
-    forbidden: {
-      async handler() {
-        return 4
-      },
-    },
+    forbidden: () => 4,
   },
 
   // 插件页面：HTML 由面板 iframe 打开，数据接口要求登录态（面板会通过桥接 token 提供）

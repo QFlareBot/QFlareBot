@@ -1,7 +1,7 @@
 import { handleAdmin } from './admin.js'
 import { serveAsset } from './assets.js'
 import { cronMatches } from './cron.js'
-import { isEnabled } from './dispatcher.js'
+import { isEnabled, normalizedOf } from './dispatcher.js'
 import { error, json } from './http.js'
 import { ensureReady } from './lifecycle.js'
 import { createLogger, errorInfo } from './logger.js'
@@ -99,7 +99,7 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
         await ensureReady(plugin, def, env, scope.contexts, logger)
 
         for (const job of jobs) {
-          const impl = def.cron?.find((c) => c.name === job.name)
+          const impl = normalizedOf(def).cron.find((c) => c.name === job.name)
           if (!impl) continue
           try {
             const ctx = await scope.contexts.prepare(plugin)

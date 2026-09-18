@@ -71,16 +71,26 @@ export {
   type MiddlewareInput,
   type CronInput,
   type RouteInput,
+  type Reply,
+  type HandlerResult,
+  type CommandHandler,
+  type RegexHandler,
+  type EventHandler,
+  type ButtonHandler,
+  type CronHandler,
   type CommandSpec,
   type Command,
   type RegexSpec,
   type RegexRule,
+  type RegexMap,
   type EventSpec,
   type EventRule,
+  type EventMap,
   type ButtonSpec,
   type ButtonRule,
   type CronSpec,
   type CronJob,
+  type CronMap,
   type HttpMethod,
   type RouteSpec,
   type Route,
@@ -92,5 +102,15 @@ export {
 } from './plugin.js'
 
 export { extractManifest, validateManifest, type Manifest } from './manifest.js'
+export {
+  normalizePlugin,
+  type NormalizedPlugin,
+  type NormalizedCommand,
+  type NormalizedRegex,
+  type NormalizedEvent,
+  type NormalizedButton,
+  type NormalizedCron,
+} from './normalize.js'
+export { deliverReply, isReply } from './reply.js'
 
 export { serveAssets, type AssetFile, type AssetMap } from './assets.js'

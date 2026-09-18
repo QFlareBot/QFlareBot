@@ -53,15 +53,16 @@ export default definePlugin<{ greeting: string }>({
   name: 'hello',
   defaultConfig: { greeting: '你好' },
   commands: {
-    hello: {
-      description: '打招呼',
-      async handler({ session, ctx, argText }) {
-        await session.reply(`${ctx.config.greeting}，${argText || session.userName}`)
-      },
-    },
+    // 返回值就是回复
+    hello: ({ ctx, argText }) => `${ctx.config.greeting}，${argText || '朋友'}`,
+    // 生成器连续回复多条，msg_seq 由运行时编号
+    async *count() { for (let i = 1; i <= 3; i++) yield `${i}` },
+    // 需要元数据时用对象形式
+    pic: { description: '发图', handler: () => ({ image: { url: 'https://…/a.png' } }) },
   },
-  events: [{ event: 'qq.group.robot_added', handler: ({ session }) => session.send('大家好') }],
-  cron: [{ name: 'daily', cron: '0 9 * * *', handler: async ({ ctx }) => { /* 主动推送 */ } }],
+  regex: { '/^ping$/i': () => 'pong' },
+  events: { 'qq.group.robot_added': () => '大家好' },     // 走 event_id 被动回复
+  cron: { daily: { cron: '0 9 * * *', handler: async ({ ctx }) => { /* 主动推送 */ } } },
 })
 ```
 
@@ -71,22 +72,14 @@ export default definePlugin<{ greeting: string }>({
 import { button, keyboard } from '@qqbot/sdk'
 
 commands: {
-  menu: {
-    async handler({ session }) {
-      await session.reply({
-        text: '请选择',
-        keyboard: keyboard([[button.callback('确认', 'order:1', { id: 'confirm' }), button.link('帮助', 'https://…')]]),
-      })
-    },
-  },
+  menu: () => ({
+    text: '请选择',
+    keyboard: keyboard([[button.callback('确认', 'order:1', { id: 'confirm' }), button.link('帮助', 'https://…')]]),
+  }),
 },
 buttons: {
-  confirm: {
-    async handler({ session, buttonData }) {
-      await session.reply(`已确认 ${buttonData}`)   // 走 event_id 被动回复
-      return 0                                       // 回应平台的 code；不返回则自动 0
-    },
-  },
+  confirm: ({ buttonData }) => `已确认 ${buttonData}`,   // 返回消息即回复并自动 ack 0
+  deny: () => 4,                                        // 返回数字作为回应平台的 code（4 = 无权限）
 },
 ```
 

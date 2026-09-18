@@ -14,16 +14,9 @@ export default definePlugin({
     image: {
       aliases: ['图片', 'pic'],
       usage: '/image [图片 URL]',
-      async handler({ session, ctx, args }) {
+      handler: ({ args }) => {
         const url = args.find((a) => /^https?:\/\//i.test(a))
-        const result = await session.reply({
-          text: url ? '' : '这是内置测试图片',
-          image: url ? { url } : { base64: TEST_PNG_BASE64 },
-        })
-        if (!result.ok) {
-          ctx.logger.warn('图片发送失败', { error: result.error })
-          await session.reply(`图片发送失败：${result.error}`)
-        }
+        return url ? { image: { url } } : { text: '这是内置测试图片', image: { base64: TEST_PNG_BASE64 } }
       },
     },
   },

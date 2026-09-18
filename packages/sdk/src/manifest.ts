@@ -1,4 +1,5 @@
 import type { EventName } from './events.js'
+import { normalizePlugin } from './normalize.js'
 import {
   API_VERSION,
   type ButtonSpec,
@@ -55,6 +56,7 @@ export function extractManifest(
 ): Manifest {
   const version = def.version ?? pkg?.version
   if (!version) throw new Error(`插件 ${def.name} 缺少 version`)
+  const n = normalizePlugin(def)
 
   const manifest: Manifest = {
     name: def.name,
@@ -64,15 +66,11 @@ export function extractManifest(
     depends: def.depends ?? {},
     conflicts: def.conflicts ?? [],
 
-    commands: Object.entries(def.commands ?? {}).map(([name, { handler: _h, ...spec }]) =>
-      compact({ name, ...spec }),
-    ),
-    regex: (def.regex ?? []).map(({ handler: _h, ...spec }) => compact(spec)),
-    events: (def.events ?? []).map(({ handler: _h, event, ...spec }) =>
-      compact({ event: Array.isArray(event) ? event : [event], ...spec }),
-    ),
-    buttons: Object.entries(def.buttons ?? {}).map(([id, { handler: _h, ...spec }]) => compact({ id, ...spec })),
-    cron: (def.cron ?? []).map(({ handler: _h, ...spec }) => spec),
+    commands: n.commands.map(({ handler: _h, ...spec }) => compact(spec)),
+    regex: n.regex.map(({ handler: _h, ...spec }) => compact(spec)),
+    events: n.events.map(({ handler: _h, ...spec }) => compact(spec)),
+    buttons: n.buttons.map(({ handler: _h, ...spec }) => compact(spec)),
+    cron: n.cron.map(({ handler: _h, ...spec }) => spec),
     routes: (def.routes ?? []).map(({ handler: _h, ...spec }) => spec),
     hasMiddleware: typeof def.middleware === 'function',
     services: Object.keys(def.services ?? {}),

@@ -1,4 +1,13 @@
-import { isMessageEvent, type InteractionCode, type Logger, type PluginDefinition, type Session } from '@qqbot/sdk'
+import {
+  deliverReply,
+  isMessageEvent,
+  normalizePlugin,
+  type InteractionCode,
+  type Logger,
+  type NormalizedPlugin,
+  type PluginDefinition,
+  type Session,
+} from '@qqbot/sdk'
 import type { ContextFactory } from './context.js'
 import { errorInfo } from './logger.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
@@ -33,6 +42,17 @@ interface Candidate extends MatchRecord {
 }
 
 const regexCache = new Map<string, RegExp>()
+// 同一个定义对象只归一化一次
+const normalized = new WeakMap<PluginDefinition<unknown>, NormalizedPlugin<unknown>>()
+
+export function normalizedOf(def: PluginDefinition<unknown>): NormalizedPlugin<unknown> {
+  let n = normalized.get(def)
+  if (!n) {
+    n = normalizePlugin(def)
+    normalized.set(def, n)
+  }
+  return n
+}
 
 function compileRegex(pattern: string, flags = ''): RegExp {
   const key = `${flags}/${pattern}`
@@ -86,29 +106,31 @@ function collectCandidates(
 
   for (const { registered, def } of plugins) {
     const name = def.name
+    const n = normalizedOf(def)
 
     if (command) {
-      for (const [cmdName, cmd] of Object.entries(def.commands ?? {})) {
-        const names = [cmdName, ...(cmd.aliases ?? [])]
-        if (!names.some((n) => n.toLowerCase() === command.word.toLowerCase())) continue
+      for (const cmd of n.commands) {
+        const names = [cmd.name, ...(cmd.aliases ?? [])]
+        if (!names.some((c) => c.toLowerCase() === command.word.toLowerCase())) continue
         if (!sceneAllowed(cmd.scenes, session)) continue
         candidates.push({
           plugin: name,
           kind: 'command',
-          name: cmdName,
+          name: cmd.name,
           priority: priorityOf(deps.snapshot, name, cmd.priority),
           block: cmd.block ?? true,
           registered,
-          run: (ctx) =>
-            Promise.resolve(
-              cmd.handler({ session, ctx, command: command.word, args: command.args, argText: command.argText }),
-            ),
+          run: async (ctx) =>
+            void (await deliverReply(
+              session,
+              await cmd.handler({ session, ctx, command: command.word, args: command.args, argText: command.argText }),
+            )),
         })
       }
     }
 
     if (isMessageEvent(session.event)) {
-      for (const rule of def.regex ?? []) {
+      for (const rule of n.regex) {
         if (!sceneAllowed(rule.scenes, session)) continue
         const match = session.content.match(compileRegex(rule.pattern, rule.flags))
         if (!match) continue
@@ -119,50 +141,50 @@ function collectCandidates(
           priority: priorityOf(deps.snapshot, name, rule.priority),
           block: rule.block ?? false,
           registered,
-          run: (ctx) => Promise.resolve(rule.handler({ session, ctx, match })),
+          run: async (ctx) => void (await deliverReply(session, await rule.handler({ session, ctx, match }))),
         })
       }
     }
 
     const interaction = session.interaction
     if (interaction && (interaction.type === 'button' || interaction.type === 'menu')) {
-      for (const [buttonId, rule] of Object.entries(def.buttons ?? {})) {
-        if (buttonId !== interaction.buttonId) continue
+      for (const rule of n.buttons) {
+        if (rule.id !== interaction.buttonId) continue
         if (rule.dataPattern && !compileRegex(rule.dataPattern).test(interaction.buttonData)) continue
         if (!sceneAllowed(rule.scenes, session)) continue
         candidates.push({
           plugin: name,
           kind: 'button',
-          name: buttonId,
+          name: rule.id,
           priority: priorityOf(deps.snapshot, name, rule.priority),
           block: rule.block ?? true,
           registered,
           run: async (ctx) => {
-            const code = await rule.handler({
+            const result = await rule.handler({
               session,
               ctx,
               interaction,
               buttonId: interaction.buttonId,
               buttonData: interaction.buttonData,
             })
-            // 处理器返回 code 即视为回应；未返回则留给分发结束后的自动 ack
-            if (typeof code === 'number') await interaction.ack(toInteractionCode(code))
+            // 返回数字即回应平台的 code；返回消息则回复，ack 留给分发结束后的自动回应
+            if (typeof result === 'number') await interaction.ack(toInteractionCode(result))
+            else await deliverReply(session, result)
           },
         })
       }
     }
 
-    for (const rule of def.events ?? []) {
-      const events = Array.isArray(rule.event) ? rule.event : [rule.event]
-      if (!events.includes(session.event)) continue
+    for (const rule of n.events) {
+      if (!rule.event.includes(session.event)) continue
       candidates.push({
         plugin: name,
         kind: 'event',
-        name: events.join(','),
+        name: rule.event.join(','),
         priority: priorityOf(deps.snapshot, name, rule.priority),
         block: rule.block ?? false,
         registered,
-        run: (ctx) => Promise.resolve(rule.handler({ session, ctx })),
+        run: async (ctx) => void (await deliverReply(session, await rule.handler({ session, ctx }))),
       })
     }
   }

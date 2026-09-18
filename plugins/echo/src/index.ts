@@ -17,13 +17,9 @@ export default definePlugin<Config>({
   defaultConfig: { prefix: '' },
 
   commands: {
-    echo: {
-      description: '原样回复你发的内容',
-      usage: '/echo <文本>',
-      async handler({ session, ctx, argText }) {
-        await session.reply(argText ? `${ctx.config.prefix}${argText}` : '你想让我说什么？')
-      },
-    },
+    // 返回值就是回复
+    echo: ({ ctx, argText }) => (argText ? `${ctx.config.prefix}${argText}` : '你想让我说什么？'),
+
     proactive: {
       description: '先被动回复，再主动推送一条消息',
       async handler({ session, ctx }) {
@@ -35,13 +31,8 @@ export default definePlugin<Config>({
     },
   },
 
-  events: [
-    {
-      event: 'qq.group.robot_added',
-      // 入群事件支持 event_id 被动回复，不消耗主动消息额度
-      async handler({ session }) {
-        await session.reply('大家好，发送 /echo 试试')
-      },
-    },
-  ],
+  // 入群事件支持 event_id 被动回复，不消耗主动消息额度
+  events: {
+    'qq.group.robot_added': () => '大家好，发送 /echo 试试',
+  },
 })

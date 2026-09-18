@@ -488,3 +488,53 @@ describe('cronMatches', () => {
 vi.spyOn(console, 'log').mockImplementation(() => {})
 vi.spyOn(console, 'warn').mockImplementation(() => {})
 vi.spyOn(console, 'error').mockImplementation(() => {})
+
+describe('语法糖：返回值即回复', () => {
+  async function testEvent(runtime: ReturnType<typeof createRuntime>, body: Record<string, unknown>) {
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/test-event`, { method: 'POST', headers: { authorization: 'Bearer admin-token' }, body: JSON.stringify(body) }),
+      createEnv(),
+      createExecutionContext(),
+    )
+    return (await res.json()) as { matched: Array<{ kind: string; name: string }>; outbox: Array<{ message: unknown; options?: { msgSeq?: number; eventId?: string } }>; acks: Array<{ code: number }> }
+  }
+  const sugar = definePlugin<{ n: number }>({
+    name: 'sugar',
+    version: '1.0.0',
+    defaultConfig: { n: 3 },
+    commands: {
+      hi: ({ argText }) => `你好 ${argText}`,
+      pic: () => ({ image: { url: 'https://x/a.png' } }),
+      async *count({ ctx }) {
+        for (let i = 1; i <= ctx.config.n; i++) yield `${i}`
+      },
+      quiet: () => undefined,
+    },
+    regex: { '/^ping$/i': () => 'pong', '^echo (.+)$': ({ match }) => match[1]! },
+    events: { 'qq.group.robot_added': () => '欢迎' },
+    buttons: { ok: ({ buttonData }) => `确认 ${buttonData}`, no: () => 4 },
+  })
+
+  it('字符串、对象、生成器、undefined 四种返回值', async () => {
+    const runtime = createRuntime({ plugins: [sugar] })
+    expect((await testEvent(runtime, { content: '/hi 世界' })).outbox.map((o) => o.message)).toEqual(['你好 世界'])
+    expect((await testEvent(runtime, { content: '/pic' })).outbox[0]!.message).toEqual({ image: { url: 'https://x/a.png' } })
+    const gen = await testEvent(runtime, { content: '/count' })
+    expect(gen.outbox.map((o) => [o.message, o.options!.msgSeq])).toEqual([['1', 1], ['2', 2], ['3', 3]])
+    expect((await testEvent(runtime, { content: '/quiet' })).outbox).toEqual([])
+  })
+
+  it('regex 记录式（含 flags）、events 记录式、buttons 返回消息或 code', async () => {
+    const runtime = createRuntime({ plugins: [sugar] })
+    expect((await testEvent(runtime, { content: 'PING' })).outbox[0]!.message).toBe('pong')
+    expect((await testEvent(runtime, { content: 'echo 回声' })).outbox[0]!.message).toBe('回声')
+    const ev = await testEvent(runtime, { rawType: 'GROUP_ADD_ROBOT' })
+    expect(ev.outbox[0]).toMatchObject({ message: '欢迎', options: { eventId: expect.stringMatching(/^GROUP_ADD_ROBOT:/) } })
+    const ok = await testEvent(runtime, { buttonId: 'ok', buttonData: '1' })
+    expect(ok.outbox[0]!.message).toBe('确认 1')
+    expect(ok.acks.map((a) => a.code)).toEqual([0])
+    const no = await testEvent(runtime, { buttonId: 'no' })
+    expect(no.outbox).toEqual([])
+    expect(no.acks.map((a) => a.code)).toEqual([4])
+  })
+})

@@ -1,5 +1,5 @@
 import type { EventName } from './events.js'
-import type { Interaction, InteractionCode, Scene, Session } from './session.js'
+import type { Interaction, InteractionCode, OutgoingMessage, Scene, Session } from './session.js'
 import type { Awaitable, PluginContext } from './context.js'
 
 /** 当前契约版本；契约破坏性变更时递增，旧版本由独立的 compat 包适配 */
@@ -72,7 +72,24 @@ export interface RouteInput<C = unknown> {
   authenticated: boolean
 }
 
-// ---------- 匹配器定义 ----------
+// ---------- 处理器返回值：返回什么就回复什么 ----------
+
+/**
+ * 处理器可以直接返回回复内容：字符串或消息对象 → 一条 `session.reply()`；
+ * （异步）可迭代对象 → 逐条回复，生成器 `yield` 多条即可。当前事件不可被动回复时改用 `send`。
+ * 返回 undefined 表示自己已处理完，不再回复。
+ */
+export type Reply = OutgoingMessage
+export type HandlerResult = void | Reply | Iterable<Reply> | AsyncIterable<Reply>
+
+export type CommandHandler<C = unknown> = (input: CommandInput<C>) => Awaitable<HandlerResult>
+export type RegexHandler<C = unknown> = (input: RegexInput<C>) => Awaitable<HandlerResult>
+export type EventHandler<C = unknown> = (input: EventInput<C>) => Awaitable<HandlerResult>
+/** 返回数字即回应平台的 code（0 成功 · 4 无权限 …）；返回消息则回复并自动以 0 回应 */
+export type ButtonHandler<C = unknown> = (input: ButtonInput<C>) => Awaitable<HandlerResult | InteractionCode | number>
+export type CronHandler<C = unknown> = (input: CronInput<C>) => Awaitable<void>
+
+// ---------- 匹配器定义：每种都可以直接给函数，需要元数据时再用对象 ----------
 
 export interface CommandSpec extends MatchOptions {
   description?: string
@@ -80,39 +97,31 @@ export interface CommandSpec extends MatchOptions {
   aliases?: string[]
 }
 
-export interface Command<C = unknown> extends CommandSpec {
-  handler(input: CommandInput<C>): Awaitable<void>
-}
+export type Command<C = unknown> = CommandHandler<C> | (CommandSpec & { handler: CommandHandler<C> })
 
 export interface RegexSpec extends MatchOptions {
   pattern: string
   flags?: string
 }
 
-export interface RegexRule<C = unknown> extends RegexSpec {
-  handler(input: RegexInput<C>): Awaitable<void>
-}
+export type RegexRule<C = unknown> = RegexSpec & { handler: RegexHandler<C> }
+/** 以模式为键：`{ '^ping$': fn }` 或带 flags 的 `{ '/^ping$/i': fn }` */
+export type RegexMap<C = unknown> = Record<string, RegexHandler<C> | (Omit<RegexSpec, 'pattern' | 'flags'> & { handler: RegexHandler<C> })>
 
 export interface EventSpec extends Pick<MatchOptions, 'priority' | 'block'> {
   event: EventName | EventName[]
 }
 
-export interface EventRule<C = unknown> extends EventSpec {
-  handler(input: EventInput<C>): Awaitable<void>
-}
+export type EventRule<C = unknown> = EventSpec & { handler: EventHandler<C> }
+/** 以事件名为键：`{ 'qq.group.robot_added': fn }` */
+export type EventMap<C = unknown> = { [E in EventName]?: EventHandler<C> | (Pick<MatchOptions, 'priority' | 'block'> & { handler: EventHandler<C> }) }
 
 export interface ButtonSpec extends Pick<MatchOptions, 'priority' | 'block' | 'scenes'> {
   /** 按 button_data 匹配的正则；不填则只按 key（按键 id）匹配 */
   dataPattern?: string
 }
 
-/**
- * 回调按键处理器。返回值作为回应平台的 code（0 成功 · 1 失败 · 2 频繁 · 3 重复 · 4 无权限 · 5 仅管理员）；
- * 不返回且未手动 ack 时，运行时自动以 0 回应。类型放宽为 number 是为了让 `return 4` 不需要 as const。
- */
-export interface ButtonRule<C = unknown> extends ButtonSpec {
-  handler(input: ButtonInput<C>): Awaitable<void | InteractionCode | number>
-}
+export type ButtonRule<C = unknown> = ButtonHandler<C> | (ButtonSpec & { handler: ButtonHandler<C> })
 
 export interface CronSpec {
   name: string
@@ -120,9 +129,9 @@ export interface CronSpec {
   cron: string
 }
 
-export interface CronJob<C = unknown> extends CronSpec {
-  handler(input: CronInput<C>): Awaitable<void>
-}
+export type CronJob<C = unknown> = CronSpec & { handler: CronHandler<C> }
+/** 以任务名为键：`{ daily: { cron: '0 9 * * *', handler } }` */
+export type CronMap<C = unknown> = Record<string, Omit<CronSpec, 'name'> & { handler: CronHandler<C> }>
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -184,11 +193,11 @@ export interface PluginDefinition<C = unknown> {
   coreRange?: string
 
   commands?: Record<string, Command<C>>
-  regex?: RegexRule<C>[]
-  events?: EventRule<C>[]
+  regex?: RegexRule<C>[] | RegexMap<C>
+  events?: EventRule<C>[] | EventMap<C>
   /** 回调按键（action.type = 1）；key 为发送时设置的按键 id */
   buttons?: Record<string, ButtonRule<C>>
-  cron?: CronJob<C>[]
+  cron?: CronJob<C>[] | CronMap<C>
   routes?: Route<C>[]
   ui?: PluginUiSpec
   middleware?: Middleware<C>
