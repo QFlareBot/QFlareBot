@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, RefreshCw } from 'lucide-vue-next'
+import { Copy, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client.js'
 import type { EventRecord, MatchRecord } from '../api/types.js'
@@ -25,6 +25,21 @@ async function loadEvents() {
 }
 onMounted(loadEvents)
 setInterval(() => document.visibilityState === 'visible' && void loadEvents(), 5000)
+
+const clearing = ref(false)
+async function clear() {
+  if (!confirm('清空全部事件记录？这只删 D1 里的分发摘要，不影响消息收发。')) return
+  clearing.value = true
+  try {
+    await api.clearEvents()
+    await loadEvents()
+    push('事件记录已清空', 'success')
+  } catch (e) {
+    push(`清空失败：${(e as Error).message}`, 'error')
+  } finally {
+    clearing.value = false
+  }
+}
 
 const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).length)
 const brokenCount = computed(() => plugins.value.filter((p) => p.error).length)
@@ -98,8 +113,14 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
     </QCard>
 
     <QCard title="最近事件" description="每个事件一行分发摘要" flush>
+      <template v-if="events.length" #actions>
+        <QButton size="sm" variant="ghost" :loading="clearing" @click="clear">
+          <Trash2 class="size-3.5" aria-hidden="true" />清空
+        </QButton>
+      </template>
       <QEmpty v-if="status && !status.bindings.d1" title="未绑定 D1，事件记录已关闭" description="在 wrangler.jsonc 的 d1_databases 加一条绑定并重新部署即可开启；不影响消息收发。" />
-      <QEmpty v-else-if="!events.length" title="还没有事件" description="机器人收到消息后会出现在这里；也可以去「调试」页模拟一条。" />
+      <!-- 只有真实 webhook 会写记录，「调试」页的模拟是干跑，不要在这里引导过去 -->
+      <QEmpty v-else-if="!events.length" title="还没有事件" description="机器人收到真实消息后会出现在这里。「调试」页的模拟事件是干跑，不计入记录。" />
       <div v-else class="overflow-x-auto">
         <table class="qb-table">
           <thead><tr><th>时间</th><th>事件</th><th>场景</th><th>内容</th><th>命中</th><th>结果</th></tr></thead>

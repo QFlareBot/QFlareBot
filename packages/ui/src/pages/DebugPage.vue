@@ -1,6 +1,10 @@
 <script setup lang="ts">
-/** 事件模拟器：把 /admin/test-event 的干跑做成可视化，不会真的发消息 */
-import { Play } from 'lucide-vue-next'
+/**
+ * 两块互不相干的东西放在同一页：
+ * 上面的事件模拟器是**干跑**，走 /admin/test-event，不碰 QQ；
+ * 下面的主动发消息是**真发**，走 /admin/send，对方会真的收到。
+ */
+import { Play, Send } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { api } from '../api/client.js'
 import type { TestEventResult } from '../api/types.js'
@@ -68,6 +72,37 @@ async function run() {
   }
 }
 
+// ---- 主动发消息：真的调用 QQ 接口 ----
+const sendScene = ref<'group' | 'c2c'>('group')
+const sendTargetId = ref('')
+const sendText = ref('')
+const sending = ref(false)
+const sendResult = ref<{ ok: boolean; text: string } | null>(null)
+
+async function send() {
+  if (!sendTargetId.value.trim() || !sendText.value.trim()) return
+  sending.value = true
+  sendResult.value = null
+  try {
+    const { result } = await api.send(sendScene.value, sendTargetId.value.trim(), sendText.value)
+    sendResult.value = result.ok
+      ? { ok: true, text: `已发送${result.messageId ? `，message_id ${result.messageId}` : ''}` }
+      : { ok: false, text: result.error ?? `QQ 返回 HTTP ${result.status}` }
+    if (result.ok) push('消息已发送', 'success')
+    else push('发送失败', 'error')
+  } catch (e) {
+    sendResult.value = { ok: false, text: (e as Error).message }
+    push(`发送失败：${(e as Error).message}`, 'error')
+  } finally {
+    sending.value = false
+  }
+}
+
+const sendSceneOptions = [
+  { value: 'group', label: '群聊' },
+  { value: 'c2c', label: '单聊' },
+]
+
 const sceneOptions = [
   { value: 'group', label: '群聊' },
   { value: 'c2c', label: '单聊' },
@@ -83,7 +118,7 @@ const rawOptions = ['GROUP_ADD_ROBOT', 'GROUP_DEL_ROBOT', 'GROUP_MEMBER_ADD', 'G
 
 <template>
   <div>
-    <PageHeader title="调试" description="向运行时注入一条模拟事件，查看每个插件的匹配与出站动作。不会真正调用 QQ 接口。" />
+    <PageHeader title="调试" description="事件模拟器是干跑，不碰 QQ；下面的主动发消息会真的发出去。" />
     <div class="grid gap-4 lg:grid-cols-[360px_1fr]">
       <QCard title="事件模拟器">
         <form class="flex flex-col gap-4" @submit.prevent="run">
@@ -111,6 +146,24 @@ const rawOptions = ['GROUP_ADD_ROBOT', 'GROUP_DEL_ROBOT', 'GROUP_MEMBER_ADD', 'G
           </template>
 
           <QButton type="submit" variant="primary" :loading="running"><Play class="size-3.5" aria-hidden="true" />发送模拟事件</QButton>
+        </form>
+      </QCard>
+
+      <QCard title="主动发消息" description="真的调用 QQ 接口，对方会收到。主动消息有条数配额。" class="lg:col-start-1">
+        <form class="flex flex-col gap-4" @submit.prevent="send">
+          <div class="grid grid-cols-2 gap-3">
+            <QField id="send-scene" label="场景"><QSelect id="send-scene" v-model="sendScene" :options="sendSceneOptions" /></QField>
+            <QField id="send-target" label="目标 openid" hint="群 openid 或用户 openid">
+              <QInput id="send-target" v-model="sendTargetId" mono />
+            </QField>
+          </div>
+          <QField id="send-text" label="消息内容"><QInput id="send-text" v-model="sendText" /></QField>
+          <QButton type="submit" variant="primary" :loading="sending" :disabled="!sendTargetId.trim() || !sendText.trim()">
+            <Send class="size-3.5" aria-hidden="true" />真实发送
+          </QButton>
+          <p v-if="sendResult" class="text-sm">
+            <StatusDot :tone="sendResult.ok ? 'success' : 'danger'" :label="sendResult.text" />
+          </p>
         </form>
       </QCard>
 
