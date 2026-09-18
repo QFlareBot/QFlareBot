@@ -10,6 +10,15 @@ export const Keys = {
   installed: (name: string) => `rt:installed:${name}`,
 } as const
 
+/**
+ * isolate 内缓存，省掉每个事件一次 KV 读。
+ *
+ * 注意它**不是**配置生效延迟的瓶颈：KV 的 get 默认就带 60 秒边缘缓存，写入
+ * 「may take up to 60 seconds or more」才在其他节点可见，所以这 10 秒完全被
+ * 那 60 秒吞掉，调小它不会让改配置更快生效。写入方自己的 isolate 由
+ * writeSnapshot 直接刷新缓存，因此面板保存后本地立刻可见；跨节点则要等 KV。
+ * 想要「保存即全网生效」只能把快照挪到 D1（强一致，但每个事件多一次查询）。
+ */
 const SNAPSHOT_CACHE_MS = 10_000
 let snapshotCache: { value: Snapshot; at: number } | null = null
 

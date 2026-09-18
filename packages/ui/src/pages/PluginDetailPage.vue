@@ -2,7 +2,7 @@
 import { ArrowLeft, PanelsTopLeft } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { api } from '../api/client.js'
+import { api, ApiError } from '../api/client.js'
 import PageHeader from '../components/PageHeader.vue'
 import SchemaForm from '../components/SchemaForm.vue'
 import QBadge from '../components/ui/QBadge.vue'
@@ -24,6 +24,8 @@ const plugin = computed(() => pluginByName(String(route.params.name)))
 const config = ref<Record<string, unknown>>({})
 const configText = ref('')
 const configError = ref('')
+/** 服务端 schema 校验的逐字段错误，喂给 SchemaForm 显示在对应输入框下 */
+const fieldErrors = ref<Record<string, string>>({})
 const priority = ref('0')
 const saving = ref(false)
 
@@ -63,12 +65,19 @@ async function save() {
     }
   }
   saving.value = true
+  fieldErrors.value = {}
   try {
     await api.patchPlugin(plugin.value.name, { config: next, priority: Number(priority.value) || 0 })
     await refresh()
-    push('配置已保存，下一次事件即生效', 'success')
+    // KV 是最终一致的：本节点立刻生效，其他节点最多约 60 秒，不要承诺「下一次事件即生效」
+    push('配置已保存，本节点立即生效，其他节点最多约 60 秒', 'success')
   } catch (e) {
-    push(`保存失败：${(e as Error).message}`, 'error')
+    if (e instanceof ApiError && e.fields.length > 0) {
+      fieldErrors.value = Object.fromEntries(e.fields.map((f) => [f.path, f.message]))
+      push('配置有 ' + e.fields.length + ' 处不符合要求', 'error')
+    } else {
+      push(`保存失败：${(e as Error).message}`, 'error')
+    }
   } finally {
     saving.value = false
   }
@@ -97,7 +106,7 @@ async function save() {
       <div class="grid gap-4 lg:grid-cols-[1fr_320px]">
         <QCard title="配置" description="保存后写入快照，无需重新部署">
           <form class="flex flex-col gap-4" @submit.prevent="save">
-            <SchemaForm v-if="plugin.configSchema" v-model="config" :schema="plugin.configSchema" />
+            <SchemaForm v-if="plugin.configSchema" v-model="config" :schema="plugin.configSchema" :errors="fieldErrors" />
             <QField v-else id="cfg-json" label="配置（JSON）" hint="该插件没有声明 configSchema，直接编辑 JSON" :error="configError">
               <template #default="{ describedBy, invalid }">
                 <QTextarea id="cfg-json" v-model="configText" mono :rows="8" :described-by="describedBy" :invalid="invalid" />

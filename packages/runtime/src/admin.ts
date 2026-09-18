@@ -1,6 +1,7 @@
 import { createTokenProvider, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
+import { validateConfig } from './configSchema.js'
 import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
 import type { PluginRegistry } from './registry.js'
@@ -199,9 +200,15 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   const pluginMatch = matchPath('/plugins/:name', sub)
   if (pluginMatch && method === 'PATCH') {
     const name = pluginMatch.name!
-    if (!deps.registry.get(name)) return error(`插件不存在：${name}`, 404)
+    const plugin = deps.registry.get(name)
+    if (!plugin) return error(`插件不存在：${name}`, 404)
     const patch = await readJson<Partial<PluginState>>(request)
     if (!patch) return error('请求体格式错误', 400)
+    // 存之前按 configSchema 校验：否则类型写错要等插件运行时才炸
+    if ('config' in patch) {
+      const fields = validateConfig(plugin.manifest.configSchema, patch.config)
+      if (fields.length > 0) return json({ ok: false, error: '配置不符合 schema', fields }, 400)
+    }
     const current = await readSnapshot(scope.env, true)
     const state: PluginState = { enabled: true, ...current.plugins[name] }
     if (typeof patch.enabled === 'boolean') state.enabled = patch.enabled

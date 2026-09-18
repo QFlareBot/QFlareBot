@@ -2,10 +2,18 @@ import type { EventRecord, Snapshot, Status, TestEventResult } from './types.js'
 
 const SESSION_KEY = 'qqbot.session'
 
+/** 服务端按 configSchema 校验失败时逐字段返回 */
+export interface FieldError {
+  path: string
+  message: string
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** 仅 400 的表单校验错误会带上 */
+    readonly fields: FieldError[] = [],
   ) {
     super(message)
     this.name = 'ApiError'
@@ -30,12 +38,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) headers['content-type'] = 'application/json'
 
   const res = await fetch(`/admin${path}`, { method, headers, body: body === undefined ? null : JSON.stringify(body) })
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; fields?: FieldError[] }
   if (res.status === 401 && path !== '/login') {
     session.clear()
     onUnauthorized?.()
   }
-  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`)
+  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`, data.fields ?? [])
   return data as T
 }
 
