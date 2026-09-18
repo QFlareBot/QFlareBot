@@ -30,12 +30,17 @@ export function createKV(): KVNamespace & { readonly store: Map<string, string> 
 }
 
 /**
- * 极简假 D1：只认运行时 events.ts 用到的几条语句，把行存进数组。
+ * 极简假 D1：只认运行时 events.ts 与 dedupe.ts 用到的几条语句，把行存进数组。
  * 其他 SQL 直接抛错，避免测试静默通过。
+ *
+ * 注意它只能验证语句的**逻辑**（冲突时 changes 为 0），证明不了 D1 在并发
+ * isolate 下的原子性——那是平台保证，只有真 D1 才测得到。
  */
 export function createD1(): D1Database & { readonly rows: Array<Record<string, unknown>> } {
   const rows: Array<Record<string, unknown>> = []
   const columns = ['id', 'ts', 'event', 'scene', 'user_id', 'target_id', 'content', 'matched', 'errors', 'outbox', 'failed']
+  /** 去重表与事件表分开存，两者都以 id 为主键 */
+  const seen: Array<Record<string, unknown>> = []
   const prepare = (sql: string) => {
     let params: unknown[] = []
     const stmt = {
@@ -50,6 +55,21 @@ export function createD1(): D1Database & { readonly rows: Array<Record<string, u
           if (i >= 0) rows[i] = row
           else rows.push(row)
           return { meta: { changes: 1 } }
+        }
+        // 主键冲突即忽略，changes 为 0——dedupe 靠这个语义判断是不是首次
+        if (sql.startsWith('INSERT OR IGNORE')) {
+          const [id, ts] = params as [string, number]
+          if (seen.some((r) => r.id === id)) return { meta: { changes: 0 } }
+          seen.push({ id, ts })
+          return { meta: { changes: 1 } }
+        }
+        if (sql.includes('DELETE FROM rt_seen_events')) {
+          const cutoff = params[0] as number
+          const before = seen.length
+          for (let i = seen.length - 1; i >= 0; i--) {
+            if ((seen[i]!.ts as number) < cutoff) seen.splice(i, 1)
+          }
+          return { meta: { changes: before - seen.length } }
         }
         if (sql.startsWith('DELETE FROM')) return { meta: { changes: 0 } }
         throw new Error(`fake D1 不支持：${sql}`)

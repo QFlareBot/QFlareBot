@@ -1,10 +1,10 @@
 import { OpCode, signCallback, verifyEvent, type CallbackVerifyData, type WebhookPayload } from '@qqbot/api'
 import type { Logger } from '@qqbot/sdk'
+import { claimEvent } from './dedupe.js'
 import { recordEvent } from './events.js'
 import { error, json } from './http.js'
 import { errorInfo } from './logger.js'
 import type { RequestScope } from './scope.js'
-import { claimEvent } from './store.js'
 import type { ResolvedOptions } from './types.js'
 
 const ACK = { op: OpCode.HttpCallbackAck }

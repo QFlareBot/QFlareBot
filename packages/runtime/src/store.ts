@@ -65,10 +65,4 @@ export function kvTokenCache(env: RuntimeEnv): TokenCache {
   }
 }
 
-/** 事件去重：首次见到返回 true 并登记 */
-export async function claimEvent(env: RuntimeEnv, id: string, ttlSec: number): Promise<boolean> {
-  const key = Keys.event(id)
-  if (await env.KV.get(key)) return false
-  await env.KV.put(key, '1', { expirationTtl: Math.max(60, ttlSec) })
-  return true
-}
+// 事件去重见 dedupe.ts：有 D1 时用主键冲突原子声明，没有才退回这里的 KV 键

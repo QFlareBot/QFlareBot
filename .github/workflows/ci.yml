@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # wrangler 要求 Node 22
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r typecheck
+      - run: pnpm test
+
+      # 单测跑的是 .ts 源码，发现不了「构建产物在 Node 下加载失败」这类问题
+      # （projector 曾因纯 tsc 不打包而在 dist/cli.js 里留下裸 import '@qqbot/sdk'）。
+      # 真跑一次投影才覆盖得到：它会构建全部包，再用构建产物执行 CLI。
+      - name: 投影种子应用（覆盖构建产物与 CLI 执行路径）
+        run: pnpm --filter @qqbot/seed run project

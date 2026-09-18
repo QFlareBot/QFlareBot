@@ -130,7 +130,7 @@ describe('webhook', () => {
     expect(ok).toBe(true)
   })
 
-  it('签名错误、时间戳过期、重复事件分别被拦截', async () => {
+  it('签名错误与时间戳过期被拦截', async () => {
     const runtime = createRuntime({ plugins: [] })
     const env = createEnv()
     const payload = groupMessagePayload('hi', 'dup')
@@ -144,11 +144,26 @@ describe('webhook', () => {
       createExecutionContext(),
     )
     expect(stale.status).toBe(401)
+  })
 
-    const first = await runtime.fetch!(await signedRequest(`${BASE}/webhook`, payload), env, createExecutionContext())
-    expect(first.status).toBe(200)
-    expect(await first.json()).toEqual({ op: 12 })
-    expect(env.KV.store.has('rt:evt:GROUP_AT_MESSAGE_CREATE:dup')).toBe(true)
+  it('同一事件投递两次只分发一次，第二次照样 ACK', async () => {
+    const { echo, calls } = makePlugins()
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+    const payload = groupMessagePayload('/echo 重复', 'dup')
+
+    for (const _ of [1, 2]) {
+      const execCtx = createExecutionContext()
+      const res = await runtime.fetch!(await signedRequest(`${BASE}/webhook`, payload), env, execCtx)
+      // 重复事件也要回 ACK，否则 QQ 会继续重投
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ op: 12 })
+      await execCtx.flush()
+    }
+
+    expect(calls).toEqual(['echo:重复'])
+    expect(qq.sent).toHaveLength(1)
   })
 
   it('未配置机器人时返回 503', async () => {

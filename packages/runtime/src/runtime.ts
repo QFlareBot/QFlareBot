@@ -1,6 +1,7 @@
 import { handleAdmin } from './admin.js'
 import { serveAsset } from './assets.js'
 import { cronMatches } from './cron.js'
+import { pruneSeenEvents } from './dedupe.js'
 import { isEnabled, normalizedOf } from './dispatcher.js'
 import { error, json } from './http.js'
 import { ensureReady } from './lifecycle.js'
@@ -85,6 +86,16 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
     /** 单一 Cron Trigger 按分钟触发，再按各插件声明的表达式分发 */
     async scheduled(event, env, execCtx) {
       const scope = await RequestScope.create(env, execCtx, registry, resolved, logger)
+
+      // 去重表没有 TTL，只能定期清；安全模式下也要清，否则表会一直涨
+      execCtx.waitUntil(
+        pruneSeenEvents(env, resolved.dedupeTtlSec)
+          .then((removed) => {
+            if (removed > 0) logger.info('清理去重登记', { removed })
+          })
+          .catch((err) => logger.warn('清理去重登记失败', errorInfo(err))),
+      )
+
       if (scope.snapshot.safeMode) return
       const now = new Date(event.scheduledTime)
 
