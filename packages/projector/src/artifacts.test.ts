@@ -4,6 +4,7 @@ import {
   IntegrityError,
   computeIntegrity,
   createHttpFetcher,
+  fetchPluginManifest,
   listNpmVersions,
   parseSource,
   resolveArtifactUrl,
@@ -54,6 +55,88 @@ describe('parseSource / resolveArtifactUrl', () => {
     expect(() => parseSource('ipfs:abc')).toThrow(ArtifactError)
     expect(() => parseSource('npm:')).toThrow(ArtifactError)
     expect(parseSource('url:https://a/b')).toEqual({ scheme: 'url', value: 'https://a/b' })
+  })
+})
+
+describe('resolveArtifactUrl(ref, "manifest")', () => {
+  const plugin = (source: string) => ({ kind: 'plugin' as const, name: 'x', version: '1.0.0', source })
+
+  it('npm / github 换成 manifest.json', () => {
+    expect(resolveArtifactUrl(plugin('npm:foo'), 'manifest')).toBe(
+      'https://cdn.jsdelivr.net/npm/foo@1.0.0/dist/manifest.json',
+    )
+    expect(resolveArtifactUrl(plugin('github:acme/repo'), 'manifest')).toBe(
+      'https://github.com/acme/repo/releases/download/v1.0.0/manifest.json',
+    )
+  })
+
+  it('url：取同目录下的 manifest.json，丢掉 query 与 hash', () => {
+    expect(resolveArtifactUrl(plugin('url:https://example.com/a/b/plugin.js'), 'manifest')).toBe(
+      'https://example.com/a/b/manifest.json',
+    )
+    expect(resolveArtifactUrl(plugin('url:https://example.com/plugin.js?v=1#x'), 'manifest')).toBe(
+      'https://example.com/manifest.json',
+    )
+  })
+
+  it('runtime / ui 没有 manifest.json', () => {
+    expect(() =>
+      resolveArtifactUrl({ kind: 'runtime', name: 'r', version: '1', source: 'npm:r' }, 'manifest'),
+    ).toThrow('没有 manifest.json')
+  })
+})
+
+describe('fetchPluginManifest', () => {
+  const ref = { kind: 'plugin' as const, name: 'hello', version: '1.0.0', source: 'github:acme/qqbot-plugin-hello' }
+  const valid = {
+    name: 'hello',
+    version: '1.0.0',
+    apiVersion: 1,
+    permissions: [],
+    depends: {},
+    conflicts: [],
+    commands: [],
+    regex: [],
+    events: [],
+    buttons: [],
+    cron: [],
+    routes: [],
+    hasMiddleware: false,
+    services: [],
+    durableObjects: [],
+  }
+  const reply = (body: unknown, init?: ResponseInit) =>
+    vi.fn(async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), init))
+
+  it('拉取并校验清单', async () => {
+    const fetchImpl = reply(valid)
+    await expect(fetchPluginManifest(ref, fetchImpl as unknown as typeof fetch)).resolves.toMatchObject({
+      name: 'hello',
+    })
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      'https://github.com/acme/qqbot-plugin-hello/releases/download/v1.0.0/manifest.json',
+    )
+  })
+
+  it('404 / 非 JSON / 清单非法都抛 ArtifactError', async () => {
+    await expect(
+      fetchPluginManifest(ref, reply('nope', { status: 404 }) as unknown as typeof fetch),
+    ).rejects.toThrow('HTTP 404')
+    await expect(fetchPluginManifest(ref, reply('not json') as unknown as typeof fetch)).rejects.toThrow(
+      '不是合法 JSON',
+    )
+    await expect(
+      fetchPluginManifest(ref, reply({ ...valid, apiVersion: 99 }) as unknown as typeof fetch),
+    ).rejects.toThrow('清单非法')
+  })
+
+  it('清单自述的 name / version 与安装请求不一致时拒绝', async () => {
+    await expect(
+      fetchPluginManifest(ref, reply({ ...valid, name: 'other' }) as unknown as typeof fetch),
+    ).rejects.toThrow('与安装的 hello 不一致')
+    await expect(
+      fetchPluginManifest(ref, reply({ ...valid, version: '2.0.0' }) as unknown as typeof fetch),
+    ).rejects.toThrow('与安装的 1.0.0 不一致')
   })
 })
 

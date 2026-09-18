@@ -15,7 +15,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/cli.ts src/index.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist --sourcemap --log-level=warning",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

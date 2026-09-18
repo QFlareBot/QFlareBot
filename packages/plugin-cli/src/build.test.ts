@@ -4,7 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildPlugin } from './build.js'
-import { extractPluginManifest, ManifestValidationError } from './manifest.js'
+import { expectedPluginName, extractPluginManifest, ManifestValidationError } from './manifest.js'
 
 // 临时插件里的 `@qqbot/sdk` 直接指向 SDK 源码，不依赖 dist 或 node_modules
 const alias = { '@qqbot/sdk': fileURLToPath(new URL('../../sdk/src/index.ts', import.meta.url)) }
@@ -135,11 +135,47 @@ describe('extractPluginManifest', () => {
     const err: unknown = await extractPluginManifest({ cwd: dir, alias }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ManifestValidationError)
     const { errors, message } = err as ManifestValidationError
-    expect(errors).toHaveLength(3)
+    // 前三条来自 validateManifest，第四条是 name 与包名不一致
+    expect(errors).toHaveLength(4)
     expect(errors.some((e) => e.includes('name 非法'))).toBe(true)
     expect(errors.some((e) => e.includes('命令名重复：b'))).toBe(true)
     expect(errors.some((e) => e.includes('正则非法'))).toBe(true)
+    expect(errors.some((e) => e.includes('name 与包名不一致'))).toBe(true)
     expect(message).toContain('name 非法')
     expect(message).toContain('正则非法')
+  })
+
+  it('name 与包名不一致时报错', async () => {
+    await writePlugin(PLUGIN_SOURCE, { name: 'qqbot-plugin-other' })
+    const err: unknown = await extractPluginManifest({ cwd: dir, alias }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ManifestValidationError)
+    expect((err as ManifestValidationError).errors).toEqual([
+      expect.stringContaining('期望 name 为 "other"，实际为 "demo"'),
+    ])
+  })
+
+  it('带 scope 的包名去掉 scope 与前缀后比对', async () => {
+    await writePlugin(PLUGIN_SOURCE, { name: '@me/qqbot-plugin-demo' })
+    expect((await extractPluginManifest({ cwd: dir, alias })).name).toBe('demo')
+  })
+
+  it('包名不带 qqbot-plugin- 前缀时要求与 name 完全一致', async () => {
+    await writePlugin(PLUGIN_SOURCE, { name: 'demo' })
+    expect((await extractPluginManifest({ cwd: dir, alias })).name).toBe('demo')
+
+    await writePlugin(PLUGIN_SOURCE, { name: 'demo-plugin' })
+    await expect(extractPluginManifest({ cwd: dir, alias })).rejects.toThrow('name 与包名不一致')
+  })
+})
+
+describe('expectedPluginName', () => {
+  it.each([
+    ['qqbot-plugin-hello', 'hello'],
+    ['@me/qqbot-plugin-hello', 'hello'],
+    ['@scope/my-plugin', 'my-plugin'],
+    ['hello', 'hello'],
+    ['qqbot-plugin-', ''],
+  ])('%s → %s', (pkgName, expected) => {
+    expect(expectedPluginName(pkgName)).toBe(expected)
   })
 })

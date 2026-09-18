@@ -56,7 +56,7 @@ const cloudflareStubPlugin: esbuild.Plugin = {
   },
 }
 
-async function readPackageJson(cwd: string): Promise<{ version?: string }> {
+async function readPackageJson(cwd: string): Promise<{ name?: string; version?: string }> {
   let raw: string
   try {
     raw = await readFile(path.join(cwd, 'package.json'), 'utf8')
@@ -64,8 +64,22 @@ async function readPackageJson(cwd: string): Promise<{ version?: string }> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
     throw err
   }
-  const pkg = JSON.parse(raw) as { version?: unknown }
-  return typeof pkg.version === 'string' ? { version: pkg.version } : {}
+  const pkg = JSON.parse(raw) as { name?: unknown; version?: unknown }
+  return {
+    ...(typeof pkg.name === 'string' ? { name: pkg.name } : {}),
+    ...(typeof pkg.version === 'string' ? { version: pkg.version } : {}),
+  }
+}
+
+const PLUGIN_PKG_PREFIX = 'qqbot-plugin-'
+
+/**
+ * 由包名推出插件 name：去掉 `@scope/`，再去掉约定的 `qqbot-plugin-` 前缀。
+ * `@me/qqbot-plugin-hello` 与 `qqbot-plugin-hello` 都得到 `hello`；不带前缀的包名原样返回。
+ */
+export function expectedPluginName(pkgName: string): string {
+  const unscoped = pkgName.startsWith('@') ? pkgName.slice(pkgName.indexOf('/') + 1) : pkgName
+  return unscoped.startsWith(PLUGIN_PKG_PREFIX) ? unscoped.slice(PLUGIN_PKG_PREFIX.length) : unscoped
 }
 
 function isPluginDefinition(value: unknown): value is PluginDefinition<unknown> {
@@ -114,6 +128,16 @@ export async function extractPluginManifest(options: ExtractManifestOptions = {}
   const manifest = extractManifest(def, pkg)
 
   const errors = validateManifest(manifest)
+  // name 是路由 /p/<name>/、KV 前缀与表前缀，必须与包名对得上，否则装两个包会撞前缀
+  if (pkg.name) {
+    const expected = expectedPluginName(pkg.name)
+    if (manifest.name !== expected) {
+      errors.push(
+        `name 与包名不一致：package.json 是 "${pkg.name}"，期望 name 为 "${expected}"，实际为 "${manifest.name}"。` +
+          `约定包名为 qqbot-plugin-<name>，definePlugin 里用去掉前缀的短名`,
+      )
+    }
+  }
   if (errors.length > 0) throw new ManifestValidationError(errors)
   return manifest
 }

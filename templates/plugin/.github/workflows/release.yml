@@ -15,8 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
+          node-version: 22
 
       - name: 校验 tag 与 package.json 的 version 一致
         run: |
@@ -31,12 +30,16 @@ jobs:
       - run: npm run build
       - run: npm test
 
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
+      # 开了 Immutable Releases 后，已发布的 release 不能再传资产（422），
+      # 所以先建草稿把产物附齐，再整体发布
       - uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
             dist/plugin.js
             dist/manifest.json
+
+      - name: 发布草稿
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        env:
+          GH_TOKEN: ${{ github.token }}

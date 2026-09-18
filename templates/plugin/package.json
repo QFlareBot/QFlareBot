@@ -5,14 +5,10 @@
   "type": "module",
   "files": ["dist"],
   "keywords": ["qqbot-plugin"],
-  "qqbot": {
-    "apiVersion": 1
-  },
   "scripts": {
     "build": "qqbot-plugin build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm test"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250917.0",

@@ -1,3 +1,4 @@
+import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { sha256, toBase64 } from './hash.js'
 import type { ArtifactRef, FetchArtifact } from './types.js'
 
@@ -34,8 +35,18 @@ export function parseSource(source: string): ParsedSource {
   return { scheme: scheme as SourceScheme, value }
 }
 
-function artifactFileName(kind: ArtifactRef['kind']): string {
-  return kind === 'runtime' ? 'runtime.js' : kind === 'ui' ? 'ui.js' : 'plugin.js'
+/** 一次拉取要的是代码还是插件清单 */
+export type ArtifactAsset = 'code' | 'manifest'
+
+const MANIFEST_FILE = 'manifest.json'
+
+function artifactFileName(ref: ArtifactRef, asset: ArtifactAsset): string {
+  if (asset === 'manifest') {
+    // 只有插件有 manifest.json，runtime / ui 没有
+    if (ref.kind !== 'plugin') throw new ArtifactError(`${ref.kind} 没有 ${MANIFEST_FILE}`)
+    return MANIFEST_FILE
+  }
+  return ref.kind === 'runtime' ? 'runtime.js' : ref.kind === 'ui' ? 'ui.js' : 'plugin.js'
 }
 
 /** 去掉 `npm:pkg@x.y.z` 中内嵌的版本，版本一律取自 ref.version */
@@ -44,9 +55,19 @@ function npmPackageName(value: string): string {
   return at > 0 ? value.slice(0, at) : value
 }
 
-export function resolveArtifactUrl(ref: ArtifactRef): string {
+/** `url:` 指向的是代码文件，清单取同目录下的 manifest.json */
+function siblingManifestUrl(url: URL): URL {
+  const next = new URL(url.href)
+  next.search = ''
+  next.hash = ''
+  const slash = next.pathname.lastIndexOf('/')
+  next.pathname = `${slash >= 0 ? next.pathname.slice(0, slash + 1) : '/'}${MANIFEST_FILE}`
+  return next
+}
+
+export function resolveArtifactUrl(ref: ArtifactRef, asset: ArtifactAsset = 'code'): string {
   const { scheme, value } = parseSource(ref.source)
-  const file = artifactFileName(ref.kind)
+  const file = artifactFileName(ref, asset)
   switch (scheme) {
     case 'npm':
       return `https://cdn.jsdelivr.net/npm/${npmPackageName(value)}@${ref.version}/dist/${file}`
@@ -64,7 +85,7 @@ export function resolveArtifactUrl(ref: ArtifactRef): string {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') {
         throw new ArtifactError(`url 来源仅支持 http(s)：${ref.source}`)
       }
-      return url.toString()
+      return (asset === 'manifest' ? siblingManifestUrl(url) : url).toString()
     }
     case 'file':
       throw new ArtifactError(`file: 来源仅 CLI 本地构建支持：${ref.source}`)
@@ -80,6 +101,36 @@ export function createHttpFetcher(fetchImpl: typeof fetch = fetch): FetchArtifac
     }
     return res.text()
   }
+}
+
+/**
+ * 拉插件的 manifest.json。安装时必须先拿到它：撞名检测、依赖检查与面板配置表单
+ * 都发生在部署之前，那时 bundle 里还没有这个插件。
+ */
+export async function fetchPluginManifest(ref: ArtifactRef, fetchImpl: typeof fetch = fetch): Promise<Manifest> {
+  const url = resolveArtifactUrl(ref, 'manifest')
+  const res = await fetchImpl(url, { redirect: 'follow' })
+  if (!res.ok) {
+    throw new ArtifactError(`拉取 ${ref.name}@${ref.version} 的清单失败：HTTP ${res.status} ${url}`)
+  }
+  let manifest: Manifest
+  try {
+    manifest = JSON.parse(await res.text()) as Manifest
+  } catch {
+    throw new ArtifactError(`${ref.name}@${ref.version} 的清单不是合法 JSON：${url}`)
+  }
+  const errors = validateManifest(manifest)
+  if (errors.length > 0) {
+    throw new ArtifactError(`${ref.name}@${ref.version} 的清单非法：${errors.join('；')}`)
+  }
+  // 清单自述的名字/版本必须与安装请求一致，否则装进来的东西与记录的对不上
+  if (manifest.name !== ref.name) {
+    throw new ArtifactError(`清单里的 name 是 ${manifest.name}，与安装的 ${ref.name} 不一致`)
+  }
+  if (manifest.version !== ref.version) {
+    throw new ArtifactError(`清单里的 version 是 ${manifest.version}，与安装的 ${ref.version} 不一致`)
+  }
+  return manifest
 }
 
 /** SRI 格式 `sha256-<base64>` */

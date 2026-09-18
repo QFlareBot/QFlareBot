@@ -6,10 +6,12 @@ export interface Config {
 }
 
 export default definePlugin<Config>({
-  // 与 npm 包名一致，安装后作为 KV / 表前缀与路由前缀
-  name: 'qqbot-plugin-example',
+  // 包名去掉 qqbot-plugin- 前缀的短名，同时是 KV 前缀、D1 表前缀与路由 /p/<name>/
+  // 构建时会校验它与 package.json 的 name 对得上
+  name: 'example',
   displayName: '示例插件',
   description: '演示命令、正则、事件与按键的最小插件',
+  // 仅供安装前展示，运行时不强制（插件与核心同 isolate，无法沙箱）
   permissions: ['kv'],
 
   configSchema: {
