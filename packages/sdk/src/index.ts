@@ -56,6 +56,8 @@ export type {
   MuteOp,
   BotApi,
   PluginContext,
+  ScopedR2,
+  StoredObject,
 } from './context.js'
 
 export {

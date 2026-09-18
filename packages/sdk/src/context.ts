@@ -26,6 +26,37 @@ export interface ScopedKV {
   list(prefix?: string): Promise<string[]>
 }
 
+/** R2 对象的元信息 */
+export interface StoredObject {
+  /** 已去掉插件前缀 */
+  key: string
+  size: number
+  uploadedAt: Date
+  /** 上传时随对象存下的自定义元数据 */
+  metadata?: Record<string, string>
+}
+
+/**
+ * 按插件名加键前缀的 R2，放 KV / D1 不该装的大东西（图片、音频、导出的文件）。
+ * KV 单值上限 25 MB 且按值计费，D1 存二进制要先转 base64——都不合适。
+ */
+export interface ScopedR2 {
+  get(key: string): Promise<ArrayBuffer | null>
+  getText(key: string): Promise<string | null>
+  getJSON<T = unknown>(key: string): Promise<T | null>
+  /** 可流式读取的响应体，适合直接回给 HTTP 路由，不必先整个读进内存 */
+  getStream(key: string): Promise<ReadableStream | null>
+  put(
+    key: string,
+    value: ArrayBuffer | ArrayBufferView | string | ReadableStream | Blob,
+    options?: { contentType?: string; metadata?: Record<string, string> },
+  ): Promise<void>
+  delete(key: string | string[]): Promise<void>
+  head(key: string): Promise<StoredObject | null>
+  /** 只列本插件的对象 */
+  list(prefix?: string, options?: { limit?: number }): Promise<StoredObject[]>
+}
+
 /** 按插件名加表前缀的 D1；`table('x')` 返回真实表名，SQL 中请用它拼接 */
 export interface ScopedDB {
   table(name: string): string
@@ -141,6 +172,8 @@ export interface PluginContext<C = unknown> {
   readonly logger: Logger
   readonly kv: ScopedKV
   readonly db: ScopedDB
+  /** 大文件存储；未绑定 R2 时调用会抛出可读错误 */
+  readonly r2: ScopedR2
   readonly api: BotApi
   /** 取其他插件提供的服务；未提供时抛错 */
   service<T = unknown>(name: string): T

@@ -2,7 +2,7 @@
  * 插件单元测试工具：构造假的 Session / PluginContext，记录插件的出站行为。
  * 不依赖运行时，`vitest` 中直接调用插件处理器即可。
  */
-import type { BotApi, GroupApi, Logger, PluginContext, ScopedDB, ScopedKV } from './context.js'
+import type { BotApi, GroupApi, Logger, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from './context.js'
 import type { EventName } from './events.js'
 import type {
   Attachment,
@@ -162,6 +162,60 @@ export function createMemoryKV(): ScopedKV & { readonly data: Map<string, string
   }
 }
 
+/** 内存版 ScopedR2，值统一按 ArrayBuffer 存，便于断言字节 */
+export function createMemoryR2(): ScopedR2 & { readonly data: Map<string, { body: ArrayBuffer; meta: StoredObject }> } {
+  const data = new Map<string, { body: ArrayBuffer; meta: StoredObject }>()
+  const encoder = new TextEncoder()
+  const toBuffer = (v: ArrayBuffer | ArrayBufferView | string | ReadableStream | Blob): ArrayBuffer => {
+    if (typeof v === 'string') return encoder.encode(v).buffer as ArrayBuffer
+    if (v instanceof ArrayBuffer) return v
+    if (ArrayBuffer.isView(v)) return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer
+    throw new Error('mock R2 只支持 string / ArrayBuffer / TypedArray，流与 Blob 请在集成测试里验证')
+  }
+
+  return {
+    data,
+    async get(key) {
+      return data.get(key)?.body ?? null
+    },
+    async getText(key) {
+      const e = data.get(key)
+      return e ? new TextDecoder().decode(e.body) : null
+    },
+    async getJSON<T>(key: string) {
+      const e = data.get(key)
+      return e ? (JSON.parse(new TextDecoder().decode(e.body)) as T) : null
+    },
+    async getStream(key) {
+      const e = data.get(key)
+      if (!e) return null
+      return new Response(e.body).body
+    },
+    async put(key, value, options) {
+      const body = toBuffer(value)
+      data.set(key, {
+        body,
+        meta: {
+          key,
+          size: body.byteLength,
+          uploadedAt: new Date(0),
+          ...(options?.metadata ? { metadata: options.metadata } : {}),
+        },
+      })
+    },
+    async delete(key) {
+      for (const k of Array.isArray(key) ? key : [key]) data.delete(k)
+    },
+    async head(key) {
+      return data.get(key)?.meta ?? null
+    },
+    async list(prefix = '', options) {
+      const all = [...data.values()].map((e) => e.meta).filter((m) => m.key.startsWith(prefix))
+      return options?.limit ? all.slice(0, options.limit) : all
+    },
+  }
+}
+
 export function createSilentLogger(): Logger {
   const noop = () => {}
   return { debug: noop, info: noop, warn: noop, error: noop }
@@ -260,6 +314,7 @@ export interface MockContextOptions<C> {
   config?: C
   services?: Record<string, unknown>
   db?: ScopedDB
+  r2?: ScopedR2
   botId?: string
 }
 
@@ -286,6 +341,7 @@ export function createMockContext<C = unknown>(
     logger: createSilentLogger(),
     kv: createMemoryKV(),
     db,
+    r2: options.r2 ?? createMemoryR2(),
     api: createRecordingApi(),
     service<T>(name: string): T {
       if (!(name in services)) throw new Error(`服务未提供：${name}`)

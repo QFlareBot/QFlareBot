@@ -184,7 +184,8 @@ describe('未绑定 D1', () => {
     const env = createEnv({ DB: undefined })
     const admin = { authorization: `Bearer ${SECRET}` }
     const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: admin }), env, createExecutionContext())
-    expect((await status.json()).bindings).toEqual({ kv: true, d1: false, r2: false })
+    // 这条只关心 D1 缺失；R2 由 createEnv 默认提供
+    expect((await status.json()).bindings).toEqual({ kv: true, d1: false, r2: true })
     const events = await runtime.fetch!(new Request(`${BASE}/admin/events`, { headers: admin }), env, createExecutionContext())
     expect((await events.json()).events).toEqual([])
     const dry = await runtime.fetch!(new Request(`${BASE}/admin/test-event`, { method: 'POST', headers: admin, body: JSON.stringify({ content: '/q' }) }), env, createExecutionContext())

@@ -1,4 +1,4 @@
-import type { BotApi, PluginContext, ScopedDB, ScopedKV } from '@qqbot/sdk'
+import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
 import { createLogger } from './logger.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
 import type { RuntimeEnv, Snapshot } from './types.js'
@@ -22,6 +22,69 @@ function createScopedKV(kv: KVNamespace, name: string): ScopedKV {
         cursor = page.list_complete ? undefined : page.cursor
       } while (cursor)
       return keys
+    },
+  }
+}
+
+function createScopedR2(bucket: R2Bucket | undefined, name: string): ScopedR2 {
+  const prefix = `p/${name}/`
+  if (!bucket) {
+    const missing = async (): Promise<never> => {
+      throw new Error('未绑定 R2（wrangler.jsonc 的 r2_buckets），插件无法使用 ctx.r2')
+    }
+    return { get: missing, getText: missing, getJSON: missing, getStream: missing, put: missing, delete: missing, head: missing, list: missing }
+  }
+
+  const strip = (key: string): string => key.slice(prefix.length)
+  const meta = (o: R2Object): StoredObject => ({
+    key: strip(o.key),
+    size: o.size,
+    uploadedAt: o.uploaded,
+    ...(o.customMetadata && Object.keys(o.customMetadata).length ? { metadata: o.customMetadata } : {}),
+  })
+
+  return {
+    async get(key) {
+      return (await bucket.get(prefix + key))?.arrayBuffer() ?? null
+    },
+    async getText(key) {
+      return (await bucket.get(prefix + key))?.text() ?? null
+    },
+    async getJSON<T>(key: string) {
+      return ((await bucket.get(prefix + key))?.json<T>() ?? null) as Promise<T | null> | null
+    },
+    async getStream(key) {
+      return (await bucket.get(prefix + key))?.body ?? null
+    },
+    async put(key, value, options) {
+      await bucket.put(prefix + key, value, {
+        ...(options?.contentType ? { httpMetadata: { contentType: options.contentType } } : {}),
+        ...(options?.metadata ? { customMetadata: options.metadata } : {}),
+      })
+    },
+    async delete(key) {
+      await bucket.delete(Array.isArray(key) ? key.map((k) => prefix + k) : prefix + key)
+    },
+    async head(key) {
+      const o = await bucket.head(prefix + key)
+      return o ? meta(o) : null
+    },
+    async list(sub = '', options) {
+      const objects: StoredObject[] = []
+      let cursor: string | undefined
+      do {
+        // limit 是总数上限，不是每页；R2 单页最多 1000
+        const remaining = options?.limit ? options.limit - objects.length : undefined
+        if (remaining !== undefined && remaining <= 0) break
+        const page = await bucket.list({
+          prefix: prefix + sub,
+          ...(remaining !== undefined ? { limit: Math.min(1000, remaining) } : {}),
+          ...(cursor ? { cursor } : {}),
+        })
+        for (const o of page.objects) objects.push(meta(o))
+        cursor = page.truncated ? page.cursor : undefined
+      } while (cursor)
+      return objects
     },
   }
 }
@@ -86,6 +149,7 @@ export class ContextFactory {
       logger: createLogger(`plugin:${name}`),
       kv: createScopedKV(env.KV, name),
       db: createScopedDB(env.DB, name),
+      r2: createScopedR2(env.R2, name),
       api: this.options.api,
       service: <T>(serviceName: string): T => {
         if (!this.services.has(serviceName)) {

@@ -116,17 +116,67 @@ export function createExecutionContext(): ExecutionContext & { flush(): Promise<
 export const TEST_SECRET = 'DG5g3B4j9X2KOErG'
 export const TEST_APPID = '1903864677'
 
+/**
+ * 极简假 R2：够验证键前缀与分页。`store` 的键是**加了前缀的真实键**，
+ * 断言隔离时直接看它。
+ */
+export function createR2(): R2Bucket & { readonly store: Map<string, string> } {
+  const store = new Map<string, string>()
+  const obj = (key: string, body: string) => ({
+    key,
+    size: new TextEncoder().encode(body).byteLength,
+    uploaded: new Date(0),
+    customMetadata: undefined,
+    arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    text: async () => body,
+    json: async () => JSON.parse(body) as unknown,
+    body: null,
+  })
+  return {
+    store,
+    async get(key: string) {
+      const v = store.get(key)
+      return v === undefined ? null : obj(key, v)
+    },
+    async head(key: string) {
+      const v = store.get(key)
+      return v === undefined ? null : obj(key, v)
+    },
+    async put(key: string, value: unknown) {
+      store.set(key, typeof value === 'string' ? value : new TextDecoder().decode(value as ArrayBuffer))
+      return obj(key, String(value))
+    },
+    async delete(key: string | string[]) {
+      for (const k of Array.isArray(key) ? key : [key]) store.delete(k)
+    },
+    // 每页最多 2 条，用来暴露只取首页的分页 bug
+    async list(options?: { prefix?: string; limit?: number; cursor?: string }) {
+      const all = [...store.keys()].filter((k) => k.startsWith(options?.prefix ?? '')).sort()
+      const from = options?.cursor ? Number(options.cursor) : 0
+      const size = Math.min(options?.limit ?? 2, 2)
+      const slice = all.slice(from, from + size)
+      const next = from + slice.length
+      return {
+        objects: slice.map((k) => obj(k, store.get(k)!)),
+        truncated: next < all.length,
+        cursor: String(next),
+      }
+    },
+  } as unknown as R2Bucket & { readonly store: Map<string, string> }
+}
+
 export function createEnv(
   overrides: Partial<RuntimeEnv> = {},
-): RuntimeEnv & { KV: ReturnType<typeof createKV>; DB: ReturnType<typeof createD1> } {
+): RuntimeEnv & { KV: ReturnType<typeof createKV>; DB: ReturnType<typeof createD1>; R2: ReturnType<typeof createR2> } {
   return {
     KV: createKV(),
     DB: createD1(),
+    R2: createR2(),
     BOT_APPID: TEST_APPID,
     BOT_SECRET: TEST_SECRET,
     ADMIN_TOKEN: 'admin-token',
     ...overrides,
-  }
+  } as RuntimeEnv & { KV: ReturnType<typeof createKV>; DB: ReturnType<typeof createD1>; R2: ReturnType<typeof createR2> }
 }
 
 /** 按 QQ 规则给事件请求签名（timestamp + body） */
