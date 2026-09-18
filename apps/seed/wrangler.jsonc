@@ -8,7 +8,7 @@
   // D1/R2 只写名字即可自动创建或复用；KV 首次部署由 wrangler 创建后把 id 写回这里
   "kv_namespaces": [{ "binding": "KV", "id": "e12215d244224a858b8dc01ddc937c9c" }],
   // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时先注释掉
-  // "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],
   "r2_buckets": [{ "binding": "R2", "bucket_name": "qqbot-artifacts" }],
 
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发

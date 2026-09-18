@@ -9,7 +9,7 @@
   "publishConfig": { "exports": "./dist/plugin.js" },
   "scripts": {
     "build": "qqbot-plugin build",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. plugins/echo",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
