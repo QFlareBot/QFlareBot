@@ -45,6 +45,9 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/multi-reply
     devDependencies:
+      '@qqbot/plugin-cli':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cli
       '@qqbot/projector':
         specifier: workspace:*
         version: link:../../packages/projector
@@ -88,6 +91,9 @@ importers:
       '@qqbot/api':
         specifier: workspace:*
         version: link:../api
+      '@qqbot/projector':
+        specifier: workspace:*
+        version: link:../projector
       '@qqbot/sdk':
         specifier: workspace:*
         version: link:../sdk

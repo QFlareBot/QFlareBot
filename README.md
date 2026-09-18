@@ -16,14 +16,14 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | --- | --- | --- |
 | `packages/sdk` | `@qqbot/sdk` | 插件契约：类型、`definePlugin`、`extractManifest`、测试工具。零运行时依赖 |
 | `packages/api` | `@qqbot/api` | QQ OpenAPI 客户端：Ed25519 签名/验签、AccessToken、消息与富媒体 |
-| `packages/runtime` | `@qqbot/runtime` | Worker 运行时：Webhook 网关、分发器、上下文注入、快照、管理 API、Cron 分发 |
-| `packages/projector` | `@qqbot/projector` | 清单 → bundle 投影、Cloudflare Versions API 部署、`qqbot-project` CLI |
+| `packages/runtime` | `@qqbot/runtime` | Worker 运行时：Webhook 网关、分发器、上下文注入、快照、管理 API、D1 清单与安装账本、Builds 触发 |
+| `packages/projector` | `@qqbot/projector` | 清单 → bundle 投影、Cloudflare Versions API 部署、Builds API 客户端、`qqbot-project` CLI |
 | `packages/plugin-cli` | `@qqbot/plugin-cli` | `qqbot-plugin build`：把插件打成单文件 ESM 并抽出 manifest.json |
 | `packages/ui` | `@qqbot/ui` | 管理面板（Vue 3），构建为可嵌入 Worker 的资源表 |
 | `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
 | `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
-| `templates/plugin` | — | 插件仓库模板（含发布 workflow） |
+| `templates/plugin` | — | 插件仓库模板（CI workflow + 声明清单约定） |
 | `docs/design.md` | — | 设计决策记录 |
 | `docs/capabilities.md` | — | QQ 平台能力 → 插件契约对照表（哪些已封装、哪些走 `api.raw`） |
 | `docs/ui.md` | — | 面板与插件页面（iframe + bridge）说明 |
@@ -83,14 +83,17 @@ buttons: {
 },
 ```
 
-插件拿到的全部能力都来自注入的 `session` 与 `ctx`（`kv` / `db` / `api` / `logger` / `service()`），不 import 运行时。`session` 还提供 `typing()`、`stream()`、`recall()`、`quote`、`interaction`；`ctx.api.group.*` 是群管理接口。完整对照见 `docs/capabilities.md`。复制 `templates/plugin` 起一个仓库，`qqbot-plugin build` 产出 `dist/plugin.js` + `dist/manifest.json`，推 `v*` 标签即发布到 npm。
+插件拿到的全部能力都来自注入的 `session` 与 `ctx`（`kv` / `db` / `r2` / `api` / `logger` / `service()`），不 import 运行时。`session` 还提供 `typing()`、`stream()`、`recall()`、`quote`、`interaction`；`ctx.api.group.*` 是群管理接口。完整对照见 `docs/capabilities.md`。复制 `templates/plugin` 起一个源码仓库，`qqbot-plugin build` 生成 `dist/plugin.js` + `dist/manifest.json`，把 `manifest.json` 提交进仓库作为声明文件，机器人面板按 `git:owner/repo@commit` 安装即可——不发布 npm、不发制品。
 
 ## 部署模型
 
-- 用户拥有的是**清单**（装了哪些插件、什么版本、配置），不是代码仓库。
-- bundle 由清单**投影**而来：`pnpm --filter @qqbot/seed project` 会构建制品、生成 `apps/seed/dist/index.js` 与 `wrangler.generated.jsonc`；`wrangler deploy --config wrangler.generated.jsonc` 即部署。
-- 线上安装插件 = 改清单 → 重新投影 → 通过 Versions API 上传 → 预览健康检查 → 切流量（M2 面板接入）。
-- 启用/禁用/改配置只改 KV 快照，不部署：`PATCH /admin/plugins/:name`。
+- **插件以源码分发，在构建机编译**。插件是源码仓库（`git:<owner>/<repo>@<commit>`），作者把 `qqbot-plugin build` 生成的 `manifest.json` 作为声明文件提交进仓库；面板与安装器只读声明，不执行插件代码。
+- **清单真相分层**：框架版本与内置插件在仓库的 `qqbot.manifest.json`（git 管）；已安装插件集在 D1（`rt_manifest_plugins`，操作全程记 `rt_installs` 账本）。两者在构建时合并，D1 同名覆盖。
+- **装/卸插件 = Worker 改 D1 清单 + 调 Builds REST API 触发重建**；构建机拉源码编译、校验"声明清单 == 抽取清单"，再走 Versions API 上传 → 预览健康检查 → 切流量。Worker 里只有触发凭证，没有部署凭证。
+- 本地 `pnpm --filter @qqbot/seed project` 与构建机跑同一投影库，产出一致（投影哈希相同）。
+- 启用/禁用/改配置只改 KV 快照，不触发构建：`PATCH /admin/plugins/:name`。
+
+设置步骤（Workers Builds、环境变量、端点）见 [apps/seed/README.md](apps/seed/README.md)。
 
 ## 运行时路由
 
@@ -104,6 +107,6 @@ buttons: {
 
 ## 状态
 
-M1 + 面板：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 130，`wrangler dev` 下静态入口与投影产物（含面板）都已跑通并截图核对。Cloudflare Versions API 部署按文档实现，**尚未对线上实测**。D1 清单存储与面板内安装（自我部署）在 M2。详见 `docs/design.md`、`docs/ui.md`。
+M1 + M2 后端 + 面板：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 202。插件清单已入 D1（安装/卸载端点 + 安装账本），`GET /admin/build-manifest` 供构建机拉取，`POST /admin/builds` 经 Builds REST API 触发重建并同步状态与 commit；seed 自部署脚本（源码构建 + Versions API 健康检查部署）已实现并本地跑通。**面板安装 UI 与线上 Builds 实测尚未完成**。详见 `docs/design.md`、`apps/seed/README.md`。
 
 > `@qqbot` 这个 npm scope 只是占位，发布前请改成你自己的。

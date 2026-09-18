@@ -113,6 +113,116 @@ export function createExecutionContext(): ExecutionContext & { flush(): Promise<
   } as unknown as ExecutionContext & { flush(): Promise<void> }
 }
 
+/**
+ * 清单存储（manifestStore.ts）专用的极简假 D1：rt_manifest_plugins 与 rt_installs 两张表，
+ * 行存进 Map。同样只验证语句逻辑，证明不了 D1 的平台原子性。
+ */
+export function createManifestD1(): D1Database & {
+  plugins: Map<string, Record<string, unknown>>
+  installs: Map<string, Record<string, unknown>>
+} {
+  const plugins = new Map<string, Record<string, unknown>>()
+  const installs = new Map<string, Record<string, unknown>>()
+  let params: unknown[] = []
+
+  const prepare = (sql: string) => {
+    const stmt = {
+      bind(...p: unknown[]) {
+        params = p
+        return stmt
+      },
+      async run() {
+        if (sql.startsWith('INSERT OR REPLACE INTO rt_manifest_plugins')) {
+          const [name, version, source, added_at, updated_at] = params as [string, string, string, number, number]
+          const prev = plugins.get(name!)
+          plugins.set(name!, { name, version, source, added_at: (prev?.added_at as number) ?? added_at, updated_at })
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('INSERT INTO rt_installs')) {
+          const [id, action, name, source, manifest_hash, build_uuid, cf_status, status, commit_hash, error, ts] = params as [
+            string,
+            string,
+            string | null,
+            string | null,
+            string,
+            string | null,
+            string | null,
+            string,
+            string | null,
+            string | null,
+            number,
+          ]
+          installs.set(id!, { id, action, name, source, manifest_hash, build_uuid, cf_status, status, commit_hash, error, ts })
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('DELETE FROM rt_manifest_plugins')) {
+          plugins.delete(params[0] as string)
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith("UPDATE rt_installs SET status = 'building'")) {
+          const [build_uuid, hash] = params as [string, string]
+          for (const row of installs.values()) {
+            if (row.status === 'pending' && row.manifest_hash === hash) {
+              row.status = 'building'
+              row.build_uuid = build_uuid
+            }
+          }
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('UPDATE rt_installs SET status = ?')) {
+          const [status, cf_status, commit_hash, error, build_uuid] = params as [
+            string,
+            string | null,
+            string | null,
+            string | null,
+            string,
+          ]
+          for (const row of installs.values()) {
+            if (row.build_uuid === build_uuid) {
+              row.status = status
+              row.cf_status = cf_status
+              row.commit_hash = commit_hash
+              row.error = error
+            }
+          }
+          return { meta: { changes: 1 } }
+        }
+        throw new Error(`fake D1 不支持：${sql}`)
+      },
+      async all<T>() {
+        if (sql.includes('FROM rt_manifest_plugins ORDER')) {
+          const results = [...plugins.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string))
+          return { results } as { results: T[] }
+        }
+        if (sql.includes('FROM rt_installs ORDER')) {
+          const limit = params[0] as number
+          const results = [...installs.values()].sort((a, b) => (b.ts as number) - (a.ts as number)).slice(0, limit)
+          return { results } as { results: T[] }
+        }
+        throw new Error(`fake D1 不支持：${sql}`)
+      },
+      async first<T>() {
+        if (sql.includes('WHERE name = ?')) {
+          return (plugins.get(params[0] as string) ?? null) as T | null
+        }
+        throw new Error(`fake D1 不支持：${sql}`)
+      },
+    }
+    return stmt
+  }
+
+  return {
+    plugins,
+    installs,
+    prepare,
+    async exec() {
+      return { count: 0, duration: 0 }
+    },
+    batch: async () => [],
+    dump: async () => new ArrayBuffer(0),
+  } as unknown as D1Database & { plugins: Map<string, Record<string, unknown>>; installs: Map<string, Record<string, unknown>> }
+}
+
 export const TEST_SECRET = 'DG5g3B4j9X2KOErG'
 export const TEST_APPID = '1903864677'
 

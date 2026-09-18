@@ -1,0 +1,71 @@
+import { describe, expect, it, vi } from 'vitest'
+import { CloudflareBuildsApi, type BuildRecord } from './builds.js'
+import { CloudflareApiError } from './cloudflare.js'
+
+type Call = { url: string; init: RequestInit }
+
+function fakeApi(responder: (call: Call) => Response | Promise<Response>) {
+  const calls: Call[] = []
+  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const call = { url: String(input), init: init ?? {} }
+    calls.push(call)
+    return responder(call)
+  })
+  const api = new CloudflareBuildsApi({
+    accountId: 'acc123',
+    apiToken: 'tok',
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+  })
+  return { api, calls }
+}
+
+const ok = (result: unknown) => new Response(JSON.stringify({ success: true, errors: [], result }))
+
+describe('CloudflareBuildsApi.triggerBuild', () => {
+  it('POST 到 trigger 的 builds 接口，默认只带 branch', async () => {
+    const { api, calls } = fakeApi(() => ok({ build_uuid: 'b-1' }))
+    const result = await api.triggerBuild('trig-1', { branch: 'main' })
+    expect(result).toEqual({ buildUuid: 'b-1' })
+
+    const call = calls[0]!
+    expect(call.url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/triggers/trig-1/builds')
+    expect(call.init.method).toBe('POST')
+    expect((call.init.headers as Record<string, string>).authorization).toBe('Bearer tok')
+    expect(JSON.parse(call.init.body as string)).toEqual({ branch: 'main' })
+  })
+
+  it('commitHash 映射为 commit_hash 字段', async () => {
+    const { api, calls } = fakeApi(() => ok({ build_uuid: 'b-2' }))
+    await api.triggerBuild('t', { branch: 'main', commitHash: 'abcdef1234567890' })
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ branch: 'main', commit_hash: 'abcdef1234567890' })
+  })
+
+  it('响应缺 build_uuid 时抛 CloudflareApiError', async () => {
+    const { api } = fakeApi(() => ok({ unexpected: true }))
+    const err = (await api.triggerBuild('t', { branch: 'main' }).catch((e: unknown) => e)) as CloudflareApiError
+    expect(err).toBeInstanceOf(CloudflareApiError)
+    expect(err.message).toContain('build_uuid')
+  })
+})
+
+describe('CloudflareBuildsApi.listBuilds', () => {
+  it('兼容数组与 { items } 两种返回', async () => {
+    const records: BuildRecord[] = [
+      { build_uuid: 'b1', status: 'success', branch: 'main', build_trigger_metadata: { commit_hash: 'a'.repeat(40) } },
+      { build_uuid: 'b2', status: 'failed' },
+    ]
+    const { api, calls } = fakeApi(({ url }) => {
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/workers/bot-tag/builds')
+      return ok({ items: records })
+    })
+    expect(await api.listBuilds('bot-tag')).toEqual(records)
+    expect(calls[0]!.init.method).toBe('GET')
+  })
+
+  it('失败信封抛 CloudflareApiError', async () => {
+    const { api } = fakeApi(
+      () => new Response(JSON.stringify({ success: false, errors: [{ code: 1, message: 'Invalid token' }], result: null }), { status: 400 }),
+    )
+    await expect(api.listBuilds('t')).rejects.toBeInstanceOf(CloudflareApiError)
+  })
+})

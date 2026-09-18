@@ -12,6 +12,19 @@ export interface RuntimeEnv {
   BOT_SECRET?: string
   /** 管理 API 的 Bearer Token；未设置则管理 API 关闭 */
   ADMIN_TOKEN?: string
+  /** 构建清单端点（/admin/build-manifest）的专用令牌；未配置时该端点走 ADMIN_TOKEN 鉴权 */
+  BUILD_TOKEN?: string
+  /** —— 自部署：由 Worker 触发 Workers Builds 重建（见 seed README 的设置步骤）—— */
+  /** Cloudflare 账号 ID */
+  CF_ACCOUNT_ID?: string
+  /** Builds API 的 user-scoped API token（权限：Workers Builds Configuration Edit + Workers Scripts Read） */
+  CF_BUILDS_TOKEN?: string
+  /** Worker 的 tag（GET /accounts/.../workers/scripts 返回的 id，不是名字） */
+  CF_WORKER_TAG?: string
+  /** Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers） */
+  CF_TRIGGER_UUID?: string
+  /** 触发构建的分支，默认 main */
+  CF_BUILD_BRANCH?: string
   [binding: string]: unknown
 }
 

@@ -1,6 +1,13 @@
 import { createTokenProvider, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
+import {
+  handleBuildManifest,
+  installManifestPlugin,
+  listBuildsStatus,
+  triggerBuild,
+  uninstallManifestPlugin,
+} from './adminManifest.js'
 import { validateConfig } from './configSchema.js'
 import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
@@ -114,14 +121,24 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
+ * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
+ * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
+ * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）
+ * DELETE /admin/manifest/plugins/:name  卸载插件（移出 D1 清单）
+ * POST /admin/builds                触发 Workers Builds 重建（{ branch } 可选），返回 buildUuid
+ * GET  /admin/builds                安装/构建账本，顺带同步进行中构建的状态与 commit
  */
 export async function handleAdmin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
-  const token = scope.env.ADMIN_TOKEN
-  if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)
-
   const url = new URL(request.url)
   const sub = url.pathname.slice(deps.options.adminPath.length) || '/'
   const method = request.method
+
+  // 构建机拉清单：BUILD_TOKEN 优先，未配置时与面板同一鉴权（ADMIN_TOKEN 本身可未配置）；
+  // 放在 ADMIN_TOKEN 存在性检查之前，构建清单不随管理 API 一起关闭
+  if (method === 'GET' && sub === '/build-manifest') return handleBuildManifest(request, scope)
+
+  const token = scope.env.ADMIN_TOKEN
+  if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)
 
   if (method === 'POST' && sub === '/login') {
     const body = await readJson<{ token?: string }>(request)
@@ -178,6 +195,13 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       return json({ ok: true })
     }
   }
+
+  if (sub === '/manifest/plugins' && method === 'POST') return installManifestPlugin(request, scope, deps)
+  const manifestRemove = matchPath('/manifest/plugins/:name', sub)
+  if (manifestRemove && method === 'DELETE') return uninstallManifestPlugin(manifestRemove.name!, scope, deps)
+
+  if (sub === '/builds' && method === 'POST') return triggerBuild(request, scope, deps)
+  if (sub === '/builds' && method === 'GET') return listBuildsStatus(scope, deps)
 
   const bridgeMatch = matchPath('/plugins/:name/bridge', sub)
   if (bridgeMatch && method === 'POST') {

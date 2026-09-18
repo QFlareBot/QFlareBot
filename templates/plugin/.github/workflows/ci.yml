@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # tag 必须与 package.json 的 version 一致
+      - name: 校验 tag 与 version 一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG 与 package.json version $PKG 不一致" >&2
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: 构建并校验声明清单与源码一致
+        run: |
+          npm run build
+          node -e "
+            const fs = require('node:fs');
+            const built = fs.readFileSync('dist/manifest.json', 'utf8').trim();
+            const declared = fs.readFileSync('manifest.json', 'utf8').trim();
+            if (built !== declared) {
+              console.error('manifest.json（声明清单）与 dist/manifest.json 不一致：');
+              console.error('请运行 npm run sync 后提交新的 manifest.json');
+              process.exit(1);
+            }
+          "
+
+      - run: npm test

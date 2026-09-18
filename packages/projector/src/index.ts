@@ -67,6 +67,13 @@ export {
 } from './cloudflare.js'
 
 export {
+  CloudflareBuildsApi,
+  type BuildRecord,
+  type CloudflareBuildsApiOptions,
+  type TriggerBuildOptions,
+} from './builds.js'
+
+export {
   deploy,
   HealthCheckError,
   type DeployApi,

@@ -39,7 +39,7 @@ npm run typecheck # tsc --noEmit
 
 `@qqbot/sdk/testing` 提供 `runCommand`、`createMockSession`、`createMockContext` 等工具，不需要运行时就能直接驱动处理器并断言回复，见 `src/index.test.ts`。
 
-## 构建
+## 构建与声明清单
 
 ```bash
 npm run build     # 等价于 qqbot-plugin build
@@ -51,35 +51,34 @@ npm run build     # 等价于 qqbot-plugin build
 - `dist/plugin.js.map`：source map；
 - `dist/manifest.json`：从插件定义抽出的纯数据清单（名称、版本、命令、事件、配置 Schema 等），版本取自 `package.json`。
 
+仓库根目录的 `manifest.json` 是**声明清单**：机器人安装前读它展示权限、校验撞名/依赖，全程不执行你的代码。改了插件定义后运行 `npm run sync`（构建 + 把 dist/manifest.json 复制到根目录）并提交，CI 会校验两者一致，过期即失败。
+
 只想校验定义而不打包时运行 `npx qqbot-plugin validate`。
 
-## 发布
+## 发布（源码分发）
 
-插件以**预构建产物**分发——机器人部署时只拉 `plugin.js` 与 `manifest.json`，不会编译你的源码。所以每个版本都要跑一次构建并把产物发出去。
+插件以**源码**分发，机器人侧在构建时按 commit 拉取源码、编译并校验声明清单。不需要发布 npm，也不需要构建制品：
 
-1. 首次运行 `npm install` 生成并提交 `package-lock.json`（CI 使用 `npm ci`）。
-2. **在仓库 Settings → General 里开启 Immutable Releases**。开启后已发布 release 的资产与 tag 都会被锁死，tag 名即使删库重建也不能复用，并自动生成可校验的 attestation。不开也能用，但那样同一个 tag 的产物随时可被替换。
-3. 修改 `package.json` 的 `version`，打同名 tag 并推送：
+1. 改 `package.json` 的 `version`；
+2. `npm run sync` 同步声明清单，随代码一起提交；
+3. 推 commit，把完整 commit SHA 记下来（安装时按 SHA 钉住，不要用分支名）。
 
-   ```bash
-   npm version 0.1.1
-   git push --follow-tags
-   ```
-
-`.github/workflows/release.yml` 会校验 tag 与 `version` 一致、构建、测试，然后**先建草稿 release 把产物附齐、再发布**——Immutable Releases 下已发布的 release 不能再传资产（HTTP 422），所以顺序不能颠倒。
-
-不想用 npm 也完全没问题：机器人从 GitHub Release 拉产物，不经过 npm registry。
+CI（`.github/workflows/ci.yml`）在每次 push 时构建、校验声明清单一致性并跑测试；打 `v*` tag 时额外校验 tag 与 version 一致。旧制品模型（GitHub Release 附 `dist/`、`npm:` 安装）已废弃，机器人投影器虽兼容但不再使用。
 
 ## 安装到机器人
 
-在机器人的部署清单里加一条，`source` 三选一：
+在机器人面板/管理 API 里安装，`source` 写法：
 
-| 写法 | 拉取地址 | 说明 |
-| --- | --- | --- |
-| `github:<owner>/<repo>` | Release 资产 `v<版本>/plugin.js` | 配合上面的工作流，推荐 |
-| `url:https://.../plugin.js` | 原样 | 把 `dist/` 提交进仓库，用 tag 或 commit 的 raw 链接，`git push` 即发布 |
-| `npm:<包名>` | jsDelivr 的 `dist/plugin.js` | 需要发布到 npm |
+| 写法 | 说明 |
+| --- | --- |
+| `git:<owner>/<repo>@<完整commit>` | 推荐。构建时从该 commit 拉源码编译，声明清单同时用于安装前校验 |
+| `git:<owner>/<repo>@<commit>#<子目录>` | 插件在 monorepo 子目录时用 |
 
-版本固定写死，不支持 `^1.2.0` 这类范围——范围会让同一份清单在不同时间构建出不同代码。首次安装时会记录产物的 `integrity`（SRI 哈希），之后每次构建都重新校验，产物被换掉会**构建失败**而不是静默部署。
+```bash
+curl -X POST https://<机器人域名>/admin/manifest/plugins \
+  -H "Authorization: Bearer <管理密钥>" -H "content-type: application/json" \
+  -d '{"source": "git:me/qqbot-plugin-example@a1b2c3d4e5f6"}'
+curl -X POST https://<机器人域名>/admin/builds -H "Authorization: Bearer <管理密钥>"
+```
 
-因此：发布后不要手工改动产物；要改就发新版本。
+安装后需要触发一次构建才会上线（见 seed README 的自部署设置）。构建时产物会记录 SRI 完整性；声明清单与源码不一致、依赖不满足、与已装插件冲突都会直接拒绝安装或构建失败，而不是静默部署。

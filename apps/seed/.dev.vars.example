@@ -2,3 +2,12 @@
 BOT_APPID=你的AppID
 BOT_SECRET=你的AppSecret
 ADMIN_TOKEN=随机长字符串
+
+# —— 自部署（Worker 触发 Workers Builds 重建；设置步骤见 README）——
+# 构建清单端点 /admin/build-manifest 的专用令牌；不配置时该端点走 ADMIN_TOKEN 鉴权
+# BUILD_TOKEN=随机长字符串
+# CF_ACCOUNT_ID=Cloudflare 账号 ID
+# CF_BUILDS_TOKEN=user-scoped API token（Workers Builds Configuration Edit + Workers Scripts Read）
+# CF_WORKER_TAG=Worker 的 tag（GET /accounts/.../workers/scripts 返回的 id）
+# CF_TRIGGER_UUID=Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers）
+# CF_BUILD_BRANCH=main

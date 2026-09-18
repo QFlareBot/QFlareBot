@@ -6,13 +6,16 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@qqbot/api": "workspace:*",
+    "@qqbot/projector": "workspace:*",
     "@qqbot/sdk": "workspace:*"
   },
   "devDependencies": {

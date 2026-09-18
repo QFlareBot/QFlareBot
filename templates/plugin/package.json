@@ -3,10 +3,15 @@
   "version": "0.1.0",
   "description": "QQ 机器人插件示例：命令、正则与事件",
   "type": "module",
-  "files": ["dist"],
-  "keywords": ["qqbot-plugin"],
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "qqbot-plugin"
+  ],
   "scripts": {
     "build": "qqbot-plugin build",
+    "sync": "qqbot-plugin build && node -e \"require('node:fs').copyFileSync('dist/manifest.json','manifest.json')\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

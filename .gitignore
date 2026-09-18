@@ -6,6 +6,8 @@ dist/
 .DS_Store
 coverage/
 apps/seed/wrangler.generated.jsonc
+apps/seed/manifest.resolved.json
+apps/seed/.build-plugins/
 packages/ui/dist/
 packages/ui/public/tokens.css
 *.local

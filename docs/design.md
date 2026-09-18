@@ -10,27 +10,31 @@ QQ 开放平台 Webhook 已不再要求 IP 白名单（在 `qqbot-cfworker` 原�
 
 TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；Rust/Python 在此 I/O 密集场景无收益且生态不足。零第三方运行时依赖（Hono/zod 都没用），bundle 极小。
 
-## 3. 单 Worker，自我部署
+## 3. 单 Worker，触发构建自部署
 
-一个 Worker 同时承担 bot 与管理面。它可以通过 Cloudflare Versions API 重新部署自己：上传版本（不切流量）→ 打预览地址 `/healthz` → 切流量。三个安全阀让单 Worker 足够稳：
+一个 Worker 同时承担 bot 与管理面。装/卸插件不是它自己能完成的动作——Workers 里没有编译器，依赖解析更无从谈起——所以"自我部署"的实现是：**Worker 改写 D1 里的插件清单，然后调用 Cloudflare Builds REST API 触发一次构建**；构建机（Workers Builds）拉取本仓库源码与各插件源码，编译并部署。部署脚本（seed 的 `scripts/build-deploy.mjs deploy`）直接用构建产物走 Versions API：上传版本（不切流量）→ 打预览地址 `/healthz` → 切流量。
 
-1. 先上传后切流量，健康检查失败就丢弃版本
-2. 插件用动态 `import()`，某个插件求值抛错只影响自己，面板照常可用
-3. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台本身还有版本回滚
+安全阀：
 
-代价：Cloudflare API token 与插件代码同 isolate，同 realm 无沙箱。这与 NoneBot/Koishi 的"装的插件即可信代码"前提一致，文档中说明并建议 bot 单开一个 Cloudflare 账号。
+1. 部署走"先上传后切流量"，健康检查失败就不切。含 Durable Object 的 Worker 没有版本预览 URL（平台限制），此时跳过健康检查——这是当前最大的例外
+2. 插件用动态 `import()`，某个插件求值抛错只影响自己，面板照常可用（声明 Durable Object 的插件例外：类必须静态导出，随主模块求值，求值失败会拖垮整个 Worker）
+3. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台版本回滚、以及"恢复 D1 清单快照 + 重新触发构建"是最后手段
+4. 部署凭证不进 Worker：Worker 只持有 Builds 触发 token（user-scoped，权限仅触发构建与读构建状态）；编译与部署凭证由构建机持有
 
-## 4. 插件：编译期打包，运行时开关，清单驱动
+代价与信任模型：插件代码与框架同 isolate、同 realm 无沙箱，permissions 声明只是"知情同意"，不是安全边界。这与 NoneBot/Koishi 的"装的插件即可信代码"前提一致，文档中说明并建议 bot 单开一个 Cloudflare 账号。
 
-Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import" 不成立。我们采用：
+## 4. 插件：源码分发，清单驱动，构建时编译
 
-- **插件是 npm 包**，发布时用 `qqbot-plugin build` 打成**自包含单文件 ESM** `dist/plugin.js` + 纯数据 `dist/manifest.json`。制品格式视为永久冻结。
-- **清单（DeployManifest）是唯一真相**：core 版本 + 已装插件（name/version/source/integrity/enabled/manifest）。线上存 D1（事务、历史），运行时需要的那份（启用、配置、优先级）发布到 KV 快照，制品缓存到 R2。
-- **bundle 是清单的投影**：`@qqbot/projector` 读清单、拉制品、生成胶水 `index.js`（`import` runtime，动态 `import()` 各插件，静态重导出插件 DO 类）与版本元数据，多模块上传，**不需要 esbuild**。
-- 安装/升级/卸载 = 改清单 → 重新投影 → 部署。启用/禁用/改配置 = 改 KV 快照，不部署。
-- 种子仓库的构建命令跑同一个投影库，所以 GitHub（Workers Builds）触发的部署与 Worker 自我部署产出一致，互不覆盖。
+Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import" 不成立；Worker 内编译则受 CPU/体积限制且要自建依赖解析，同样不成立。因此插件以**源码**分发、在构建机编译：
 
-Dynamic Workers（Worker Loader，付费版 beta）保留为**不可信脚本**场景的执行后端（如群管自定义脚本、LLM 生成代码），制品格式相同，但不是插件系统的基础。独立 Worker（Service Binding）保留给独立迭代的重型子系统。
+- **插件是源码仓库**（`git:<owner>/<repo>@<commit>[#<子目录>]`）。作者运行 `qqbot-plugin build` 生成 `dist/plugin.js` + `dist/manifest.json`，并把 `manifest.json` 作为**声明文件提交进仓库**——面板与安装器只读它（权限展示、撞名/依赖/冲突检测），永不执行插件代码。
+- **安装 = 写 D1 清单 + 触发构建**：`POST /admin/manifest/plugins` 校验声明清单（apiVersion、撞名、conflicts、depends）后写入 D1 的 `rt_manifest_plugins`；`POST /admin/builds` 调 Builds API 触发重建。安装/升级/卸载/构建全程记录在 `rt_installs` 账本（清单哈希、build_uuid、commit、状态），构建机拉到的清单哈希与触发时不一致即构建失败。
+- **清单真相分层**：框架版本（core/ui）与内置插件在仓库的 `qqbot.manifest.json`（git 管，diff/回滚免费）；已安装插件集在 D1（运行时可写、有账本）；两者在构建时合并（D1 同名覆盖，可借此下架内置插件）。启用/禁用/改配置仍是 KV 快照，不触发构建。
+- **构建时校验**：构建机按 commit 拉 tarball、esbuild 就地打包，重新抽取清单并与声明清单比对，不一致即失败——防止声明与代码漂移。产物记 SRI 完整性。
+- 旧制品源（`npm:` / GitHub Release 的 `github:` / `url:`）投影器仍支持，属旧模型兼容，不再推荐。
+- Dynamic Workers（Worker Loader，付费版 beta）保留为**不可信脚本**场景的执行后端（如群管自定义脚本、LLM 生成代码），制品格式相同，但不是插件系统的基础。
+
+种子仓库的本地投影命令（`pnpm project`）与构建机（`manifest:prepare`）跑同一个投影库，产出一致（投影哈希相同），互不覆盖。
 
 ## 5. 契约稳定性规则
 
@@ -41,7 +45,7 @@ Dynamic Workers（Worker Loader，付费版 beta）保留为**不可信脚本**�
 5. **触发器与配置 schema 是数据**（manifest / JSON Schema），面板与安装器不执行插件代码。
 6. **能力优先做成服务**（`services` / `depends` / `ctx.service()`），核心 API 只增不改，废弃走 major。
 7. 第一天就带 `botId`、`platform`，事件名带命名空间（`qq.group.at_message`）。
-8. 制品格式（单 ESM + manifest.json）永久冻结。
+8. 契约冻结点是 `definePlugin` 的入口形状与声明清单（manifest.json）；构建产物是瞬态产物，不作为分发契约，构建工具链版本随仓库 pin。
 
 ## 6. Durable Object 政策
 
@@ -68,6 +72,8 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 
 ## 10. 里程碑（更新）
 
-**M2**：D1 清单存储与 KV 快照发布、面板内安装（npm 搜索 → 拉制品 → 投影 → 自我部署 → 健康检查 → 切流量，SSE 进度）、自愈对比。
+**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）。面板的安装/构建日志 UI 尚未接入，端点已就绪。
+
+**M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、面板安装页（源码安装 + 构建日志内嵌）、Access 集成指引、Dynamic Workers 脚本引擎插件。
 
 **M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、Access 集成指引、Dynamic Workers 脚本引擎插件。

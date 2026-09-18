@@ -1,0 +1,70 @@
+{
+  "name": "example",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "permissions": [
+    "kv"
+  ],
+  "depends": {},
+  "conflicts": [],
+  "commands": [
+    {
+      "name": "hello"
+    },
+    {
+      "name": "count",
+      "description": "数到 N",
+      "usage": "/count [N]",
+      "aliases": [
+        "数数"
+      ]
+    },
+    {
+      "name": "menu"
+    },
+    {
+      "name": "remember"
+    }
+  ],
+  "regex": [
+    {
+      "pattern": "^ping$",
+      "flags": "i"
+    }
+  ],
+  "events": [
+    {
+      "event": [
+        "qq.group.robot_added"
+      ]
+    }
+  ],
+  "buttons": [
+    {
+      "id": "confirm"
+    }
+  ],
+  "cron": [],
+  "routes": [],
+  "hasMiddleware": false,
+  "services": [],
+  "durableObjects": [],
+  "displayName": "示例插件",
+  "description": "演示命令、正则、事件与按键的最小插件",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "greeting": {
+        "type": "string",
+        "title": "问候语",
+        "default": "你好"
+      }
+    },
+    "required": [
+      "greeting"
+    ]
+  },
+  "defaultConfig": {
+    "greeting": "你好"
+  }
+}
