@@ -1,0 +1,204 @@
+# 插件开发指南
+
+目标：只看这一篇，就能写出一个能用的插件。API 细节以 `@qqbot/sdk` 的类型注释为准；平台能力对照见 `capabilities.md`。
+
+## 1. 最小可用插件
+
+```ts
+// src/index.ts
+import { definePlugin } from '@qqbot/sdk'
+
+interface Config {
+  greeting: string
+}
+
+export default definePlugin<Config>({
+  // 包名 qqbot-plugin-hello 去掉前缀的短名；构建时校验与 package.json 一致
+  name: 'hello',
+  displayName: '问好',
+  description: '最小示例：命令 + 配置 + KV',
+  permissions: ['kv'], // 仅供安装前展示，运行时不强制
+
+  // 面板据此渲染配置表单并在保存时校验
+  configSchema: {
+    type: 'object',
+    properties: { greeting: { type: 'string', title: '问候语', default: '你好' } },
+    required: ['greeting'],
+  },
+  defaultConfig: { greeting: '你好' },
+
+  commands: {
+    // 返回值就是回复；ctx.config 是面板里保存的配置
+    hello: ({ ctx, argText }) => `${ctx.config.greeting}，${argText || '朋友'}`,
+
+    // 生成器连发多条（同一条消息的被动回复默认最多 5 条）
+    async *count() {
+      for (let i = 1; i <= 3; i++) yield `${i}`
+    },
+
+    // 运行时数据用 ctx.kv（自动加插件前缀，别的插件看不到）
+    async remember({ session, ctx, argText }) {
+      await ctx.kv.put(`note:${session.userId}`, argText)
+      return '记住了'
+    },
+    async mynote({ session, ctx }) {
+      return (await ctx.kv.get(`note:${session.userId}`)) ?? '没有记录'
+    },
+  },
+
+  // 正则以模式为键，/…/i 形式带 flags
+  regex: { '/^ping$/i': () => 'pong' },
+
+  // 事件：入群欢迎（走 event_id 被动回复，不消耗主动消息额度）
+  events: { 'qq.group.robot_added': ({ ctx }) => `${ctx.config.greeting}，我是机器人，发送 /hello 试试` },
+})
+```
+
+配套文件与命令（详见模板 `templates/plugin`）：
+
+```bash
+npm run build            # 生成 dist/plugin.js + dist/manifest.json
+npm run sync             # 把 dist/manifest.json 复制到仓库根目录（声明清单，随代码提交）
+npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSession / createMockContext
+```
+
+装到机器人：`POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}`，再 `POST /admin/builds` 触发构建。构建机拉源码编译，声明清单与源码不一致会直接失败。
+
+## 2. 规则
+
+- **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。可以 import `@qqbot/sdk` 与普通 npm 包（构建时打进去），`cloudflare:workers` 需在处理器内部 `import()`。
+- **命名**：包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。
+- **版本**：取自 `package.json` 的 `version`。
+- **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
+
+## 3. 接收事件
+
+运行时把 QQ 推送标准化为 `Session` 后分发。所有处理器入参都是**单对象**，加字段向前兼容：
+
+| 匹配器 | 入参（除 session/ctx 外） | 默认 |
+| --- | --- | --- |
+| `commands` | `command`（命中的词）、`args: string[]`、`argText`（命令后的原文） | `block: true` |
+| `regex` | `match: RegExpMatchArray` | `block: false` |
+| `events` | — | `block: false` |
+| `buttons` | `interaction`、`buttonId`、`buttonData` | `block: true` |
+| `cron` | `job`、`scheduledAt`（**没有 session**） | — |
+| `routes` | `request`、`params`、`authenticated` | public |
+| `middleware` | `next()`，不调即拦截 | 按 priority 排序 |
+
+`block` / `priority`（大者先执行）/ `scenes`（限定 `group | c2c | guild | guild_dm`）写在匹配器对象形式里。命令前缀默认 `/`，面板可改；命令名大小写不敏感。
+
+常用事件名（完整映射见 `docs/capabilities.md`）：
+
+| 事件名 | 含义 |
+| --- | --- |
+| `qq.group.at_message` / `qq.group.message` | 群里 @机器人 / 群消息 |
+| `qq.c2c.message` | 单聊消息 |
+| `qq.guild.at_message` / `qq.guild.message` / `qq.guild.direct_message` | 频道消息 |
+| `qq.group.robot_added` / `robot_removed` | 机器人群里被添加 / 移出（可用 event_id 被动回复） |
+| `qq.group.member_added` / `member_removed` / `join_request` | 群成员变动 / 入群申请 |
+| `qq.c2c.friend_added` / `friend_removed` | 加 / 删好友 |
+| `qq.interaction` | 按键/菜单回调（一般用 `buttons` 匹配器，不用直接监听） |
+
+平台新事件自动落到 `qq.raw.<t 小写>`（如 `qq.raw.group_msg_reject`），不必等框架发版。
+
+`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
+
+## 4. 回复消息
+
+- 处理器**返回值就是回复**：字符串、消息对象、或（异步）可迭代对象逐条发。返回 `undefined` 表示自己处理完，不回复。
+- `session.reply(msg)`：被动回复本次事件（`msg_seq` 自动编号，默认上限 5 条）。
+- `session.send(msg, target?)`：主动发送；不传 target 发往当前会话。返回 `SendResult`（`ok` / `status` / `messageId` / `error`），**记得检查 `ok`**。
+- `session.canReply`：当前事件能否被动回复；返回值投递会自动退化成主动发送。
+
+消息对象（字符串即纯文本）：
+
+```ts
+{
+  text: '文字',
+  image: { url: 'https://…' },                  // 或 base64
+  media: { type: 'video', url: 'https://…' },   // video | voice | file；图 png/jpg、视频 mp4、语音 silk
+  markdown: { content: '# md' },
+  keyboard: keyboard([[button.callback('确认', 'data', { id: 'confirm' }), button.link('文档', 'https://…')]]),
+  quote: true,                                  // 引用当前消息；传 refIndex 字符串引用指定消息
+}
+```
+
+`keyboard` 会自动把消息升级为 markdown（平台要求）。按键的 `id` 对应 `buttons` 匹配器的键；按键处理器返回数字即回应平台（0 成功 · 4 无权限 …），返回消息则回复并自动 ack——客户端永远不会转圈。
+
+辅助：`session.typing(seconds)`（仅单聊，≤60s）、`session.stream()`（仅单聊流式，群聊退化为 end 时一次性回复）、`session.recall(id?)`（不传撤回自己最后一条，平台限 2 分钟内）。
+
+## 5. 配置
+
+- **声明**：`defaultConfig` 出厂默认 + `configSchema`（JSON Schema）。面板按 schema 渲染表单，保存时校验（覆盖 string / number / boolean / 枚举 / 字符串数组与 `required`；复杂对象退化为 JSON 文本框）。
+- **存放**：面板保存写 KV 快照，与部署解耦——改配置不触发构建，即时生效（其他节点最长约 1 分钟）。
+- **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。快照没有该字段时回落 `defaultConfig`。
+
+配置放"人工可改的设置"；插件的运行数据用下面的存储。
+
+## 6. 存储状态
+
+三个按插件名自动隔离的存储，互相不可见：
+
+| 存储 | 隔离方式 | 要点 |
+| --- | --- | --- |
+| `ctx.kv` | 键前缀 `p:<名>:` | `get / getJSON<T> / put(key, value, { ttl? }) / delete / list(prefix?)`；ttl 最小 60 秒 |
+| `ctx.db` | 表名前缀 `p_<名>_` | `ctx.db.table('notes')` 返回真实表名，拼进 SQL；`run(sql, ...params)` / `all<T>` / `first<T>` 支持参数绑定；`exec` 跑建表语句 |
+| `ctx.r2` | 键前缀 `p/<名>/` | 大文件：`put(key, value, { contentType? }) / get / getText / getJSON / getStream / delete / head / list` |
+
+未绑定 D1 / R2 时调用会抛可读错误（绑定见 seed 的 `wrangler.jsonc`）。建表放 `hooks.onInstall`：
+
+```ts
+hooks: {
+  async onInstall({ ctx }) {
+    await ctx.db.exec(`CREATE TABLE IF NOT EXISTS ${ctx.db.table('notes')} (
+      user_id TEXT PRIMARY KEY, note TEXT, ts INTEGER NOT NULL)`)
+  },
+  async onBoot({ ctx }) { /* 每个 isolate 一次的轻量初始化 */ },
+},
+```
+
+注意：**没有 onUpgrade 钩子**——升级版本不触发任何钩子，表结构/数据迁移请在 `onBoot` 里做惰性检查（`onInstall` 的 KV 标记保证它跨部署只跑一次）。`onEnable` / `onDisable` / `onUninstall` 已在契约中但运行时尚未接入。
+
+跨插件共享能力不用共享存储：提供方声明 `services: { 名: (ctx) => 对象 }`，使用方声明 `depends: { 名: '*' }` 后 `ctx.service<类型>('名')`。depends 未满足会在安装时被拒绝。
+
+## 7. 定时任务与主动推送
+
+```ts
+cron: {
+  daily: {
+    cron: '0 1 * * *', // 5 段，UTC！北京时间 9 点 = 1 点；支持 * a-b a,b 与 / 步进
+    async handler({ ctx, job, scheduledAt }) {
+      await ctx.api.sendMessage({ scene: 'group', id: '群openid' }, `日报：${job}@${new Date(scheduledAt).toISOString()}`)
+    },
+  },
+},
+```
+
+`cron` 处理器**没有 session**（不是事件），主动推送用 `ctx.api.sendMessage`。群聊主动消息需要平台白名单。`ctx.api` 上还有 `raw(method, path, body)`（框架未封装的接口直接调，永远可用）与 `group.*`（群管理）。
+
+## 8. HTTP 路由与插件页面
+
+```ts
+ui: { path: '/ui/', title: '我的页面' },   // 面板侧栏出现入口
+routes: [
+  // auth: 'admin' 接受面板会话或本插件的桥接令牌；默认 public（任何人可访问）
+  { method: 'GET', path: '/ui/*', auth: 'admin', handler: () => new Response('<h1>…</h1>', { headers: { 'content-type': 'text/html' } }) },
+  { method: 'GET', path: '/api/data', auth: 'admin', handler: async ({ ctx }) => Response.json(await ctx.kv.getJSON('data') ?? {}) },
+],
+```
+
+`path` 支持 `:param` 与末尾 `/*` 通配（键为 `*`）。插件页面跑在面板的 sandbox iframe 里，用 `@qqbot/ui-bridge` 拿令牌、主题与 resize，见 `docs/ui.md` 与 `plugins/keyboard` 示例。
+
+## 9. ctx 速查
+
+| 字段/方法 | 说明 |
+| --- | --- |
+| `ctx.config` | 面板保存的配置（回落 defaultConfig） |
+| `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
+| `ctx.api` | QQ OpenAPI：`sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*` / `raw()` |
+| `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |
+| `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明） |
+| `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |
+| `ctx.plugin` / `ctx.botId` | 自己的名字与版本 / 机器人 AppID |
+
+有疑问先看三份代码：`templates/plugin/src/index.ts`（起步示例）、`plugins/keyboard`（按键 + 插件页面）、`@qqbot/sdk` 的类型注释（字段级真相）。

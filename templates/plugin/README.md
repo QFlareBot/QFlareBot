@@ -2,6 +2,8 @@
 
 运行在 Cloudflare Workers 上的 QQ 机器人插件模板。复制本目录、改掉包名即可开始开发。
 
+> 完整的插件开发指南（事件 / 回复 / 配置 / 存储 / 生命周期）见 qqbot-workers 仓库的 [docs/plugin-guide.md](../../docs/plugin-guide.md)；本篇只讲模板自身的约定与发布流程。
+
 ## 开发
 
 ```bash

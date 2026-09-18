@@ -62,9 +62,11 @@ export default definePlugin<{ greeting: string }>({
   },
   regex: { '/^ping$/i': () => 'pong' },
   events: { 'qq.group.robot_added': () => '大家好' },     // 走 event_id 被动回复
-  cron: { daily: { cron: '0 9 * * *', handler: async ({ ctx }) => { /* 主动推送 */ } } },
+  cron: { daily: { cron: '0 1 * * *', handler: async ({ ctx }) => { /* 主动推送 */ } } },
 })
 ```
+
+**完整指南见 [docs/plugin-guide.md](docs/plugin-guide.md)**——事件、配置、存储、生命周期，只看一篇即可写出能用的插件。
 
 按键与回调：
 
