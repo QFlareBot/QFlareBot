@@ -28,6 +28,10 @@ export function assertPluginsValid(plugins: ReadonlyArray<{ name: string; manife
     if (!PLUGIN_NAME.test(p.name)) throw new Error(`插件名非法：${p.name}`)
     if (seen.has(p.name)) throw new Error(`插件名重复：${p.name}`)
     seen.add(p.name)
+    // 先挡一道，否则下面取字段只会得到一句没有上下文的 "Cannot read properties of undefined"
+    if (!p.manifest?.durableObjects) {
+      throw new Error(`插件 ${p.name} 没有清单：请在部署清单里内联 manifest 对象，或让投影器按 source 拉 manifest.json`)
+    }
     for (const cls of p.manifest.durableObjects) {
       if (!JS_IDENT.test(cls)) throw new Error(`插件 ${p.name} 的 Durable Object 类名非法：${cls}`)
     }

@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { parseArgs } from 'node:util'
-import { createHttpFetcher, parseSource } from './artifacts.js'
+import { createHttpFetcher, fetchPluginManifest, parseSource } from './artifacts.js'
 import { parseJsonc } from './jsonc.js'
 import { project } from './project.js'
 import type { DeployManifest, FetchArtifact } from './types.js'
@@ -28,17 +28,32 @@ function createLocalFetcher(manifestDir: string): FetchArtifact {
   }
 }
 
-/** 本地清单里插件的 `manifest` 允许写成 `file:` 指向构建产物 manifest.json，避免手抄 */
+type PluginManifest = DeployManifest['plugins'][number]['manifest']
+
+/**
+ * 补齐每个插件的 `manifest`，三种来源：
+ *   1. 清单里内联的对象，原样用；
+ *   2. 写成 `file:` 的字符串引用，从磁盘读（免得手抄构建产物）；
+ *   3. 没写：按 source 推导——`file:` 取同目录的 manifest.json，远程源按 URL 规则去拉。
+ */
 async function loadLocalManifest(manifestPath: string): Promise<DeployManifest> {
   const raw = JSON.parse(await readFile(manifestPath, 'utf8')) as DeployManifest
   const dir = path.dirname(manifestPath)
+  const readJson = async (p: string): Promise<PluginManifest> => JSON.parse(await readFile(p, 'utf8')) as PluginManifest
+
   const plugins = await Promise.all(
     raw.plugins.map(async (p) => {
       const ref = p.manifest as unknown
-      if (typeof ref !== 'string') return p
-      const { scheme, value } = parseSource(ref)
-      if (scheme !== 'file') throw new Error(`插件 ${p.name} 的 manifest 只支持内联对象或 file: 引用`)
-      return { ...p, manifest: JSON.parse(await readFile(path.resolve(dir, value), 'utf8')) as DeployManifest['plugins'][number]['manifest'] }
+      if (ref && typeof ref === 'object') return p
+      if (typeof ref === 'string') {
+        const { scheme, value } = parseSource(ref)
+        if (scheme !== 'file') throw new Error(`插件 ${p.name} 的 manifest 写成字符串时只支持 file: 引用；远程源直接省略这个字段即可`)
+        return { ...p, manifest: await readJson(path.resolve(dir, value)) }
+      }
+
+      const { scheme, value } = parseSource(p.source)
+      if (scheme === 'file') return { ...p, manifest: await readJson(path.resolve(dir, path.dirname(value), 'manifest.json')) }
+      return { ...p, manifest: await fetchPluginManifest({ kind: 'plugin', name: p.name, version: p.version, source: p.source }) }
     }),
   )
   return { ...raw, plugins }
