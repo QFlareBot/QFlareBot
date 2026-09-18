@@ -1,0 +1,98 @@
+@import '@qqbot/ui-bridge/tokens.css';
+@import 'tailwindcss';
+
+/* 把语义 token 映射成 Tailwind 工具类：bg-surface、text-fg-muted、border-border … */
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--qb-bg);
+  --color-surface: var(--qb-surface);
+  --color-surface-muted: var(--qb-surface-muted);
+  --color-fg: var(--qb-fg);
+  --color-fg-muted: var(--qb-fg-muted);
+  --color-fg-subtle: var(--qb-fg-subtle);
+  --color-border: var(--qb-border);
+  --color-border-strong: var(--qb-border-strong);
+  --color-accent: var(--qb-accent);
+  --color-on-accent: var(--qb-on-accent);
+  --color-ring: var(--qb-ring);
+  --color-success: var(--qb-success);
+  --color-warning: var(--qb-warning);
+  --color-danger: var(--qb-danger);
+  --color-success-bg: var(--qb-success-bg);
+  --color-warning-bg: var(--qb-warning-bg);
+  --color-danger-bg: var(--qb-danger-bg);
+  --color-white: #fff;
+  --color-black: #000;
+  --color-transparent: transparent;
+
+  --font-sans: var(--qb-font-sans);
+  --font-mono: var(--qb-font-mono);
+
+  --radius-sm: var(--qb-radius-sm);
+  --radius-md: var(--qb-radius);
+  --radius-lg: var(--qb-radius-lg);
+
+  --text-xs: var(--qb-text-xs);
+  --text-sm: var(--qb-text-sm);
+  --text-base: var(--qb-text-base);
+  --text-lg: var(--qb-text-lg);
+  --text-xl: var(--qb-text-xl);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--qb-bg);
+  color: var(--qb-fg);
+  font: var(--qb-text-base) / var(--qb-leading) var(--qb-font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+:focus-visible {
+  outline: 2px solid var(--qb-ring);
+  outline-offset: 2px;
+}
+
+/* 表格：紧凑、可扫读 */
+.qb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--qb-text-sm);
+}
+.qb-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--qb-fg-muted);
+  padding: 0 var(--qb-space-3);
+  height: var(--qb-row-height);
+  border-bottom: 1px solid var(--qb-border);
+  white-space: nowrap;
+}
+.qb-table td {
+  padding: 0 var(--qb-space-3);
+  height: var(--qb-row-height);
+  border-bottom: 1px solid var(--qb-border);
+  vertical-align: middle;
+}
+.qb-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.qb-table tbody tr:hover td {
+  background: var(--qb-surface-muted);
+}
+
+/* 过渡只做 opacity/transform */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--qb-duration) var(--qb-ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}

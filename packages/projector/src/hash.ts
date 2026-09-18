@@ -29,6 +29,7 @@ export async function sha256Hex(input: string): Promise<string> {
  */
 export function canonicalProjectionInput(manifest: DeployManifest): string {
   const lines = [`core@${manifest.core.version}`]
+  if (manifest.ui) lines.push(`ui@${manifest.ui.version}`)
   const plugins = [...manifest.plugins].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   for (const p of plugins) {
     if (!p.integrity) throw new Error(`插件 ${p.name}@${p.version} 缺少 integrity，无法计算投影哈希`)

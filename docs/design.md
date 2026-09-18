@@ -62,6 +62,12 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 
 **M1（本仓库当前）**：sdk / api / runtime / projector / plugin-cli / 四个示例插件 / 种子应用 / 插件模板。平台能力覆盖见 `capabilities.md`：按键（自动升级 markdown）、`buttons` 匹配器与交互自动 ack、event_id 被动回复、引用、视频/语音/文件、流式（单聊）、撤回、输入中、群管理。清单投影、多模块部署元数据、Versions API 客户端已实现但**未对线上 API 实测**。
 
-**M2**：面板（Workers Static Assets）、D1 清单存储与 KV 快照发布、面板内安装（npm 搜索 → 拉制品 → 投影 → 自我部署 → 健康检查 → 切流量，SSE 进度）、自愈对比。
+## 9. 面板与插件页面
+
+面板是 `@qqbot/ui`（Vue 3），构建产物内联进 Worker 制品由运行时返回——自我部署不需要额外的 Cloudflare API，UI 与管理 API 永远同版本。插件页面走**解耦**方案：插件路由返回任意 HTML，面板以 sandbox iframe 打开，`@qqbot/ui-bridge` 提供 token、主题与 postMessage 通道；不做"插件写 Vue 组件挂进面板"的原生扩展，避免把面板组件 API 变成公共契约。鉴权是无状态 HMAC 令牌（会话 7 天、桥接 1 小时且限定插件），轮换 `ADMIN_TOKEN` 即全部失效。详见 `ui.md`，设计 token 见 `../design-system/qqbot-workers/MASTER.md`。
+
+## 10. 里程碑（更新）
+
+**M2**：D1 清单存储与 KV 快照发布、面板内安装（npm 搜索 → 拉制品 → 投影 → 自我部署 → 健康检查 → 切流量，SSE 进度）、自愈对比。
 
 **M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、Access 集成指引、Dynamic Workers 脚本引擎插件。

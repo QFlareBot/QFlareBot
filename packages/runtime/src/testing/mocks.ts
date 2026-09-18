@@ -29,11 +29,56 @@ export function createKV(): KVNamespace & { readonly store: Map<string, string> 
   return kv as unknown as KVNamespace & { readonly store: Map<string, string> }
 }
 
-export function createD1(): D1Database {
-  const unsupported = () => {
-    throw new Error('测试环境未提供 D1')
+/**
+ * 极简假 D1：只认运行时 events.ts 用到的几条语句，把行存进数组。
+ * 其他 SQL 直接抛错，避免测试静默通过。
+ */
+export function createD1(): D1Database & { readonly rows: Array<Record<string, unknown>> } {
+  const rows: Array<Record<string, unknown>> = []
+  const columns = ['id', 'ts', 'event', 'scene', 'user_id', 'target_id', 'content', 'matched', 'errors', 'outbox', 'failed']
+  const prepare = (sql: string) => {
+    let params: unknown[] = []
+    const stmt = {
+      bind(...p: unknown[]) {
+        params = p
+        return stmt
+      },
+      async run() {
+        if (sql.startsWith('INSERT OR REPLACE')) {
+          const row = Object.fromEntries(columns.map((c, i) => [c, params[i]]))
+          const i = rows.findIndex((r) => r.id === row.id)
+          if (i >= 0) rows[i] = row
+          else rows.push(row)
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('DELETE FROM')) return { meta: { changes: 0 } }
+        throw new Error(`fake D1 不支持：${sql}`)
+      },
+      async all() {
+        if (!sql.startsWith('SELECT *')) throw new Error(`fake D1 不支持：${sql}`)
+        const before = sql.includes('ts <') ? (params.shift() as number) : Infinity
+        const limit = params[0] as number
+        const results = [...rows].filter((r) => (r.ts as number) < before).sort((a, b) => (b.ts as number) - (a.ts as number)).slice(0, limit)
+        return { results }
+      },
+      async first() {
+        if (!sql.startsWith('SELECT COUNT')) throw new Error(`fake D1 不支持：${sql}`)
+        const since = params[0] as number
+        const recent = rows.filter((r) => (r.ts as number) >= since)
+        return { total: rows.length, last24h: recent.length, errors24h: recent.filter((r) => r.errors !== '[]' || (r.failed as number) > 0).length }
+      },
+    }
+    return stmt
   }
-  return { prepare: unsupported, exec: unsupported, batch: unsupported, dump: unsupported } as unknown as D1Database
+  return {
+    rows,
+    prepare,
+    async exec() {
+      return { count: 0, duration: 0 }
+    },
+    batch: async () => [],
+    dump: async () => new ArrayBuffer(0),
+  } as unknown as D1Database & { readonly rows: Array<Record<string, unknown>> }
 }
 
 export function createExecutionContext(): ExecutionContext & { flush(): Promise<void> } {
@@ -51,7 +96,9 @@ export function createExecutionContext(): ExecutionContext & { flush(): Promise<
 export const TEST_SECRET = 'DG5g3B4j9X2KOErG'
 export const TEST_APPID = '1903864677'
 
-export function createEnv(overrides: Partial<RuntimeEnv> = {}): RuntimeEnv & { KV: ReturnType<typeof createKV> } {
+export function createEnv(
+  overrides: Partial<RuntimeEnv> = {},
+): RuntimeEnv & { KV: ReturnType<typeof createKV>; DB: ReturnType<typeof createD1> } {
   return {
     KV: createKV(),
     DB: createD1(),

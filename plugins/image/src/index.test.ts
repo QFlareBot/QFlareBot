@@ -14,7 +14,7 @@ describe('image', () => {
   })
 
   it('提供 /test.png 路由', async () => {
-    const res = await plugin.routes![0]!.handler({ ctx: {} as never, request: new Request('https://x/p/image/test.png'), params: {} })
+    const res = await plugin.routes![0]!.handler({ ctx: {} as never, request: new Request('https://x/p/image/test.png'), params: {}, authenticated: false })
     expect(res.headers.get('content-type')).toBe('image/png')
   })
 })

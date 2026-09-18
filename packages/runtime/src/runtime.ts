@@ -1,4 +1,5 @@
 import { handleAdmin } from './admin.js'
+import { serveAsset } from './assets.js'
 import { cronMatches } from './cron.js'
 import { isEnabled } from './dispatcher.js'
 import { error, json } from './http.js'
@@ -16,6 +17,7 @@ function resolveOptions(options: RuntimeOptions): ResolvedOptions {
   return {
     plugins: options.plugins,
     projection: options.projection,
+    ui: options.ui,
     webhookPath: options.webhookPath ?? '/webhook',
     adminPath: options.adminPath ?? '/admin',
     timestampToleranceSec: options.timestampToleranceSec ?? 300,
@@ -32,6 +34,7 @@ function resolveOptions(options: RuntimeOptions): ResolvedOptions {
  * - GET  /healthz        健康检查（部署流水线切流量前调用）
  * - {adminPath}/*        管理 API
  * - /p/<plugin>/*        插件路由
+ * - /, /assets/*         管理面板（传入 ui 时）
  */
 export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeEnv> {
   const resolved = resolveOptions(options)
@@ -63,6 +66,10 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
         }
         if (pathname.startsWith(PLUGIN_ROUTE_PREFIX)) {
           return await handlePluginRoute(request, scope, registry, logger)
+        }
+        if (resolved.ui) {
+          const asset = serveAsset(resolved.ui, request, pathname)
+          if (asset) return asset
         }
         return error('Not Found', 404)
       } catch (err) {

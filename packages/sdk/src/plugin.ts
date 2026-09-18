@@ -66,7 +66,10 @@ export interface CronInput<C = unknown> {
 export interface RouteInput<C = unknown> {
   ctx: PluginContext<C>
   request: Request
+  /** `:name` 段与 `*` 通配（键为 `*`）的取值 */
   params: Record<string, string>
+  /** 请求是否带有效的面板登录态或本插件的桥接 token */
+  authenticated: boolean
 }
 
 // ---------- 匹配器定义 ----------
@@ -125,8 +128,19 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 export interface RouteSpec {
   method: HttpMethod
-  /** 相对路径，运行时挂载到 `/p/<插件名>/` 下；支持 `:param` */
+  /** 相对路径，运行时挂载到 `/p/<插件名>/` 下；支持 `:param` 与末尾 `*` */
   path: string
+  /** `admin`：要求面板登录态或本插件的桥接 token，未通过直接 401；默认 public */
+  auth?: 'public' | 'admin'
+}
+
+/** 插件自带的页面：面板以 iframe 打开 `/p/<插件名><path>`，页面用 @qqbot/ui-bridge 与面板通信 */
+export interface PluginUiSpec {
+  /** 相对插件路由根的路径，如 `/ui/` */
+  path: string
+  title?: string
+  /** lucide 图标名 */
+  icon?: string
 }
 
 export interface Route<C = unknown> extends RouteSpec {
@@ -176,6 +190,7 @@ export interface PluginDefinition<C = unknown> {
   buttons?: Record<string, ButtonRule<C>>
   cron?: CronJob<C>[]
   routes?: Route<C>[]
+  ui?: PluginUiSpec
   middleware?: Middleware<C>
   hooks?: Hooks<C>
   /** 向其他插件提供服务；key 为服务名 */

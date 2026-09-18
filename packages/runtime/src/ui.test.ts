@@ -1,0 +1,174 @@
+import { definePlugin } from '@qqbot/sdk'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { authenticate, issueBridge, issueSession, signToken, verifyToken } from './auth.js'
+import { resetEventsSchema } from './events.js'
+import { matchPath } from './http.js'
+import { resetLifecycle } from './lifecycle.js'
+import { createRuntime } from './runtime.js'
+import { resetSnapshotCache } from './store.js'
+import { createEnv, createExecutionContext, groupMessagePayload, signedRequest } from './testing/mocks.js'
+
+const BASE = 'https://bot.test'
+const SECRET = 'admin-token'
+
+beforeEach(() => {
+  resetSnapshotCache()
+  resetLifecycle()
+  resetEventsSchema()
+})
+
+describe('auth 令牌', () => {
+  it('签发/验证/过期/篡改', async () => {
+    const t = await signToken({ kind: 'session', exp: Math.floor(Date.now() / 1000) + 60 }, SECRET)
+    expect(await verifyToken(t, SECRET)).toMatchObject({ kind: 'session' })
+    expect(await verifyToken(t, 'other')).toBeNull()
+    expect(await verifyToken(t.slice(0, -2) + 'xx', SECRET)).toBeNull()
+    const expired = await signToken({ kind: 'session', exp: Math.floor(Date.now() / 1000) - 1 }, SECRET)
+    expect(await verifyToken(expired, SECRET)).toBeNull()
+  })
+
+  it('authenticate 区分管理密钥、会话与桥接', async () => {
+    const req = (bearer: string) => new Request(BASE, { headers: { authorization: `Bearer ${bearer}` } })
+    expect(await authenticate(req(SECRET), SECRET)).toEqual({ admin: true, bridgePlugin: undefined })
+    expect(await authenticate(req(await issueSession(SECRET)), SECRET)).toEqual({ admin: true, bridgePlugin: undefined })
+    expect(await authenticate(req(await issueBridge(SECRET, 'foo')), SECRET)).toEqual({ admin: false, bridgePlugin: 'foo' })
+    expect(await authenticate(req('nope'), SECRET)).toEqual({ admin: false, bridgePlugin: undefined })
+    expect(await authenticate(req(SECRET), undefined)).toEqual({ admin: false, bridgePlugin: undefined })
+    const viaQuery = new Request(`${BASE}/?token=${await issueBridge(SECRET, 'foo')}`)
+    expect((await authenticate(viaQuery, SECRET)).bridgePlugin).toBe('foo')
+  })
+})
+
+describe('matchPath 通配', () => {
+  it('末尾 /* 捕获剩余路径，可为空', () => {
+    expect(matchPath('/ui/*', '/ui/')).toEqual({ '*': '' })
+    expect(matchPath('/ui/*', '/ui/assets/app.js')).toEqual({ '*': 'assets/app.js' })
+    expect(matchPath('/ui/*', '/other')).toBeNull()
+    expect(matchPath('/items/:id/*', '/items/7/a/b')).toEqual({ id: '7', '*': 'a/b' })
+  })
+})
+
+describe('登录与面板资源', () => {
+  const ui = {
+    version: 'v1',
+    index: 'index.html',
+    files: {
+      'index.html': { body: '<!doctype html><div id=app></div>', type: 'text/html; charset=utf-8' },
+      'assets/app-abc12345.js': { body: 'console.log(1)', type: 'text/javascript' },
+    },
+  }
+
+  it('/admin/login 用管理密钥换会话令牌，令牌可访问其他接口', async () => {
+    const runtime = createRuntime({ plugins: [] })
+    const env = createEnv()
+    const bad = await runtime.fetch!(new Request(`${BASE}/admin/login`, { method: 'POST', body: JSON.stringify({ token: 'x' }) }), env, createExecutionContext())
+    expect(bad.status).toBe(401)
+    const ok = await runtime.fetch!(new Request(`${BASE}/admin/login`, { method: 'POST', body: JSON.stringify({ token: SECRET }) }), env, createExecutionContext())
+    const { session } = (await ok.json()) as { session: string }
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: { authorization: `Bearer ${session}` } }), env, createExecutionContext())
+    expect(status.status).toBe(200)
+    expect(await status.json()).toMatchObject({ ok: true, webhookPath: '/webhook', stats: { total: 0 } })
+  })
+
+  it('传入 ui 时根路径返回 index，带指纹的资源不可变缓存，SPA 回退，保留路径不受影响', async () => {
+    const runtime = createRuntime({ plugins: [], ui })
+    const env = createEnv()
+    const index = await runtime.fetch!(new Request(`${BASE}/`), env, createExecutionContext())
+    expect(index.status).toBe(200)
+    expect(index.headers.get('content-type')).toContain('text/html')
+    expect(index.headers.get('cache-control')).toBe('no-cache')
+
+    const asset = await runtime.fetch!(new Request(`${BASE}/assets/app-abc12345.js`), env, createExecutionContext())
+    expect(asset.headers.get('cache-control')).toContain('immutable')
+    const etag = asset.headers.get('etag')!
+    const cached = await runtime.fetch!(new Request(`${BASE}/assets/app-abc12345.js`, { headers: { 'if-none-match': etag } }), env, createExecutionContext())
+    expect(cached.status).toBe(304)
+
+    const fallback = await runtime.fetch!(new Request(`${BASE}/plugins`), env, createExecutionContext())
+    expect(await fallback.text()).toContain('id=app')
+    const missing = await runtime.fetch!(new Request(`${BASE}/nope.png`), env, createExecutionContext())
+    expect(missing.status).toBe(404)
+    const health = await runtime.fetch!(new Request(`${BASE}/healthz`), env, createExecutionContext())
+    expect(await health.json()).toMatchObject({ ok: true })
+  })
+
+  it('不传 ui 时根路径 404', async () => {
+    const runtime = createRuntime({ plugins: [] })
+    const res = await runtime.fetch!(new Request(`${BASE}/`), createEnv(), createExecutionContext())
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('插件路由鉴权与通配', () => {
+  const plugin = definePlugin({
+    name: 'panelish',
+    version: '1.0.0',
+    ui: { path: '/ui/', title: '面板' },
+    routes: [
+      { method: 'GET', path: '/ui/*', auth: 'admin', handler: async ({ params, authenticated }) => new Response(`ui:${params['*']}:${authenticated}`) },
+      { method: 'GET', path: '/public', handler: async ({ authenticated }) => new Response(`public:${authenticated}`) },
+    ],
+  })
+
+  it('admin 路由拒绝匿名，接受会话与本插件桥接令牌，拒绝他人的桥接令牌', async () => {
+    const runtime = createRuntime({ plugins: [plugin] })
+    const env = createEnv()
+    const get = (path: string, bearer?: string) =>
+      runtime.fetch!(new Request(`${BASE}${path}`, bearer ? { headers: { authorization: `Bearer ${bearer}` } } : {}), env, createExecutionContext())
+
+    expect((await get('/p/panelish/ui/')).status).toBe(401)
+    expect(await (await get('/p/panelish/ui/a/b.js', await issueSession(SECRET))).text()).toBe('ui:a/b.js:true')
+    expect(await (await get('/p/panelish/ui/', await issueBridge(SECRET, 'panelish'))).text()).toBe('ui::true')
+    expect((await get('/p/panelish/ui/', await issueBridge(SECRET, 'other'))).status).toBe(401)
+    expect(await (await get('/p/panelish/public')).text()).toBe('public:false')
+    expect(await (await get('/p/panelish/public', SECRET)).text()).toBe('public:true')
+  })
+
+  it('/admin/plugins/:name/bridge 签发限定插件的令牌；status 暴露 ui 声明', async () => {
+    const runtime = createRuntime({ plugins: [plugin] })
+    const env = createEnv()
+    const res = await runtime.fetch!(new Request(`${BASE}/admin/plugins/panelish/bridge`, { method: 'POST', headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
+    const { token } = (await res.json()) as { token: string }
+    expect((await authenticate(new Request(BASE, { headers: { authorization: `Bearer ${token}` } }), SECRET)).bridgePlugin).toBe('panelish')
+
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
+    const data = (await status.json()) as { plugins: Array<{ name: string; ui: unknown; routes: unknown[] }> }
+    expect(data.plugins[0]).toMatchObject({ name: 'panelish', ui: { path: '/ui/', title: '面板' } })
+    expect(data.plugins[0]!.routes).toHaveLength(2)
+  })
+})
+
+describe('事件记录', () => {
+  it('真实 webhook 分发后写入 D1，/admin/events 可查，stats 统计错误', async () => {
+    const echo = definePlugin({
+      name: 'echo',
+      version: '1.0.0',
+      commands: { echo: { async handler({ session, argText }) { await session.reply(argText) } } },
+      regex: [{ pattern: '^boom$', async handler() { throw new Error('boom') } }],
+    })
+    const qq = { fetchImpl: (async () => new Response(JSON.stringify({ access_token: 't', expires_in: 7200, id: 'm' }), { status: 200 })) as typeof fetch }
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+
+    for (const [content, id] of [['/echo hi', 'e1'], ['boom', 'e2']] as const) {
+      const ctx = createExecutionContext()
+      await runtime.fetch!(await signedRequest(`${BASE}/webhook`, groupMessagePayload(content, id)), env, ctx)
+      await ctx.flush()
+    }
+    expect(env.DB.rows).toHaveLength(2)
+
+    const res = await runtime.fetch!(new Request(`${BASE}/admin/events?limit=10`, { headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
+    const { events } = (await res.json()) as { events: Array<{ id: string; content: string; matched: string; errors: string; outbox: number }> }
+    expect(events.map((e) => e.id)).toEqual(['GROUP_AT_MESSAGE_CREATE:e2', 'GROUP_AT_MESSAGE_CREATE:e1'])
+    expect(events[1]).toMatchObject({ content: '/echo hi', outbox: 1 })
+    expect(JSON.parse(events[1]!.matched)).toEqual([{ plugin: 'echo', kind: 'command', name: 'echo' }])
+    expect(JSON.parse(events[0]!.errors)[0]).toMatchObject({ plugin: 'echo', message: 'boom' })
+
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
+    expect((await status.json()).stats).toEqual({ total: 2, last24h: 2, errors24h: 1 })
+  })
+})
+
+vi.spyOn(console, 'log').mockImplementation(() => {})
+vi.spyOn(console, 'warn').mockImplementation(() => {})
+vi.spyOn(console, 'error').mockImplementation(() => {})

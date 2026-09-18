@@ -35,7 +35,7 @@ export function parseSource(source: string): ParsedSource {
 }
 
 function artifactFileName(kind: ArtifactRef['kind']): string {
-  return kind === 'runtime' ? 'runtime.js' : 'plugin.js'
+  return kind === 'runtime' ? 'runtime.js' : kind === 'ui' ? 'ui.js' : 'plugin.js'
 }
 
 /** 去掉 `npm:pkg@x.y.z` 中内嵌的版本，版本一律取自 ref.version */

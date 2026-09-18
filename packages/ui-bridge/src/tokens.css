@@ -1,0 +1,182 @@
+/*
+ * qqbot 设计 token —— design-system/qqbot-workers/MASTER.md 的机器可读版本。
+ * 主面板与插件页面共用；语义命名，换风格只改这里的映射。
+ * 主题由 <html data-theme="light|dark"> 切换，未设置时跟随系统。
+ */
+
+:root {
+  /* 字体：不加载 webfont，大陆可用性优先 */
+  --qb-font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --qb-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* 字号：正文 14，辅助 12（下限），标题克制 */
+  --qb-text-xs: 12px;
+  --qb-text-sm: 13px;
+  --qb-text-base: 14px;
+  --qb-text-lg: 16px;
+  --qb-text-xl: 20px;
+  --qb-leading: 1.5;
+
+  /* 间距刻度（密度 8/10） */
+  --qb-space-1: 4px;
+  --qb-space-2: 8px;
+  --qb-space-3: 12px;
+  --qb-space-4: 16px;
+  --qb-space-6: 24px;
+  --qb-space-8: 32px;
+
+  --qb-radius-sm: 4px;
+  --qb-radius: 6px;
+  --qb-radius-lg: 8px;
+
+  --qb-row-height: 36px;
+  --qb-control-height: 32px;
+  --qb-touch-min: 44px;
+
+  /* 动效：只有 opacity/transform 过渡 */
+  --qb-duration: 150ms;
+  --qb-duration-slow: 200ms;
+  --qb-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 状态色：三档，旁边必须有文字或图标 */
+  --qb-success: #16a34a;
+  --qb-warning: #d97706;
+  --qb-danger: #dc2626;
+
+  /* 浅色（默认） */
+  --qb-bg: #f8fafc;
+  --qb-surface: #ffffff;
+  --qb-surface-muted: #f1f5f9;
+  --qb-fg: #0f172a;
+  --qb-fg-muted: #64748b;
+  --qb-fg-subtle: #94a3b8;
+  --qb-border: #e2e8f0;
+  --qb-border-strong: #cbd5e1;
+  --qb-accent: #16a34a;
+  --qb-on-accent: #ffffff;
+  --qb-ring: #0f172a;
+  --qb-success-bg: #f0fdf4;
+  --qb-warning-bg: #fffbeb;
+  --qb-danger-bg: #fef2f2;
+  --qb-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --qb-bg: #020617;
+  --qb-surface: #0e1223;
+  --qb-surface-muted: #1a1e2f;
+  --qb-fg: #f8fafc;
+  --qb-fg-muted: #94a3b8;
+  --qb-fg-subtle: #64748b;
+  --qb-border: #1e293b;
+  --qb-border-strong: #334155;
+  --qb-accent: #22c55e;
+  --qb-on-accent: #052e16;
+  --qb-ring: #f8fafc;
+  --qb-success: #22c55e;
+  --qb-warning: #f59e0b;
+  --qb-danger: #ef4444;
+  --qb-success-bg: rgb(34 197 94 / 0.12);
+  --qb-warning-bg: rgb(245 158 11 / 0.12);
+  --qb-danger-bg: rgb(239 68 68 / 0.12);
+  --qb-shadow: none;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --qb-bg: #020617;
+    --qb-surface: #0e1223;
+    --qb-surface-muted: #1a1e2f;
+    --qb-fg: #f8fafc;
+    --qb-fg-muted: #94a3b8;
+    --qb-fg-subtle: #64748b;
+    --qb-border: #1e293b;
+    --qb-border-strong: #334155;
+    --qb-accent: #22c55e;
+    --qb-on-accent: #052e16;
+    --qb-ring: #f8fafc;
+    --qb-success: #22c55e;
+    --qb-warning: #f59e0b;
+    --qb-danger: #ef4444;
+    --qb-success-bg: rgb(34 197 94 / 0.12);
+    --qb-warning-bg: rgb(245 158 11 / 0.12);
+    --qb-danger-bg: rgb(239 68 68 / 0.12);
+    --qb-shadow: none;
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --qb-duration: 0ms;
+    --qb-duration-slow: 0ms;
+  }
+}
+
+/* 插件页面最小基线：引入本文件即与面板同色同字 */
+.qb-page {
+  margin: 0;
+  background: var(--qb-bg);
+  color: var(--qb-fg);
+  font: var(--qb-text-base) / var(--qb-leading) var(--qb-font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.qb-page :focus-visible {
+  outline: 2px solid var(--qb-ring);
+  outline-offset: 2px;
+}
+.qb-mono {
+  font-family: var(--qb-font-mono);
+  font-size: var(--qb-text-sm);
+}
+.qb-muted {
+  color: var(--qb-fg-muted);
+}
+.qb-card {
+  background: var(--qb-surface);
+  border: 1px solid var(--qb-border);
+  border-radius: var(--qb-radius-lg);
+  padding: var(--qb-space-4);
+}
+.qb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--qb-space-2);
+  height: var(--qb-control-height);
+  padding: 0 var(--qb-space-3);
+  border: 1px solid var(--qb-border-strong);
+  border-radius: var(--qb-radius);
+  background: var(--qb-surface);
+  color: var(--qb-fg);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--qb-duration) var(--qb-ease), border-color var(--qb-duration) var(--qb-ease);
+}
+.qb-btn:hover {
+  background: var(--qb-surface-muted);
+}
+.qb-btn--primary {
+  background: var(--qb-accent);
+  border-color: var(--qb-accent);
+  color: var(--qb-on-accent);
+}
+.qb-btn--primary:hover {
+  filter: brightness(0.95);
+}
+.qb-input {
+  height: var(--qb-control-height);
+  padding: 0 var(--qb-space-3);
+  border: 1px solid var(--qb-border-strong);
+  border-radius: var(--qb-radius);
+  background: var(--qb-surface);
+  color: var(--qb-fg);
+  font: inherit;
+}
+.qb-input:focus {
+  outline: 2px solid var(--qb-ring);
+  outline-offset: -1px;
+}

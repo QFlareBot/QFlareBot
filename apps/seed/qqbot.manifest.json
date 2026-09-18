@@ -3,6 +3,10 @@
     "version": "0.1.0",
     "source": "file:../../packages/runtime/dist/runtime.js"
   },
+  "ui": {
+    "version": "0.1.0",
+    "source": "file:../../packages/ui/dist/ui.js"
+  },
   "plugins": [
     {
       "name": "echo",

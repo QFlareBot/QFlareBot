@@ -444,7 +444,7 @@ describe('admin', () => {
     )
     expect(await status.json()).toMatchObject({
       projection: 'sha256-abc',
-      plugins: [{ name: 'echo', enabled: false, commands: ['echo'] }],
+      plugins: [{ name: 'echo', enabled: false, commands: [{ name: 'echo', aliases: ['say'] }] }],
     })
   })
 

@@ -84,6 +84,7 @@ export {
   type HttpMethod,
   type RouteSpec,
   type Route,
+  type PluginUiSpec,
   type Middleware,
   type Hooks,
   type PluginDefinition,
@@ -91,3 +92,5 @@ export {
 } from './plugin.js'
 
 export { extractManifest, validateManifest, type Manifest } from './manifest.js'
+
+export { serveAssets, type AssetFile, type AssetMap } from './assets.js'

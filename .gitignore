@@ -6,3 +6,5 @@ dist/
 .DS_Store
 coverage/
 apps/seed/wrangler.generated.jsonc
+packages/ui/dist/
+packages/ui/public/tokens.css

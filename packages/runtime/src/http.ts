@@ -17,11 +17,16 @@ export async function readJson<T = Record<string, unknown>>(request: Request): P
   }
 }
 
-/** `/p/foo/items/:id` 这类模式匹配，返回参数表 */
+/**
+ * `/items/:id` 这类模式匹配，返回参数表；末尾 `/*` 通配剩余路径（键为 `*`，可为空）。
+ */
 export function matchPath(pattern: string, pathname: string): Record<string, string> | null {
   const p = pattern.split('/').filter(Boolean)
   const s = pathname.split('/').filter(Boolean)
-  if (p.length !== s.length) return null
+  const wildcard = p[p.length - 1] === '*'
+  if (wildcard) p.pop()
+  if (wildcard ? s.length < p.length : s.length !== p.length) return null
+
   const params: Record<string, string> = {}
   for (let i = 0; i < p.length; i++) {
     const seg = p[i]!
@@ -29,5 +34,6 @@ export function matchPath(pattern: string, pathname: string): Record<string, str
     if (seg.startsWith(':')) params[seg.slice(1)] = decodeURIComponent(actual)
     else if (seg !== actual) return null
   }
+  if (wildcard) params['*'] = s.slice(p.length).map(decodeURIComponent).join('/')
   return params
 }

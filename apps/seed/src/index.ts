@@ -3,6 +3,7 @@
  * 线上部署走 `pnpm project` 生成的 dist/index.js（由清单投影而来），两者形状一致。
  */
 import { createRuntime } from '@qqbot/runtime'
+import ui from '@qqbot/ui'
 import echo from 'qqbot-plugin-echo'
 import image from 'qqbot-plugin-image'
 import keyboard from 'qqbot-plugin-keyboard'
@@ -10,4 +11,5 @@ import multiReply from 'qqbot-plugin-multi-reply'
 
 export default createRuntime({
   plugins: [echo, multiReply, image, keyboard],
+  ui,
 })

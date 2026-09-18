@@ -1,8 +1,25 @@
-import { button, definePlugin, keyboard } from '@qqbot/sdk'
+import { button, definePlugin, keyboard, type PluginContext } from '@qqbot/sdk'
+import { PAGE_HTML } from './page.js'
 
 interface Config {
   /** URL 按键指向的地址 */
   docsUrl: string
+}
+
+interface Click {
+  buttonId: string
+  buttonData: string
+  userId: string
+  at: number
+}
+
+const CLICKS_KEY = 'clicks'
+const MAX_CLICKS = 50
+
+async function recordClick(ctx: PluginContext<Config>, click: Click) {
+  const clicks = (await ctx.kv.getJSON<Click[]>(CLICKS_KEY)) ?? []
+  clicks.unshift(click)
+  await ctx.kv.put(CLICKS_KEY, clicks.slice(0, MAX_CLICKS))
 }
 
 /** 四种按键类型 × 多种样式的演示面板；回调按键由下方 `buttons` 接收 */
@@ -26,6 +43,8 @@ export default definePlugin<Config>({
   name: 'keyboard',
   displayName: '按键面板',
   description: '演示内嵌按键：指令 / 填充 / 回调 / 链接，以及回调按键的处理与回应',
+  permissions: ['kv'],
+  ui: { path: '/ui/', title: '按键点击记录' },
   configSchema: {
     type: 'object',
     properties: { docsUrl: { type: 'string', default: 'https://bot.q.qq.com/wiki/develop/api-v2/' } },
@@ -48,13 +67,15 @@ export default definePlugin<Config>({
   buttons: {
     // 不返回 code：运行时自动以 0 回应平台
     ping: {
-      async handler({ session, buttonData }) {
+      async handler({ session, ctx, buttonId, buttonData }) {
+        await recordClick(ctx, { buttonId, buttonData, userId: session.userId, at: Date.now() })
         await session.reply(`收到回调，data = ${buttonData}`)
       },
     },
     // 返回 code 作为对平台的回应
     danger: {
-      async handler({ session, ctx }) {
+      async handler({ session, ctx, buttonId, buttonData }) {
+        await recordClick(ctx, { buttonId, buttonData, userId: session.userId, at: Date.now() })
         ctx.logger.info('用户确认了危险操作', { user: session.userId })
         await session.reply('危险操作已执行')
         return 0
@@ -67,4 +88,24 @@ export default definePlugin<Config>({
       },
     },
   },
+
+  // 插件页面：HTML 由面板 iframe 打开，数据接口要求登录态（面板会通过桥接 token 提供）
+  routes: [
+    { method: 'GET', path: '/ui/*', auth: 'admin', handler: async () => new Response(PAGE_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
+    {
+      method: 'GET',
+      path: '/api/clicks',
+      auth: 'admin',
+      handler: async ({ ctx }) => Response.json({ clicks: (await ctx.kv.getJSON<Click[]>(CLICKS_KEY)) ?? [] }),
+    },
+    {
+      method: 'DELETE',
+      path: '/api/clicks',
+      auth: 'admin',
+      handler: async ({ ctx }) => {
+        await ctx.kv.delete(CLICKS_KEY)
+        return Response.json({ ok: true })
+      },
+    },
+  ],
 })

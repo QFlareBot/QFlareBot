@@ -88,3 +88,30 @@ describe('project', () => {
     expect(fetchArtifact).not.toHaveBeenCalled()
   })
 })
+
+describe('ui 制品', () => {
+  it('清单含 ui 时拉取 ui.js、胶水导入并传给 createRuntime、参与哈希', async () => {
+    const { project } = await import('./project.js')
+    const { makeDeployManifest, bindings } = await import('./__fixtures__/manifest.js')
+    const seeded = makeDeployManifest()
+    // 夹具里的 integrity 是占位值，这里让 project() 自己计算
+    const MANIFEST = { ...seeded, plugins: seeded.plugins.map(({ integrity: _i, ...p }) => p) }
+    const fetched: string[] = []
+    const fetchArtifact = async (ref: { kind: string; name: string }) => {
+      fetched.push(`${ref.kind}:${ref.name}`)
+      return ref.kind === 'plugin' ? ref.name : `// ${ref.kind}`
+    }
+    const base = { fetchArtifact, bindings, compatibilityDate: '2026-09-01' }
+    const withUi = await project({ ...base, manifest: { ...MANIFEST, ui: { version: '0.1.0' } } })
+    const without = await project({ ...base, manifest: MANIFEST })
+
+    expect(fetched).toContain('ui:@qqbot/ui')
+    expect(withUi.modules['ui.js']).toBe('// ui')
+    expect(withUi.modules['index.js']).toContain("import ui from './ui.js'")
+    expect(withUi.modules['index.js']).toContain('createRuntime({ plugins, projection: PROJECTION, ui })')
+    expect(withUi.integrity.ui).toMatch(/^sha256-/)
+    expect(without.modules['ui.js']).toBeUndefined()
+    expect(without.modules['index.js']).not.toContain('ui')
+    expect(withUi.hash).not.toBe(without.hash)
+  })
+})

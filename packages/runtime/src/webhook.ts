@@ -1,5 +1,6 @@
 import { OpCode, signCallback, verifyEvent, type CallbackVerifyData, type WebhookPayload } from '@qqbot/api'
 import type { Logger } from '@qqbot/sdk'
+import { recordEvent } from './events.js'
 import { error, json } from './http.js'
 import { errorInfo } from './logger.js'
 import type { RequestScope } from './scope.js'
@@ -80,13 +81,29 @@ export async function handleWebhook(
 
     scope.execCtx.waitUntil(
       scope.dispatchPayload(payload).then(
-        ({ session, report }) =>
+        async ({ session, report, outbox, failed }) => {
           logger.info('事件已分发', {
             id,
             event: session.event,
             matched: report.matched,
             errors: report.errors.length ? report.errors : undefined,
-          }),
+          })
+          await recordEvent(
+            scope.env,
+            {
+              id,
+              event: session.event,
+              scene: session.scene,
+              userId: session.userId,
+              targetId: session.targetId,
+              content: session.content,
+              report,
+              outbox,
+              failed,
+            },
+            logger,
+          )
+        },
         (err) => logger.error('事件分发异常', { id, ...errorInfo(err) }),
       ),
     )

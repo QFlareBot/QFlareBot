@@ -50,10 +50,29 @@ export class RequestScope {
   }
 
   /** 把 QQ 事件变成 Session 并分发；`sender` 可替换为记录器实现 dry-run */
-  async dispatchPayload(payload: WebhookPayload, sender?: Sender): Promise<{ session: Session; report: DispatchReport }> {
+  async dispatchPayload(
+    payload: WebhookPayload,
+    sender?: Sender,
+  ): Promise<{ session: Session; report: DispatchReport; outbox: number; failed: number }> {
+    let outbox = 0
+    let failed = 0
+    const inner: Sender = sender ?? this.api ?? unavailableApi()
+    // 显式委托而不是展开：QQBotClient 的方法在原型上，展开会丢
+    const counting: Sender = {
+      sendMessage: async (t, m, o) => {
+        const r = await inner.sendMessage(t, m, o)
+        if (r.ok) outbox += 1
+        else failed += 1
+        return r
+      },
+      ...(inner.typing && { typing: inner.typing.bind(inner) }),
+      ...(inner.streamChunk && { streamChunk: inner.streamChunk.bind(inner) }),
+      ...(inner.recallMessage && { recallMessage: inner.recallMessage.bind(inner) }),
+      ...(inner.ackInteraction && { ackInteraction: inner.ackInteraction.bind(inner) }),
+    }
     const session = buildSession(payload, {
       botId: this.botId,
-      sender: sender ?? this.api ?? unavailableApi(),
+      sender: counting,
       maxPassiveReplies: this.options.maxPassiveReplies,
     })
     const report = await dispatch(session, {
@@ -64,7 +83,7 @@ export class RequestScope {
       logger: this.logger,
       prepare: (plugin, def) => ensureReady(plugin, def, this.env, this.contexts, this.logger),
     })
-    return { session, report }
+    return { session, report, outbox, failed }
   }
 }
 

@@ -1,4 +1,5 @@
 import type { AnyPluginDefinition, Manifest } from '@qqbot/sdk'
+import type { AssetBundle } from './assets.js'
 
 /** Worker 绑定：种子的 wrangler.jsonc 与投影器生成的元数据都遵循这些名字 */
 export interface RuntimeEnv {
@@ -26,6 +27,8 @@ export interface RuntimeOptions {
   plugins: PluginEntry[]
   /** 投影哈希，用于健康检查与自愈对比 */
   projection?: string
+  /** 管理面板的静态资源；不传则没有面板，只有 JSON 管理 API */
+  ui?: AssetBundle
   /** 默认 /webhook */
   webhookPath?: string
   /** 默认 /admin */
@@ -42,8 +45,9 @@ export interface RuntimeOptions {
   fetchImpl?: typeof fetch
 }
 
-export type ResolvedOptions = Required<Omit<RuntimeOptions, 'projection' | 'fetchImpl'>> & {
+export type ResolvedOptions = Required<Omit<RuntimeOptions, 'projection' | 'fetchImpl' | 'ui'>> & {
   projection: string | undefined
+  ui: AssetBundle | undefined
   fetchImpl: typeof fetch
 }
 

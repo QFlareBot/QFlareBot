@@ -7,6 +7,7 @@ import {
   type JsonSchema,
   type Permission,
   type PluginDefinition,
+  type PluginUiSpec,
   type RegexSpec,
   type RouteSpec,
 } from './plugin.js'
@@ -34,6 +35,7 @@ export interface Manifest {
   buttons: Array<ButtonSpec & { id: string }>
   cron: CronSpec[]
   routes: RouteSpec[]
+  ui?: PluginUiSpec
   hasMiddleware: boolean
   services: string[]
   durableObjects: string[]
@@ -82,6 +84,7 @@ export function extractManifest(
   if (def.configSchema !== undefined) manifest.configSchema = def.configSchema
   if (def.defaultConfig !== undefined) manifest.defaultConfig = def.defaultConfig
   if (def.coreRange !== undefined) manifest.coreRange = def.coreRange
+  if (def.ui !== undefined) manifest.ui = def.ui
   return manifest
 }
 
@@ -119,6 +122,8 @@ export function validateManifest(m: Manifest): string[] {
   }
   for (const r of m.routes) {
     if (!r.path.startsWith('/')) errors.push(`路由路径需以 / 开头：${r.path}`)
+    if (r.path.includes('*') && !r.path.endsWith('/*')) errors.push(`通配只能出现在末尾 /*：${r.path}`)
   }
+  if (m.ui && !m.ui.path.startsWith('/')) errors.push(`ui.path 需以 / 开头：${m.ui.path}`)
   return errors
 }

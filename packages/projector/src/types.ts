@@ -4,6 +4,8 @@ import type { Manifest } from '@qqbot/sdk'
 export interface DeployManifest {
   /** @qqbot/runtime 的版本；source 缺省为 `npm:@qqbot/runtime` */
   core: { version: string; source?: string }
+  /** 管理面板 @qqbot/ui 的版本；缺省则不带面板（headless）；source 缺省为 `npm:@qqbot/ui` */
+  ui?: { version: string; source?: string }
   plugins: InstalledPlugin[]
 }
 
@@ -20,7 +22,7 @@ export interface InstalledPlugin {
 }
 
 export type ArtifactRef = {
-  kind: 'runtime' | 'plugin'
+  kind: 'runtime' | 'ui' | 'plugin'
   name: string
   version: string
   source: string
@@ -53,7 +55,7 @@ export interface Projection {
   hash: string
   metadata: VersionMetadata
   /** 本次实际拉取到的制品摘要（SRI），供上层回写清单锁定版本 */
-  integrity: { core: string; plugins: Record<string, string> }
+  integrity: { core: string; ui?: string; plugins: Record<string, string> }
 }
 
 /** 插件 Durable Object 类在 bundle 顶层的重导出信息 */

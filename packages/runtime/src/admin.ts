@@ -1,5 +1,7 @@
 import { createTokenProvider, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
+import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
+import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
@@ -12,11 +14,6 @@ export interface AdminDeps {
   options: ResolvedOptions
   logger: Logger
   runtimeVersion: string
-}
-
-function authorized(request: Request, token: string): boolean {
-  const header = request.headers.get('authorization') ?? ''
-  return header === `Bearer ${token}`
 }
 
 /** 模拟事件：捕获插件的全部出站动作而不真正调用 QQ */
@@ -104,38 +101,86 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
 }
 
 /**
- * 管理 API（需 `ADMIN_TOKEN`）：
- * GET  /admin/status              运行状态与插件列表
- * GET  /admin/snapshot            读取快照
- * PUT  /admin/snapshot            整体覆盖快照
- * PATCH /admin/plugins/:name      修改单个插件的 enabled / config / priority
- * PUT  /admin/bot                 保存 AppID/AppSecret（先向 QQ 换 token 验证）
- * POST /admin/test-event          注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
+ * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
+ * POST /admin/login                 用管理密钥换 7 天会话令牌
+ * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、事件统计
+ * GET  /admin/snapshot              读取快照
+ * PUT  /admin/snapshot              整体覆盖快照
+ * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority
+ * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
+ * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）
+ * GET  /admin/events?limit&before   最近事件的分发摘要
+ * DELETE /admin/events              清空事件记录
+ * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  */
 export async function handleAdmin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
   const token = scope.env.ADMIN_TOKEN
   if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)
-  if (!authorized(request, token)) return error('未授权', 401)
 
   const url = new URL(request.url)
   const sub = url.pathname.slice(deps.options.adminPath.length) || '/'
   const method = request.method
 
+  if (method === 'POST' && sub === '/login') {
+    const body = await readJson<{ token?: string }>(request)
+    if (body?.token?.trim() !== token) return error('管理密钥不正确', 401)
+    return json({ ok: true, session: await issueSession(token), expiresIn: SESSION_TTL_SEC })
+  }
+
+  if (!(await authenticate(request, token)).admin) return error('未授权', 401)
+
   if (method === 'GET' && sub === '/status') {
+    const stats = await eventStats(scope.env).catch(() => null)
     return json({
       ok: true,
       runtime: deps.runtimeVersion,
       projection: deps.options.projection ?? null,
       bot: scope.bot ? { appId: scope.bot.appId, source: scope.env.BOT_SECRET ? 'secret' : 'kv' } : null,
+      webhookPath: deps.options.webhookPath,
       snapshot: { revision: scope.snapshot.revision, safeMode: scope.snapshot.safeMode ?? false },
-      plugins: deps.registry.all().map((p) => ({
-        name: p.manifest.name,
-        version: p.manifest.version,
-        enabled: scope.snapshot.plugins[p.manifest.name]?.enabled ?? true,
-        error: p.error?.message ?? null,
-        commands: p.manifest.commands.map((c) => c.name),
-      })),
+      stats,
+      plugins: deps.registry.all().map((p) => {
+        const state = scope.snapshot.plugins[p.manifest.name]
+        return {
+          name: p.manifest.name,
+          version: p.manifest.version,
+          displayName: p.manifest.displayName ?? p.manifest.name,
+          description: p.manifest.description ?? '',
+          enabled: state?.enabled ?? true,
+          priority: state?.priority ?? 0,
+          config: state?.config ?? p.manifest.defaultConfig ?? null,
+          configSchema: p.manifest.configSchema ?? null,
+          permissions: p.manifest.permissions,
+          error: p.error?.message ?? null,
+          commands: p.manifest.commands,
+          events: p.manifest.events.flatMap((e) => e.event),
+          buttons: p.manifest.buttons.map((b) => b.id),
+          cron: p.manifest.cron,
+          routes: p.manifest.routes,
+          ui: p.manifest.ui ?? null,
+        }
+      }),
     })
+  }
+
+  if (sub === '/events') {
+    if (method === 'GET') {
+      const limit = Number(url.searchParams.get('limit')) || 50
+      const before = Number(url.searchParams.get('before')) || undefined
+      const events = await listEvents(scope.env, { limit, ...(before ? { before } : {}) })
+      return json({ ok: true, events })
+    }
+    if (method === 'DELETE') {
+      await clearEvents(scope.env)
+      return json({ ok: true })
+    }
+  }
+
+  const bridgeMatch = matchPath('/plugins/:name/bridge', sub)
+  if (bridgeMatch && method === 'POST') {
+    const name = bridgeMatch.name!
+    if (!deps.registry.get(name)) return error(`插件不存在：${name}`, 404)
+    return json({ ok: true, token: await issueBridge(token, name) })
   }
 
   if (sub === '/snapshot') {

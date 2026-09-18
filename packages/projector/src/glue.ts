@@ -7,6 +7,7 @@ const PLUGIN_NAME = /^[a-z0-9][a-z0-9-_]{0,63}$/
 const JS_IDENT = /^[A-Za-z_$][\w$]*$/
 
 export const RUNTIME_MODULE = 'runtime.js'
+export const UI_MODULE = 'ui.js'
 
 export function pluginModulePath(name: string): string {
   return `plugins/${name}.js`
@@ -61,6 +62,7 @@ export function generateGlue(opts: { manifest: DeployManifest; hash: string }): 
     '// 由 @qqbot/projector 生成，勿手改',
     `import { createRuntime } from './${RUNTIME_MODULE}'`,
   ]
+  if (opts.manifest.ui) lines.push(`import ui from './${UI_MODULE}'`)
   for (const d of durableObjects) {
     lines.push(`export { ${d.className} as ${d.exportName} } from './${pluginModulePath(d.plugin)}'`)
   }
@@ -73,6 +75,7 @@ export function generateGlue(opts: { manifest: DeployManifest; hash: string }): 
       `  { manifest: ${JSON.stringify(p.manifest)}, load: () => import('./${pluginModulePath(p.name)}') },`,
     )
   }
-  lines.push(']', '', 'export default createRuntime({ plugins, projection: PROJECTION })', '')
+  const runtimeArgs = opts.manifest.ui ? 'plugins, projection: PROJECTION, ui' : 'plugins, projection: PROJECTION'
+  lines.push(']', '', `export default createRuntime({ ${runtimeArgs} })`, '')
   return lines.join('\n')
 }

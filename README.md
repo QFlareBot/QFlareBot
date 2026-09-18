@@ -19,11 +19,15 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/runtime` | `@qqbot/runtime` | Worker 运行时：Webhook 网关、分发器、上下文注入、快照、管理 API、Cron 分发 |
 | `packages/projector` | `@qqbot/projector` | 清单 → bundle 投影、Cloudflare Versions API 部署、`qqbot-project` CLI |
 | `packages/plugin-cli` | `@qqbot/plugin-cli` | `qqbot-plugin build`：把插件打成单文件 ESM 并抽出 manifest.json |
+| `packages/ui` | `@qqbot/ui` | 管理面板（Vue 3），构建为可嵌入 Worker 的资源表 |
+| `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
 | `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
 | `templates/plugin` | — | 插件仓库模板（含发布 workflow） |
 | `docs/design.md` | — | 设计决策记录 |
 | `docs/capabilities.md` | — | QQ 平台能力 → 插件契约对照表（哪些已封装、哪些走 `api.raw`） |
+| `docs/ui.md` | — | 面板与插件页面（iframe + bridge）说明 |
+| `design-system/` | — | 设计系统（token、密度、动效、字体规则） |
 
 ## 快速开始（本地）
 
@@ -36,12 +40,9 @@ cp apps/seed/.dev.vars.example apps/seed/.dev.vars   # 填 BOT_APPID / BOT_SECRE
 pnpm dev                               # wrangler dev，本地 KV/D1/R2
 ```
 
-不需要真实 QQ 事件也能调试：管理 API 提供干跑接口，返回插件的出站消息而不真正发送。
+打开 http://localhost:8787 用 `ADMIN_TOKEN` 登录面板：概览、插件开关与配置、事件模拟器（不真正发消息）、设置。
 
-```bash
-curl -H 'authorization: Bearer <ADMIN_TOKEN>' -X POST localhost:8787/admin/test-event \
-     -d '{"content":"/echo 你好","scene":"group"}'
-```
+![面板](docs/screenshots/overview.png)
 
 ## 写一个插件
 
@@ -104,11 +105,12 @@ buttons: {
 | --- | --- |
 | `POST /webhook` | QQ 回调地址（在开放平台填 `https://<你的域名>/webhook`） |
 | `GET /healthz` | 健康检查，含投影哈希 |
-| `/admin/*` | 管理 API，需 `Authorization: Bearer <ADMIN_TOKEN>`；建议再挂 Cloudflare Access |
-| `/p/<插件>/*` | 插件自己的 HTTP 路由 |
+| `/` | 管理面板（传入 `ui` 时） |
+| `/admin/*` | 管理 API，需 `Authorization: Bearer <管理密钥或会话令牌>`；建议再挂 Cloudflare Access |
+| `/p/<插件>/*` | 插件自己的 HTTP 路由；`auth: 'admin'` 的接受面板会话或该插件的桥接令牌 |
 
 ## 状态
 
-M1：契约、运行时、投影器、CLI、示例、种子均已实现，按键/交互回调/event_id 被动回复/引用/多媒体/流式/撤回/群管理已暴露给插件，单测 120，`wrangler dev` 下静态入口与投影产物都已跑通。Cloudflare Versions API 部署按文档实现，**尚未对线上实测**。面板、D1 清单存储与面板内安装在 M2。详见 `docs/design.md`。
+M1 + 面板：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 130，`wrangler dev` 下静态入口与投影产物（含面板）都已跑通并截图核对。Cloudflare Versions API 部署按文档实现，**尚未对线上实测**。D1 清单存储与面板内安装（自我部署）在 M2。详见 `docs/design.md`、`docs/ui.md`。
 
 > `@qqbot` 这个 npm scope 只是占位，发布前请改成你自己的。
