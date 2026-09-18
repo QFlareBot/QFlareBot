@@ -42,12 +42,15 @@ const ADDED_COLUMNS = ['failed INTEGER NOT NULL DEFAULT 0']
 
 let schemaReady: Promise<void> | null = null
 
-function ensureSchema(env: RuntimeEnv): Promise<void> {
+/** 未绑定 D1 时返回 null，调用方按"没有事件记录"处理 */
+function ensureSchema(env: RuntimeEnv): Promise<void> | null {
+  const db = env.DB
+  if (!db) return null
   schemaReady ??= (async () => {
-    await env.DB.exec(SCHEMA.replace(/\n\s*/g, ' '))
-    await env.DB.exec(`CREATE INDEX IF NOT EXISTS ${TABLE}_ts ON ${TABLE}(ts DESC)`)
+    await db.exec(SCHEMA.replace(/\n\s*/g, ' '))
+    await db.exec(`CREATE INDEX IF NOT EXISTS ${TABLE}_ts ON ${TABLE}(ts DESC)`)
     for (const column of ADDED_COLUMNS) {
-      await env.DB.exec(`ALTER TABLE ${TABLE} ADD COLUMN ${column}`).catch((err: unknown) => {
+      await db.exec(`ALTER TABLE ${TABLE} ADD COLUMN ${column}`).catch((err: unknown) => {
         if (!String(err).includes('duplicate column')) throw err
       })
     }
@@ -72,8 +75,10 @@ export interface RecordInput {
 
 /** 写入失败只记日志，绝不影响事件处理 */
 export async function recordEvent(env: RuntimeEnv, input: RecordInput, logger: Logger): Promise<void> {
+  const ready = ensureSchema(env)
+  if (!ready || !env.DB) return
   try {
-    await ensureSchema(env)
+    await ready
     await env.DB.prepare(
       `INSERT OR REPLACE INTO ${TABLE} (id, ts, event, scene, user_id, target_id, content, matched, errors, outbox, failed) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     )
@@ -108,7 +113,9 @@ export async function listEvents(
   env: RuntimeEnv,
   options: { limit?: number; before?: number } = {},
 ): Promise<EventRecord[]> {
-  await ensureSchema(env)
+  const ready = ensureSchema(env)
+  if (!ready || !env.DB) return []
+  await ready
   const limit = Math.min(200, Math.max(1, options.limit ?? 50))
   const stmt = options.before
     ? env.DB.prepare(`SELECT * FROM ${TABLE} WHERE ts < ? ORDER BY ts DESC LIMIT ?`).bind(options.before, limit)
@@ -117,8 +124,10 @@ export async function listEvents(
   return results
 }
 
-export async function eventStats(env: RuntimeEnv): Promise<{ total: number; last24h: number; errors24h: number }> {
-  await ensureSchema(env)
+export async function eventStats(env: RuntimeEnv): Promise<{ total: number; last24h: number; errors24h: number } | null> {
+  const ready = ensureSchema(env)
+  if (!ready || !env.DB) return null
+  await ready
   const since = Date.now() - 24 * 3600 * 1000
   const row = await env.DB.prepare(
     `SELECT COUNT(*) AS total,
@@ -132,7 +141,9 @@ export async function eventStats(env: RuntimeEnv): Promise<{ total: number; last
 }
 
 export async function clearEvents(env: RuntimeEnv): Promise<void> {
-  await ensureSchema(env)
+  const ready = ensureSchema(env)
+  if (!ready || !env.DB) return
+  await ready
   await env.DB.exec(`DELETE FROM ${TABLE}`)
 }
 

@@ -52,4 +52,6 @@ export const api = {
     request<{ ok: true; events: EventRecord[] }>('GET', `/events?limit=${limit}${before ? `&before=${before}` : ''}`),
   clearEvents: () => request<{ ok: true }>('DELETE', '/events'),
   testEvent: (body: Record<string, unknown>) => request<TestEventResult>('POST', '/test-event', body),
+  send: (scene: string, targetId: string, message: unknown) =>
+    request<{ ok: boolean; result: { ok: boolean; status: number; messageId?: string; error?: string } }>('POST', '/send', { scene, targetId, message }),
 }

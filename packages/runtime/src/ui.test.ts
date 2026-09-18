@@ -172,3 +172,35 @@ describe('事件记录', () => {
 vi.spyOn(console, 'log').mockImplementation(() => {})
 vi.spyOn(console, 'warn').mockImplementation(() => {})
 vi.spyOn(console, 'error').mockImplementation(() => {})
+
+describe('未绑定 D1', () => {
+  it('事件不记录、status.bindings.d1=false、events 返回空、插件 ctx.db 报可读错误', async () => {
+    const plugin = definePlugin({
+      name: 'dbuser',
+      version: '1.0.0',
+      commands: { q: { async handler({ ctx, session }) { try { await ctx.db.all('select 1') } catch (e) { await session.reply((e as Error).message) } } } },
+    })
+    const runtime = createRuntime({ plugins: [plugin] })
+    const env = createEnv({ DB: undefined })
+    const admin = { authorization: `Bearer ${SECRET}` }
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: admin }), env, createExecutionContext())
+    expect((await status.json()).bindings).toEqual({ kv: true, d1: false, r2: false })
+    const events = await runtime.fetch!(new Request(`${BASE}/admin/events`, { headers: admin }), env, createExecutionContext())
+    expect((await events.json()).events).toEqual([])
+    const dry = await runtime.fetch!(new Request(`${BASE}/admin/test-event`, { method: 'POST', headers: admin, body: JSON.stringify({ content: '/q' }) }), env, createExecutionContext())
+    expect((await dry.json()).outbox[0].message).toContain('未绑定 D1')
+  })
+})
+
+describe('回调地址填成根路径', () => {
+  it('带签名头的 POST / 按 webhook 处理，GET / 仍是面板', async () => {
+    const runtime = createRuntime({ plugins: [], ui: { version: 'v', files: { 'index.html': { body: '<div id=app>', type: 'text/html' } } } })
+    const env = createEnv()
+    const body = { op: 13, d: { plain_token: 'abc', event_ts: '1725442341' } }
+    const res = await runtime.fetch!(await signedRequest(`${BASE}/`, body), env, createExecutionContext())
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { plain_token: string }).plain_token).toBe('abc')
+    const page = await runtime.fetch!(new Request(`${BASE}/`), env, createExecutionContext())
+    expect(await page.text()).toContain('id=app')
+  })
+})

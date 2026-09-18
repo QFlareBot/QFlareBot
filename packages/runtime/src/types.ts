@@ -4,7 +4,8 @@ import type { AssetBundle } from './assets.js'
 /** Worker 绑定：种子的 wrangler.jsonc 与投影器生成的元数据都遵循这些名字 */
 export interface RuntimeEnv {
   KV: KVNamespace
-  DB: D1Database
+  /** 可选：缺省时事件记录关闭、插件 ctx.db 调用抛错（免费版 D1 配额有限） */
+  DB?: D1Database
   R2?: R2Bucket
   /** 优先用 secret；未设置时回退到 KV 中面板保存的配置 */
   BOT_APPID?: string

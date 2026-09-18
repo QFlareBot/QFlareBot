@@ -98,7 +98,8 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
     </QCard>
 
     <QCard title="最近事件" description="每个事件一行分发摘要" flush>
-      <QEmpty v-if="!events.length" title="还没有事件" description="机器人收到消息后会出现在这里；也可以去「调试」页模拟一条。" />
+      <QEmpty v-if="status && !status.bindings.d1" title="未绑定 D1，事件记录已关闭" description="在 wrangler.jsonc 的 d1_databases 加一条绑定并重新部署即可开启；不影响消息收发。" />
+      <QEmpty v-else-if="!events.length" title="还没有事件" description="机器人收到消息后会出现在这里；也可以去「调试」页模拟一条。" />
       <div v-else class="overflow-x-auto">
         <table class="qb-table">
           <thead><tr><th>时间</th><th>事件</th><th>场景</th><th>内容</th><th>命中</th><th>结果</th></tr></thead>

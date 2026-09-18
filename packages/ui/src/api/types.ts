@@ -46,6 +46,7 @@ export interface Status {
   projection: string | null
   bot: { appId: string; source: 'secret' | 'kv' } | null
   webhookPath: string
+  bindings: { kv: boolean; d1: boolean; r2: boolean }
   snapshot: { revision: number; safeMode: boolean }
   stats: { total: number; last24h: number; errors24h: number } | null
   plugins: PluginInfo[]

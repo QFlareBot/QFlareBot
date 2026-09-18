@@ -61,6 +61,10 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
         if (pathname === resolved.webhookPath) {
           return await handleWebhook(request, scope, resolved, logger)
         }
+        // 兼容把回调地址填成站点根的情况：QQ 的推送是带签名头的 POST，面板本身从不 POST 根路径
+        if (pathname === '/' && request.method === 'POST' && request.headers.has('x-signature-ed25519')) {
+          return await handleWebhook(request, scope, resolved, logger)
+        }
         if (pathname === resolved.adminPath || pathname.startsWith(resolved.adminPath + '/')) {
           return await handleAdmin(request, scope, { registry, options: resolved, logger, runtimeVersion: RUNTIME_VERSION })
         }

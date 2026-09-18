@@ -26,8 +26,14 @@ function createScopedKV(kv: KVNamespace, name: string): ScopedKV {
   }
 }
 
-function createScopedDB(db: D1Database, name: string): ScopedDB {
+function createScopedDB(db: D1Database | undefined, name: string): ScopedDB {
   const prefix = `p_${name.replace(/[^a-zA-Z0-9_]/g, '_')}_`
+  if (!db) {
+    const missing = async () => {
+      throw new Error('未绑定 D1（wrangler.jsonc 的 d1_databases），插件无法使用 ctx.db')
+    }
+    return { table: (n) => prefix + n, exec: missing, run: missing, all: missing, first: missing }
+  }
   return {
     table: (n) => prefix + n,
     async exec(sql) {

@@ -112,6 +112,7 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * GET  /admin/events?limit&before   最近事件的分发摘要
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
+ * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
  */
 export async function handleAdmin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
   const token = scope.env.ADMIN_TOKEN
@@ -137,6 +138,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       projection: deps.options.projection ?? null,
       bot: scope.bot ? { appId: scope.bot.appId, source: scope.env.BOT_SECRET ? 'secret' : 'kv' } : null,
       webhookPath: deps.options.webhookPath,
+      bindings: { kv: true, d1: !!scope.env.DB, r2: !!scope.env.R2 },
       snapshot: { revision: scope.snapshot.revision, safeMode: scope.snapshot.safeMode ?? false },
       stats,
       plugins: deps.registry.all().map((p) => {
@@ -222,6 +224,17 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     await writeBotConfig(scope.env, { appId, secret })
     deps.logger.info('机器人凭证已更新', { appId })
     return json({ ok: true, appId })
+  }
+
+  if (sub === '/send' && method === 'POST') {
+    if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
+    const body = await readJson<{ scene?: string; targetId?: string; message?: OutgoingMessage }>(request)
+    const scene = body?.scene as SendTarget['scene'] | undefined
+    const targetId = body?.targetId?.trim()
+    if (!scene || !targetId || body?.message === undefined) return error('需要 scene、targetId 与 message', 400)
+    const result = await scope.api.sendMessage({ scene, id: targetId }, body.message)
+    deps.logger.info('面板主动发送', { scene, targetId, ok: result.ok, status: result.status })
+    return json({ ok: result.ok, result }, result.ok ? 200 : 502)
   }
 
   if (sub === '/test-event' && method === 'POST') {
