@@ -5,10 +5,11 @@
   "compatibility_date": "2026-09-01",
 
   // 以本文件为准声明全部绑定，不要在后台手工加，否则下次部署会丢。
-  // D1/R2 只写名字即可自动创建或复用；KV 首次部署由 wrangler 创建后把 id 写回这里
+  // R2 只写桶名即可；KV 与 D1 必须写 id：wrangler deploy 能按名字自己查，但自部署
+  // 走的 Versions API 不行，缺 database_id 会报 10021。首次创建后把 id 写回这里。
   "kv_namespaces": [{ "binding": "KV", "id": "e12215d244224a858b8dc01ddc937c9c" }],
   // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时先注释掉
-  "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "qqbot", "database_id": "6e87ab2e-c2d4-4052-bc97-e885cf45cc15" }],
   "r2_buckets": [{ "binding": "R2", "bucket_name": "qqbot-artifacts" }],
 
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发
