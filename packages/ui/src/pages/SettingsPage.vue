@@ -84,6 +84,73 @@ function savePermission() {
     permissionDeniedReply: denyReply.value.trim() || undefined,
   })
 }
+
+// —— QQ 指令面板与分享链接：QQ 端点透传，字段以官方文档为准 ——
+
+const panelsBody = ref('')
+const panelsResult = ref('')
+const panelsBusy = ref(false)
+
+/** 把已启用插件注册的命令拼成面板创建请求体草稿；字段可在发送前自行调整 */
+function draftPanels() {
+  const instructions = (status.value?.plugins ?? [])
+    .filter((p) => p.enabled)
+    .flatMap((p) =>
+      p.commands.map((c) => ({
+        word: c.name,
+        description: c.description ?? `${p.displayName || p.name} 的指令`,
+      })),
+    )
+  panelsBody.value = JSON.stringify(
+    { panels: [{ name: '机器人指令', scene: 'group', instructions }] },
+    null,
+    2,
+  )
+}
+
+async function sendPanels() {
+  panelsBusy.value = true
+  panelsResult.value = ''
+  try {
+    const res = await api.sendQQPanels(JSON.parse(panelsBody.value))
+    panelsResult.value = JSON.stringify(res, null, 2)
+    push(res.ok ? '指令面板已提交' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
+  } catch (e) {
+    panelsResult.value = String((e as Error).message)
+  } finally {
+    panelsBusy.value = false
+  }
+}
+
+async function viewPanels() {
+  panelsBusy.value = true
+  panelsResult.value = ''
+  try {
+    panelsResult.value = JSON.stringify(await api.qqPanels(), null, 2)
+  } catch (e) {
+    panelsResult.value = String((e as Error).message)
+  } finally {
+    panelsBusy.value = false
+  }
+}
+
+const urlLinkBody = ref('{}')
+const urlLinkResult = ref('')
+const urlLinkBusy = ref(false)
+
+async function createLink() {
+  urlLinkBusy.value = true
+  urlLinkResult.value = ''
+  try {
+    const res = await api.createUrlLink(JSON.parse(urlLinkBody.value))
+    urlLinkResult.value = JSON.stringify(res, null, 2)
+    push(res.ok ? '已请求生成链接' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
+  } catch (e) {
+    urlLinkResult.value = String((e as Error).message)
+  } finally {
+    urlLinkBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -132,6 +199,33 @@ function savePermission() {
             <div><QButton type="submit" :loading="savingSnap">保存权限设置</QButton></div>
           </form>
         </QCard>
+        <QCard
+          title="QQ 指令面板"
+          description="用户点机器人看到的可点指令列表。点「生成草稿」把已启用插件的命令填进请求体，字段以官方文档《创建指令面板》为准，发送前可修改"
+        >
+          <form class="flex flex-col gap-3" @submit.prevent="sendPanels">
+            <QField id="panels-body" label="请求体（JSON）">
+              <template #default="{ describedBy }"><QTextarea id="panels-body" v-model="panelsBody" mono :rows="10" :described-by="describedBy" /></template>
+            </QField>
+            <div class="flex gap-2">
+              <QButton type="button" :disabled="panelsBusy" @click="draftPanels">从已启用插件生成草稿</QButton>
+              <QButton type="button" variant="secondary" :loading="panelsBusy" @click="viewPanels">查看当前面板</QButton>
+              <QButton type="submit" variant="primary" :loading="panelsBusy" :disabled="!panelsBody.trim()">发送到 QQ</QButton>
+            </div>
+            <pre v-if="panelsResult" class="max-h-56 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ panelsResult }}</pre>
+          </form>
+        </QCard>
+
+        <QCard title="分享链接" description="生成一条点击直达机器人会话的邀请链接（/v2/generate_url_link）；请求体字段以官方文档为准">
+          <form class="flex flex-col gap-3" @submit.prevent="createLink">
+            <QField id="url-link-body" label="请求体（JSON）">
+              <template #default="{ describedBy }"><QTextarea id="url-link-body" v-model="urlLinkBody" mono :rows="3" :described-by="describedBy" /></template>
+            </QField>
+            <div><QButton type="submit" variant="primary" :loading="urlLinkBusy">生成链接</QButton></div>
+            <pre v-if="urlLinkResult" class="max-h-40 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ urlLinkResult }}</pre>
+          </form>
+        </QCard>
+
         <QCard title="安全建议">
           <ul class="list-disc space-y-1 pl-4 text-sm text-fg-muted">
             <li>把面板域名放到 Cloudflare Access 后面（50 用户内免费），管理密钥就成了第二道锁。</li>

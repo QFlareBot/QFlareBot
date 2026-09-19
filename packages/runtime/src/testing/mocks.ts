@@ -339,6 +339,13 @@ export function createQQFetch() {
         { status: 200 },
       )
     }
+    if (url.includes('/v2/panels')) {
+      sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
+      return new Response(JSON.stringify({ panel_id: 'p1', message: 'ok' }), { status: 200 })
+    }
+    if (url.includes('/v2/generate_url_link')) {
+      return new Response(JSON.stringify({ url: 'https://q.qq.com/bot/invite' }), { status: 200 })
+    }
     sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
     return new Response(JSON.stringify({ id: `sent-${sent.length}` }), { status: 200 })
   }

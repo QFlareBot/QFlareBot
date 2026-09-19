@@ -122,6 +122,9 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
+ * GET  /admin/qq/panels             查看当前 QQ 指令面板（/v2/panels 透传）
+ * POST /admin/qq/panels             创建指令面板（请求体按官方文档透传）
+ * POST /admin/qq/url-link           生成机器人分享/邀请链接（/v2/generate_url_link 透传）
  * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
  * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
  * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）
@@ -292,6 +295,25 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const result = await scope.api.sendMessage({ scene, id: targetId }, body.message)
     deps.logger.info('面板主动发送', { scene, targetId, ok: result.ok, status: result.status })
     return json({ ok: result.ok, result }, result.ok ? 200 : 502)
+  }
+
+  // —— QQ 机器人全局配置：机器人的"外观"由运营者在面板管理，不走插件契约 ——
+  // 请求/响应字段官方文档未完全确定，这里做透明代理：请求体原样转发、平台响应原样返回，
+  // 平台报错时 HTTP 仍为 200（错误信息在 status/data 里），便于在面板上直接看到平台回复。
+  if (sub === '/qq/panels' && (method === 'GET' || method === 'POST')) {
+    if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
+    const body = method === 'POST' ? ((await readJson(request)) ?? {}) : undefined
+    const { status, data } = await scope.api.raw(method, '/v2/panels', body)
+    deps.logger.info('QQ 指令面板操作', { method, status })
+    return json({ ok: status > 0 && status < 300, status, data })
+  }
+
+  if (sub === '/qq/url-link' && method === 'POST') {
+    if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
+    const body = (await readJson(request)) ?? {}
+    const { status, data } = await scope.api.raw('POST', '/v2/generate_url_link', body)
+    deps.logger.info('生成分享链接', { status })
+    return json({ ok: status > 0 && status < 300, status, data })
   }
 
   if (sub === '/test-event' && method === 'POST') {

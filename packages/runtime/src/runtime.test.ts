@@ -828,3 +828,46 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
     })
   })
 })
+
+describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
+  function adminRequest(method: string, path: string, body?: unknown) {
+    return new Request(`${BASE}/admin${path}`, {
+      method,
+      headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  }
+
+  it('GET/POST /admin/qq/panels 透传到 QQ 并原样返回平台响应', async () => {
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+
+    const view = await runtime.fetch!(adminRequest('GET', '/qq/panels'), env, createExecutionContext())
+    expect(view.status).toBe(200)
+    expect(await view.json()).toMatchObject({ ok: true, status: 200, data: { panel_id: 'p1' } })
+
+    const created = await runtime.fetch!(adminRequest('POST', '/qq/panels', { panels: [{ name: 'x' }] }), env, createExecutionContext())
+    expect(created.status).toBe(200)
+    expect((await created.json()).data).toMatchObject({ panel_id: 'p1' })
+    const sent = qq.sent.filter((s) => s.url.includes('/v2/panels')).reverse()[0]
+    expect(sent).toBeDefined()
+    expect(sent!.body).toEqual({ panels: [{ name: 'x' }] })
+  })
+
+  it('POST /admin/qq/url-link 透传并返回链接', async () => {
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+    const res = await runtime.fetch!(adminRequest('POST', '/qq/url-link', {}), env, createExecutionContext())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, data: { url: 'https://q.qq.com/bot/invite' } })
+  })
+
+  it('机器人未配置时返回 503', async () => {
+    const runtime = createRuntime({ plugins: [], fetchImpl: (async () => new Response('{}')) as typeof fetch })
+    const env = createEnv({ BOT_SECRET: undefined, BOT_APPID: undefined })
+    const res = await runtime.fetch!(adminRequest('GET', '/qq/panels'), env, createExecutionContext())
+    expect(res.status).toBe(503)
+  })
+})
