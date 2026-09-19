@@ -19,5 +19,9 @@
 
   // 自定义域名（大陆网络访问 *.workers.dev 不稳定）；面板、管理 API、回调地址都在这个域名下
   "routes": [{ "pattern": "qqbot.kisaki.love", "custom_domain": true }],
-  "workers_dev": false
+  "workers_dev": false,
+  // 自部署要靠 <版本号>-qqbot.<子域>.workers.dev/healthz 做切流量前的健康检查。
+  // 这个开关默认 false，不打开预览地址就是 404，健康检查必然失败、永远切不了流量。
+  // 只影响预览地址，生产流量仍然只走上面的自定义域名（workers_dev 保持 false）。
+  "preview_urls": true
 }
