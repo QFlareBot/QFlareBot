@@ -76,6 +76,7 @@ export {
 export {
   deploy,
   HealthCheckError,
+  SecretLossError,
   type DeployApi,
   type DeployOptions,
   type HealthCheckOptions,

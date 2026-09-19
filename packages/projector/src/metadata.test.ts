@@ -29,6 +29,10 @@ describe('buildVersionMetadata', () => {
     ])
   })
 
+  it('keep_bindings 声明按类型保留 secret（缺了它每次上传都会清空 Worker 上的 secret）', () => {
+    expect(metadata.keep_bindings).toEqual(['secret_text', 'secret_key', 'secrets_store_secret'])
+  })
+
   it('exports 声明 sqlite DO', () => {
     expect(metadata.exports).toEqual({ P_foo_Game: { type: 'durable-object', storage: 'sqlite' } })
   })
@@ -51,6 +55,7 @@ describe('buildVersionMetadata', () => {
     })
     expect(m).not.toHaveProperty('exports')
     expect(m).not.toHaveProperty('compatibility_flags')
+    expect(m.keep_bindings).toEqual(['secret_text', 'secret_key', 'secrets_store_secret'])
     expect(m.bindings.map((b) => b.type)).toEqual(['kv_namespace', 'd1'])
     expect(m.annotations['workers/message']).toBe('自定义')
   })

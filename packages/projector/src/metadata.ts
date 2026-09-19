@@ -1,5 +1,5 @@
 import { collectDurableObjects } from './glue.js'
-import type { BaseBindings, DeployManifest, VersionMetadata, WorkerBinding } from './types.js'
+import { KEPT_BINDING_TYPES, type BaseBindings, type DeployManifest, type VersionMetadata, type WorkerBinding } from './types.js'
 
 /** `workers/tag` 取投影哈希前缀（平台上限 100 字符） */
 export const TAG_LENGTH = 20
@@ -35,6 +35,8 @@ export function buildVersionMetadata(opts: {
     main_module: 'index.js',
     compatibility_date: opts.compatibilityDate,
     bindings: buildBindings(opts.bindings, opts.manifest),
+    // 少了这行，每次部署都会清空 Worker 上的全部 secret，见 KEPT_BINDING_TYPES
+    keep_bindings: [...KEPT_BINDING_TYPES],
     annotations: {
       'workers/message': opts.message ?? defaultMessage(opts.manifest, opts.hash),
       'workers/tag': opts.hash.slice(0, TAG_LENGTH),

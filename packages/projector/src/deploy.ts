@@ -6,6 +6,11 @@ export interface DeployApi {
   deployVersion(opts: { scriptName: string; versionId: string; message?: string }): Promise<unknown>
   getWorkersSubdomain(): Promise<string>
   previewUrl(opts: { scriptName: string; versionId: string; subdomain: string }): string
+  /**
+   * 可选：secret 保全校验。上传前不带 versionId 读当前名单，上传后带 versionId 读新版本名单，
+   * 少了任何一个就抛 SecretLossError、不切流量。读不到（未实现/无权限）只告警并跳过校验。
+   */
+  listSecretNames?(opts: { scriptName: string; versionId?: string }): Promise<string[]>
 }
 
 export interface HealthCheckOptions {
@@ -43,7 +48,31 @@ export class HealthCheckError extends Error {
   }
 }
 
+/** 保全校验失败：上传后的版本少了这些 secret，说明平台把 binding 丢了；中止 promote，避免无凭证的版本上线 */
+export class SecretLossError extends Error {
+  override readonly name = 'SecretLossError'
+  constructor(
+    readonly missing: string[],
+  ) {
+    super(`上传后的版本丢失 secret：${missing.join('、')}，未切换流量`)
+  }
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/** 读 secret 名单；失败（方法未实现/无权限/API 报错）只告警并返回 undefined，校验跳过 */
+async function tryListSecretNames(
+  api: DeployApi,
+  opts: { scriptName: string; versionId?: string },
+  report: (stage: DeployStep['stage'], message: string) => void,
+): Promise<string[] | undefined> {
+  try {
+    return await api.listSecretNames?.(opts)
+  } catch (err) {
+    report('upload', `无法读取 secret 名单，跳过保全校验：${err instanceof Error ? err.message : String(err)}`)
+    return undefined
+  }
+}
 
 /** 上传版本 → 预览地址健康检查 → 切 100% 流量。健康检查失败不切流量。 */
 export async function deploy(opts: DeployOptions): Promise<DeployResult> {
@@ -51,12 +80,25 @@ export async function deploy(opts: DeployOptions): Promise<DeployResult> {
   const report = (stage: DeployStep['stage'], message: string) => opts.onProgress?.({ stage, message })
 
   report('upload', `上传版本 ${projection.hash.slice(0, 8)}（${Object.keys(projection.modules).length} 个模块）`)
+
+  // 保全校验：bindings 是整体替换语义，上传前记录当前生效的 secret 名单，上传后核对原样保留
+  const secretsBefore = await tryListSecretNames(api, { scriptName }, report)
+
   const { versionId } = await api.uploadVersion({
     scriptName,
     projection,
     ...(opts.message !== undefined ? { message: opts.message } : {}),
   })
   report('upload', `版本已上传：${versionId}`)
+
+  if (secretsBefore !== undefined) {
+    const secretsAfter = await tryListSecretNames(api, { scriptName, versionId }, report)
+    if (secretsAfter !== undefined) {
+      const missing = secretsBefore.filter((name) => !secretsAfter.includes(name))
+      if (missing.length > 0) throw new SecretLossError(missing)
+      report('upload', `secret 保全校验通过（${secretsAfter.length} 个）`)
+    }
+  }
 
   const hasDurableObjects = Boolean(projection.metadata.exports && Object.keys(projection.metadata.exports).length)
   let healthCheck: HealthCheckOptions | false

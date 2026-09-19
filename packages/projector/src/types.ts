@@ -80,11 +80,23 @@ export interface DurableObjectExportMeta {
   storage: 'sqlite'
 }
 
+/**
+ * 上传版本时按类型保留上一版的 binding。
+ *
+ * `bindings` 是**整体替换**语义：没列进去的绑定，新版本里就不存在。而 secret 按
+ * 定义不会写在 wrangler.jsonc 里，所以不声明保留的话，每次自部署都会把 Worker 上
+ * 的 secret 全部抹掉——并且是在**上传那一刻**，「先上传后切流量」的健康检查根本
+ * 拦不住：流量一秒没切，凭证已经没了。
+ */
+export const KEPT_BINDING_TYPES = ['secret_text', 'secret_key', 'secrets_store_secret'] as const
+
 export interface VersionMetadata {
   main_module: 'index.js'
   compatibility_date: string
   compatibility_flags?: string[]
   bindings: WorkerBinding[]
+  /** 见 KEPT_BINDING_TYPES；不带它等于每次部署清空所有 secret */
+  keep_bindings?: string[]
   /** 仅在有 DO 时出现；平台据此自动创建/迁移命名空间 */
   exports?: Record<string, DurableObjectExportMeta>
   annotations: {

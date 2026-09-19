@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
-import { type DeployApi, HealthCheckError, deploy } from './deploy.js'
+import { type DeployApi, HealthCheckError, SecretLossError, deploy } from './deploy.js'
 import type { DeployStep } from './types.js'
 
 function fakeDeployApi() {
@@ -118,5 +118,68 @@ describe('deploy', () => {
     const fetchImpl = healthFetch([200])
     await deploy({ api, scriptName: 's', projection, healthCheck: {}, fetchImpl })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('deploy secret 保全校验', () => {
+  it('secret 原样保留 → 继续 promote，先读当前名单再读新版本名单', async () => {
+    const api = {
+      ...fakeDeployApi(),
+      listSecretNames: vi
+        .fn()
+        .mockResolvedValueOnce(['A', 'B']) // 上传前：当前生效的 settings
+        .mockResolvedValueOnce(['B', 'A', 'C']), // 上传后：新版本（多出的不算丢）
+    }
+    const steps: DeployStep[] = []
+    await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: false, onProgress: (s) => steps.push(s) })
+
+    expect(api.deployVersion).toHaveBeenCalledTimes(1)
+    expect(api.listSecretNames).toHaveBeenNthCalledWith(1, { scriptName: 's' })
+    expect(api.listSecretNames).toHaveBeenNthCalledWith(2, { scriptName: 's', versionId: 'ver-1' })
+    expect(steps.map((s) => s.message).some((m) => m.includes('保全校验通过'))).toBe(true)
+  })
+
+  it('丢了 secret → 抛 SecretLossError，不切流量', async () => {
+    const api = {
+      ...fakeDeployApi(),
+      listSecretNames: vi.fn().mockResolvedValueOnce(['A', 'B']).mockResolvedValueOnce(['A']),
+    }
+    const err = await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: false }).catch(
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(SecretLossError)
+    expect((err as SecretLossError).missing).toEqual(['B'])
+    expect((err as Error).message).toContain('未切换流量')
+    expect(api.uploadVersion).toHaveBeenCalledTimes(1)
+    expect(api.deployVersion).not.toHaveBeenCalled()
+  })
+
+  it('上传前读不到名单 → 告警并跳过校验，继续 promote', async () => {
+    const api = {
+      ...fakeDeployApi(),
+      listSecretNames: vi.fn(async () => {
+        throw new Error('无权限')
+      }),
+    }
+    const steps: DeployStep[] = []
+    await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: false, onProgress: (s) => steps.push(s) })
+
+    expect(api.listSecretNames).toHaveBeenCalledTimes(1)
+    expect(api.deployVersion).toHaveBeenCalledTimes(1)
+    expect(steps.filter((s) => s.stage === 'upload').some((s) => s.message.includes('跳过保全校验'))).toBe(true)
+  })
+
+  it('上传后读不到新版本名单 → 告警并跳过校验，继续 promote', async () => {
+    const api = {
+      ...fakeDeployApi(),
+      listSecretNames: vi.fn().mockResolvedValueOnce(['A']).mockRejectedValueOnce(new Error('boom')),
+    }
+    const steps: DeployStep[] = []
+    await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: false, onProgress: (s) => steps.push(s) })
+
+    expect(api.listSecretNames).toHaveBeenCalledTimes(2)
+    expect(api.deployVersion).toHaveBeenCalledTimes(1)
+    expect(steps.filter((s) => s.stage === 'upload').some((s) => s.message.includes('跳过保全校验'))).toBe(true)
   })
 })

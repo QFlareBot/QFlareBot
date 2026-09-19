@@ -1,4 +1,9 @@
-import type { Projection, VersionMetadata } from './types.js'
+import { KEPT_BINDING_TYPES, type Projection, type VersionMetadata } from './types.js'
+
+interface RawBinding {
+  name: string
+  type: string
+}
 
 export interface CloudflareApiMessage {
   code: number
@@ -89,6 +94,21 @@ export class CloudflareWorkersApi {
       { body: form },
     )
     return { versionId: result.id }
+  }
+
+  /**
+   * 某个版本（不传 versionId 则取当前生效的脚本设置）上带着哪些 secret 名字。
+   * 只回名字，值本来也读不到。
+   */
+  async listSecretNames(opts: { scriptName: string; versionId?: string }): Promise<string[]> {
+    const name = encodeURIComponent(opts.scriptName)
+    const path = opts.versionId
+      ? `/workers/scripts/${name}/versions/${encodeURIComponent(opts.versionId)}`
+      : `/workers/scripts/${name}/settings`
+    const result = await this.#request<{ resources?: { bindings?: RawBinding[] }; bindings?: RawBinding[] }>('GET', path)
+    const bindings = result.resources?.bindings ?? result.bindings ?? []
+    const kept = new Set<string>(KEPT_BINDING_TYPES)
+    return bindings.filter((b) => kept.has(b.type)).map((b) => b.name)
   }
 
   async deployVersion(opts: {

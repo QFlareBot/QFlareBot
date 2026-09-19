@@ -84,6 +84,39 @@ describe('CloudflareWorkersApi.deployVersion', () => {
   })
 })
 
+describe('CloudflareWorkersApi.listSecretNames', () => {
+  const bindings = [
+    { type: 'secret_text', name: 'BOT_SECRET' },
+    { type: 'secret_key', name: 'SIGN_KEY' },
+    { type: 'secrets_store_secret', name: 'STORED' },
+    { type: 'plain_text', name: 'ENV' },
+    { type: 'kv_namespace', name: 'KV' },
+    { type: 'd1', name: 'DB' },
+  ]
+
+  it('不带 versionId 读 settings 接口，只留 secret 类型的名字', async () => {
+    const { api, calls } = fakeApi(() => ok({ bindings }))
+    expect(await api.listSecretNames({ scriptName: 'my-bot' })).toEqual(['BOT_SECRET', 'SIGN_KEY', 'STORED'])
+    expect(calls[0]!.init.method).toBe('GET')
+    expect(calls[0]!.url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/workers/scripts/my-bot/settings')
+  })
+
+  it('带 versionId 读对应版本，兼容 resources.bindings 形状', async () => {
+    const { api, calls } = fakeApi(() => ok({ resources: { bindings } }))
+    expect(await api.listSecretNames({ scriptName: 'my-bot', versionId: 'ver-9' })).toEqual([
+      'BOT_SECRET',
+      'SIGN_KEY',
+      'STORED',
+    ])
+    expect(calls[0]!.url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/workers/scripts/my-bot/versions/ver-9')
+  })
+
+  it('无 bindings 时返回空数组', async () => {
+    const { api } = fakeApi(() => ok({}))
+    expect(await api.listSecretNames({ scriptName: 's' })).toEqual([])
+  })
+})
+
 describe('CloudflareWorkersApi 查询接口', () => {
   it('listVersions / listDeployments / getWorkersSubdomain / previewUrl', async () => {
     const { api, calls } = fakeApi(({ url }) => {
