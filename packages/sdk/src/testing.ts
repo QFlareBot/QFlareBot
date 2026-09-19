@@ -19,6 +19,7 @@ import type {
 import type { ButtonInput, CommandInput, PluginDefinition } from './plugin.js'
 import { normalizePlugin } from './normalize.js'
 import { deliverReply } from './reply.js'
+import { qqAvatar } from './avatar.js'
 
 export interface MockSessionOptions {
   content?: string
@@ -94,6 +95,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     targetId: options.targetId ?? 'mock-group',
     userId: options.userId ?? 'mock-user',
     userName: options.userName ?? '测试用户',
+    avatarUrl: qqAvatar(options.botId ?? 'test-bot', options.userId ?? 'mock-user'),
     messageId,
     refIndex: options.refIndex,
     canReply: true,

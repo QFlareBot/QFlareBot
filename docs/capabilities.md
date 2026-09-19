@@ -20,6 +20,7 @@
 | 输入中状态 `input_notify` | `session.typing(seconds)` | 仅单聊，≤60s |
 | **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊；群聊自动退化为 end 时一次性回复 |
 | 撤回 | `session.recall(id?)` / `ctx.api.recallMessage()` | 2 分钟内；群管理员可撤成员消息 |
+| **用户头像**（官方 CDN 规范） | `session.avatarUrl`（640） / `qqAvatar(botId, openid, size)` | 纯拼接 `thirdqq.qlogo.cn/qqapp/{botId}/{openid}/{size}`（size 40/100/140/640），不发请求、无缓存 |
 | Ark / Embed（频道） | raw | |
 | 表情回应 / 置顶 / 公告（频道） | raw | |
 

@@ -88,6 +88,16 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 `block` / `priority`（大者先执行）/ `scenes`（限定 `group | c2c | guild | guild_dm`）写在匹配器对象形式里。命令前缀默认 `/`，面板可改；命令名大小写不敏感。
 
+命令加 `bare: true` 即为**无前缀命令**：消息不以任何前缀开头时按**首词**匹配（带前缀调用同样命中）：
+
+```ts
+commands: {
+  sign: { bare: true, scenes: ['c2c'], handler: () => '已签到' },
+},
+```
+
+裸命令只应在确实需要时用——群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']`。
+
 常用事件名（完整映射见 `docs/capabilities.md`）：
 
 | 事件名 | 含义 |
@@ -102,7 +112,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 平台新事件自动落到 `qq.raw.<t 小写>`（如 `qq.raw.group_msg_reject`），不必等框架发版。
 
-`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
+`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸或任意 openid 用 `@qqbot/sdk` 导出的 `qqAvatar(botId, openid, 140)`）、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
 
 ## 4. 回复消息
 

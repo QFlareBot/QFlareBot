@@ -64,19 +64,33 @@ function compileRegex(pattern: string, flags = ''): RegExp {
   return re
 }
 
+export interface ParsedCommand {
+  word: string
+  args: string[]
+  argText: string
+  /** 来自无前缀解析时为 true：只有声明了 `bare: true` 的命令参与匹配 */
+  bare: boolean
+}
+
 /** 解析命令：返回命中的前缀之后的命令词与参数 */
-export function parseCommand(
-  content: string,
-  prefixes: string[],
-): { word: string; args: string[]; argText: string } | null {
+export function parseCommand(content: string, prefixes: string[]): ParsedCommand | null {
   for (const prefix of [...prefixes].sort((a, b) => b.length - a.length)) {
     if (!content.startsWith(prefix)) continue
     const rest = content.slice(prefix.length).trim()
     if (!rest) continue
     const [word = '', ...args] = rest.split(/\s+/)
-    return { word, args, argText: rest.slice(word.length).trim() }
+    return { word, args, argText: rest.slice(word.length).trim(), bare: false }
   }
   return null
+}
+
+/** 无前缀解析：首词即命令词。仅当消息不以前缀开头时兜底，配合命令的 bare 声明使用 */
+export function parseBareCommand(content: string): ParsedCommand | null {
+  const rest = content.trim()
+  if (!rest) return null
+  const [word = '', ...args] = rest.split(/\s+/)
+  if (!word) return null
+  return { word, args, argText: rest.slice(word.length).trim(), bare: true }
 }
 
 function toInteractionCode(code: number): InteractionCode {
@@ -102,7 +116,9 @@ function collectCandidates(
 ): Candidate[] {
   const candidates: Candidate[] = []
   const prefixes = deps.snapshot.commandPrefixes ?? deps.commandPrefixes
-  const command = isMessageEvent(session.event) ? parseCommand(session.content, prefixes) : null
+  const command = isMessageEvent(session.event)
+    ? parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
+    : null
 
   for (const { registered, def } of plugins) {
     const name = def.name
@@ -110,6 +126,8 @@ function collectCandidates(
 
     if (command) {
       for (const cmd of n.commands) {
+        // 无前缀消息只允许 bare 命令接住；带前缀的消息对 bare 命令同样生效
+        if (command.bare && !cmd.bare) continue
         const names = [cmd.name, ...(cmd.aliases ?? [])]
         if (!names.some((c) => c.toLowerCase() === command.word.toLowerCase())) continue
         if (!sceneAllowed(cmd.scenes, session)) continue

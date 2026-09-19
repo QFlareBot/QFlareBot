@@ -2,6 +2,8 @@ import { definePlugin } from '@qqbot/sdk'
 import { getKeyPair, hexToBytes } from '@qqbot/api'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRuntime } from './runtime.js'
+import { buildSession } from './session.js'
+import { parseBareCommand, parseCommand } from './dispatcher.js'
 import { resetSnapshotCache } from './store.js'
 import { resetLifecycle } from './lifecycle.js'
 import { cronMatches } from './cron.js'
@@ -551,5 +553,96 @@ describe('语法糖：返回值即回复', () => {
     const no = await testEvent(runtime, { buttonId: 'no' })
     expect(no.outbox).toEqual([])
     expect(no.acks.map((a) => a.code)).toEqual([4])
+  })
+})
+
+describe('无前缀命令（bare）', () => {
+  async function testEvent(runtime: ReturnType<typeof createRuntime>, env = createEnv(), body: Record<string, unknown>) {
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/test-event`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      env,
+      createExecutionContext(),
+    )
+    expect(res.status).toBe(200)
+    return (await res.json()) as {
+      matched: Array<{ plugin: string; kind: string; name: string }>
+      outbox: Array<{ message: unknown }>
+    }
+  }
+
+  function makeBarePlugins() {
+    const calls: string[] = []
+    const bare = definePlugin({
+      name: 'bare',
+      version: '1.0.0',
+      commands: {
+        sign: {
+          bare: true,
+          async handler({ argText }) {
+            calls.push(`sign:${argText}`)
+            return '已签到'
+          },
+        },
+        echo: {
+          async handler({ argText }) {
+            calls.push(`echo:${argText}`)
+            return `echo ${argText}`
+          },
+        },
+      },
+    })
+    return { calls, bare }
+  }
+
+  it('无前缀消息按首词命中 bare 命令；普通命令不被裸词触发', async () => {
+    const { bare, calls } = makeBarePlugins()
+    const runtime = createRuntime({ plugins: [bare] })
+
+    const hit = await testEvent(runtime, undefined, { content: 'sign 早起' })
+    expect(hit.matched).toEqual([{ plugin: 'bare', kind: 'command', name: 'sign' }])
+    expect(hit.outbox[0]!.message).toBe('已签到')
+    expect(calls).toEqual(['sign:早起'])
+
+    const miss = await testEvent(runtime, undefined, { content: 'echo 你好' })
+    expect(miss.matched).toEqual([])
+    expect(miss.outbox).toEqual([])
+  })
+
+  it('bare 命令带前缀调用同样命中，命令词大小写不敏感', async () => {
+    const { bare } = makeBarePlugins()
+    const runtime = createRuntime({ plugins: [bare] })
+    expect((await testEvent(runtime, undefined, { content: '/sign' })).outbox[0]!.message).toBe('已签到')
+    expect((await testEvent(runtime, undefined, { content: 'SIGN' })).outbox[0]!.message).toBe('已签到')
+  })
+
+  it('bare 命令受 scenes 限制', async () => {
+    const c2cOnly = definePlugin({
+      name: 'c2conly',
+      version: '1.0.0',
+      commands: { sign: { bare: true, scenes: ['c2c'], handler: () => '已签到' } },
+    })
+    const runtime = createRuntime({ plugins: [c2cOnly] })
+    expect((await testEvent(runtime, undefined, { content: 'sign' })).matched).toEqual([])
+    expect(
+      (await testEvent(runtime, undefined, { scene: 'c2c', targetId: 'U1', content: 'sign' })).outbox[0]!.message,
+    ).toBe('已签到')
+  })
+})
+
+describe('无前缀解析与头像', () => {
+  it('parseBareCommand 取首词，空内容返回 null', () => {
+    expect(parseBareCommand('sign 早起')).toEqual({ word: 'sign', args: ['早起'], argText: '早起', bare: true })
+    expect(parseBareCommand('')).toBeNull()
+    expect(parseCommand('/echo x', ['/'])).toMatchObject({ word: 'echo', bare: false })
+  })
+
+  it('avatarUrl 按官方 CDN 规范拼接（默认 640）', () => {
+    const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
+    const s = buildSession(groupMessagePayload('签到'), { botId: '1903864677', sender, maxPassiveReplies: 5 })
+    expect(s.avatarUrl).toBe('https://thirdqq.qlogo.cn/qqapp/1903864677/U1/640')
   })
 })

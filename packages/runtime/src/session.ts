@@ -7,6 +7,7 @@ import {
 } from '@qqbot/api'
 import {
   EVENT_ID_REPLYABLE,
+  qqAvatar,
   toEventName,
   type Attachment,
   type Interaction,
@@ -185,6 +186,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     targetId,
     userId,
     userName,
+    avatarUrl: qqAvatar(options.botId, userId),
     messageId,
     refIndex: extractRefIndex(d),
     canReply: passive() !== null,

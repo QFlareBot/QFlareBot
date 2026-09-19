@@ -95,6 +95,11 @@ export interface CommandSpec extends MatchOptions {
   description?: string
   usage?: string
   aliases?: string[]
+  /**
+   * 无前缀触发：消息不以任何前缀开头时按**首词**匹配本命令（带前缀调用也命中）。
+   * 群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']` 使用。
+   */
+  bare?: boolean
 }
 
 export type Command<C = unknown> = CommandHandler<C> | (CommandSpec & { handler: CommandHandler<C> })

@@ -11,4 +11,4 @@ export type {
 export { cronMatches } from './cron.js'
 export { serveAsset, type AssetBundle, type AssetFile } from './assets.js'
 export type { EventRecord } from './events.js'
-export { parseCommand } from './dispatcher.js'
+export { parseCommand, parseBareCommand, type ParsedCommand } from './dispatcher.js'

@@ -147,6 +147,11 @@ export interface Session {
   readonly targetId: string
   readonly userId: string
   readonly userName: string
+  /**
+   * 用户头像 CDN 直链（官方规范按 botId + userId 拼接，640 规格；userId 为空时是空串）。
+   * 其他尺寸用 `qqAvatar(session.botId, session.userId, 140)`。
+   */
+  readonly avatarUrl: string
   /** 被动回复所需的消息 id，非消息事件为 undefined */
   readonly messageId: string | undefined
   /** 当前消息可被引用的 ref index（message_scene.ext 中的 msg_idx） */
