@@ -122,8 +122,9 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
- * GET  /admin/qq/panels             查看当前 QQ 指令面板（/v2/panels 透传）
- * POST /admin/qq/panels             创建指令面板（请求体按官方文档透传）
+ * GET  /admin/qq/panels             查看当前 QQ 指令面板（需 scope=c2c|group|channel|dm，游标分页）
+ * POST /admin/qq/panels             创建指令面板 { scope, target_type?, group_openids?, user_openids?, panel }
+ * DELETE /admin/qq/panels/:panelId  删除指令面板
  * POST /admin/qq/url-link           生成机器人分享/邀请链接（/v2/generate_url_link 透传）
  * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
  * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
@@ -298,13 +299,35 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   }
 
   // —— QQ 机器人全局配置：机器人的"外观"由运营者在面板管理，不走插件契约 ——
-  // 请求/响应字段官方文档未完全确定，这里做透明代理：请求体原样转发、平台响应原样返回，
-  // 平台报错时 HTTP 仍为 200（错误信息在 status/data 里），便于在面板上直接看到平台回复。
+  // 字段形状按官方文档（2026-09 实测核对）；平台响应原样回显（HTTP 200 内嵌 status），便于在面板上直接看到平台回复。
   if (sub === '/qq/panels' && (method === 'GET' || method === 'POST')) {
     if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
-    const body = method === 'POST' ? ((await readJson(request)) ?? {}) : undefined
-    const { status, data } = await scope.api.raw(method, '/v2/panels', body)
-    deps.logger.info('QQ 指令面板操作', { method, status })
+    const SCOPES = ['c2c', 'group', 'channel', 'dm']
+    if (method === 'GET') {
+      const scopeVal = url.searchParams.get('scope') ?? ''
+      if (!SCOPES.includes(scopeVal)) return error('需要 scope=c2c|group|channel|dm', 400)
+      const q = new URLSearchParams({ scope: scopeVal })
+      const cursor = url.searchParams.get('cursor')
+      if (cursor) q.set('cursor', cursor)
+      const limit = url.searchParams.get('limit')
+      if (limit) q.set('limit', limit)
+      const { status, data } = await scope.api.raw('GET', `/v2/panels?${q}`)
+      deps.logger.info('查询 QQ 指令面板', { scope: scopeVal, status })
+      return json({ ok: status > 0 && status < 300, status, data })
+    }
+    const body = await readJson<{ scope?: string; target_type?: string; panel?: unknown }>(request)
+    if (!body || !SCOPES.includes(body.scope ?? '')) return error('需要 scope=c2c|group|channel|dm', 400)
+    if (typeof body.panel !== 'object' || !body.panel) return error('需要 panel 配置', 400)
+    const { status, data } = await scope.api.raw('POST', '/v2/panels', body)
+    deps.logger.info('创建 QQ 指令面板', { scope: body.scope, status })
+    return json({ ok: status > 0 && status < 300, status, data })
+  }
+
+  const panelRemove = matchPath('/qq/panels/:panelId', sub)
+  if (panelRemove && method === 'DELETE') {
+    if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
+    const { status, data } = await scope.api.raw('DELETE', `/v2/panels/${panelRemove.panelId}`)
+    deps.logger.info('删除 QQ 指令面板', { panelId: panelRemove.panelId, status })
     return json({ ok: status > 0 && status < 300, status, data })
   }
 

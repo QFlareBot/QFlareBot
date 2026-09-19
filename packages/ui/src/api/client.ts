@@ -73,8 +73,11 @@ export const api = {
   send: (scene: string, targetId: string, message: unknown) =>
     request<{ ok: boolean; result: { ok: boolean; status: number; messageId?: string; error?: string } }>('POST', '/send', { scene, targetId, message }),
   /** QQ 端点透传：平台响应原样返回（HTTP 200 内嵌 status），便于在面板上看到平台回复 */
-  qqPanels: () => request<{ ok: boolean; status: number; data: unknown }>('GET', '/qq/panels'),
+  qqPanels: (scope: string) =>
+    request<{ ok: boolean; status: number; data: unknown }>('GET', `/qq/panels?scope=${encodeURIComponent(scope)}`),
   sendQQPanels: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/panels', body),
+  deleteQQPanel: (panelId: string) =>
+    request<{ ok: boolean; status: number; data: unknown }>('DELETE', `/qq/panels/${encodeURIComponent(panelId)}`),
   createUrlLink: (body: Record<string, unknown>) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/url-link', body),
   installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
   triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),

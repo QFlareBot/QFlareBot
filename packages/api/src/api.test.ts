@@ -237,21 +237,41 @@ describe('资料与群策略', () => {
     expect(await client.group.info('G1')).toMatchObject({ group_name: '测试群' })
   })
 
-  it('审批策略：GET 归一化列表，PUT 携带 group_openid', async () => {
-    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ strategies: [{ group_openid: 'G1', enabled: true }] }))
+  it('审批策略：GET 游标分页归一化，PUT 携带 group_openid', async () => {
+    const fetchMock: FetchMock = vi.fn(async () =>
+      jsonResponse({ strategies: [{ group_openid: 'G1', enabled: true }], next_cursor: 'c2' }),
+    )
     const client = makeClient(fetchMock)
-    expect(await client.group.joinStrategies()).toEqual([{ group_openid: 'G1', enabled: true }])
+    expect(await client.group.joinStrategies()).toEqual({ strategies: [{ group_openid: 'G1', enabled: true }], nextCursor: 'c2' })
     await client.group.setJoinStrategy('G1', { auto_approve: true })
     const [url, init] = fetchMock.mock.calls[1]! as [string, RequestInit]
     expect(String(url)).toContain('/v2/groups/join_approval_strategy')
     expect(JSON.parse(String(init.body))).toEqual({ group_openid: 'G1', auto_approve: true })
   })
 
-  it('审批策略列表支持数组与对象两种响应形状', async () => {
-    const asArray: FetchMock = vi.fn(async () => jsonResponse([{ group_openid: 'G1' }]))
-    expect(await makeClient(asArray).group.joinStrategies()).toEqual([{ group_openid: 'G1' }])
-    const asList: FetchMock = vi.fn(async () => jsonResponse({ list: [{ group_openid: 'G2' }] }))
-    expect(await makeClient(asList).group.joinStrategies()).toEqual([{ group_openid: 'G2' }])
+  it('审批策略游标拼进查询串', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ strategies: [], next_cursor: '' }))
+    const client = makeClient(fetchMock)
+    await client.group.joinStrategies('abc')
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('cursor=abc')
+  })
+
+  it('group.info 返回实测的真实字段', async () => {
+    const fetchMock: FetchMock = vi.fn(async () =>
+      jsonResponse({
+        group_openid: 'G1',
+        group_name: '测试群',
+        group_finger_memo: '',
+        group_class_text: '',
+        group_tags: [],
+        group_member_num: 79,
+      }),
+    )
+    const client = makeClient(fetchMock)
+    const info = await client.group.info('G1')
+    expect(info.group_name).toBe('测试群')
+    expect(info.group_member_num).toBe(79)
+    expect(info.group_tags).toEqual([])
   })
 })
 

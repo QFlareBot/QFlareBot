@@ -66,14 +66,16 @@
 
 ## 机器人全局配置（不属于单个插件，面板管理）
 
-机器人的"外观"类配置改一次全局生效，由运营者在面板操作，不走插件契约（避免多个插件互相覆盖）。管理 API 对 QQ 端点做**透明代理**：请求体原样转发、平台响应（含错误）原样回显在面板上。
+机器人的"外观"类配置改一次全局生效，由运营者在面板操作，不走插件契约（避免多个插件互相覆盖）。字段形状已对照官方文档，并于 2026-09 用真实机器人实测核对（探测工具：`scripts/probe-qq-api.mjs --from-kv`）。
 
 | 能力 | QQ 端点 | 管理 API | 面板入口 |
 | --- | --- | --- | --- |
-| 指令面板（用户点机器人看到的可点指令列表，完整 CRUD，10 QPM） | `/v2/panels` | `GET` / `POST /admin/qq/panels` | 设置 → QQ 指令面板（可从已启用插件的命令一键生成请求体草稿） |
-| 分享/邀请链接（点击直达机器人会话） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接 |
-| 自定义菜单（仅单聊场景，全局一份） | `/v2/menu` | 暂 raw | — |
+| **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：从已启用插件的命令一键生成请求体，声明了 `permission` 的命令自动带 `only_admin: true` |
+| **分享/邀请链接**（点击直达机器人会话；请求体可为空，响应 `{ retcode, msg, data: { url } }`） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接 |
+| 自定义菜单（**仅单聊**，全局一份；`menu.items` ≤10：switch/send_message/link/menu，子菜单 ≤5，PUT 5 QPM） | `GET/PUT /v2/menu` | 暂 raw | — |
 | 频道 API 权限申请 | — | 暂 raw | — |
+
+指令面板创建请求体（官方 schema 摘录）：`{ scope, target_type?, group_openids?/user_openids?, panel: { items: [{ type: 'command'|'link', name, desc, only_admin?, link? }], remark?, version? } }` → 响应 `{ panel_id }`。`target_type=specific`（仅 c2c/group）配合 openid 列表可按群/用户定点生效。列表查询响应 `{ records: PanelRecord[], next_cursor, is_end }`。`items[].name` ≤14 字符、`desc` ≤30 字符。
 
 ## 错误语义
 
@@ -85,5 +87,5 @@
 - `api.bot.qq.com` 为文档统一域名（2026-08-10 起），已确认与 `api.sgroup.qq.com` 同网关；如需回退可传 `baseUrl`。
 - 群管理接口按文档字段实现，未在有管理员权限的群里实测。
 - 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此按钮回调暂不鉴权。
-- `group.info` 的字段名（`group_name` 等）与 `join_approval_strategy` 的请求/响应字段按文档路径透传实现，待在有管理权限的群里实测后收紧类型。
-- 指令面板创建请求体与 `generate_url_link` 请求体的字段以官方文档对应页面为准；管理 API 走透明代理，实测确认后在面板加一键同步的固化实现。
+- `group.info` 与 `join_approval_strategy` 的**查询**响应已于 2026-09 实测核对；审批策略的**设置**（PUT）请求体字段仍待实测。
+- 指令面板与 `generate_url_link` 的字段已实测核对；自定义菜单 schema 已从官方文档取得但尚未接入面板。

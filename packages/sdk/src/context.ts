@@ -117,10 +117,14 @@ export interface BotProfile {
   [key: string]: unknown
 }
 
-/** 群资料（GET /v2/groups/{id}/info）；字段名以平台实际返回为准，未列出的原样保留 */
+/** 群资料（GET /v2/groups/{id}/info）；字段为 2026-09 实测形状，未列出的原样保留 */
 export interface GroupInfo {
   group_openid?: string
   group_name?: string
+  group_member_num?: number
+  group_finger_memo?: string
+  group_class_text?: string
+  group_tags?: string[]
   [key: string]: unknown
 }
 
@@ -154,8 +158,8 @@ export type MuteOp =
 export interface GroupApi {
   info(groupOpenid: string): Promise<GroupInfo>
   botState(groupOpenid: string): Promise<Record<string, unknown>>
-  /** 查询入群自动审批策略列表（平台标注内邀，未开白名单会报错） */
-  joinStrategies(): Promise<JoinApprovalStrategy[]>
+  /** 查询入群自动审批策略列表（平台标注内邀）；游标分页 */
+  joinStrategies(cursor?: string): Promise<{ strategies: JoinApprovalStrategy[]; nextCursor: string }>
   /** 为群设置/更新入群自动审批策略；strategy 字段按平台文档透传 */
   setJoinStrategy(groupOpenid: string, strategy: JoinApprovalStrategy): Promise<void>
   /** 逐页拉取成员，每页最多 30 */

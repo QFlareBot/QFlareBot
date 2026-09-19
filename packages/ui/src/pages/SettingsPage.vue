@@ -85,24 +85,33 @@ function savePermission() {
   })
 }
 
-// —— QQ 指令面板与分享链接：QQ 端点透传，字段以官方文档为准 ——
+// —— QQ 指令面板与分享链接：字段按官方文档（2026-09 实测核对）——
 
+const panelsScope = ref('group')
 const panelsBody = ref('')
 const panelsResult = ref('')
 const panelsBusy = ref(false)
 
-/** 把已启用插件注册的命令拼成面板创建请求体草稿；字段可在发送前自行调整 */
+/** 把已启用插件注册的命令按官方 schema 拼成创建面板请求体；name≤14 字、desc≤30 字、最多 20 项 */
 function draftPanels() {
-  const instructions = (status.value?.plugins ?? [])
+  const items = (status.value?.plugins ?? [])
     .filter((p) => p.enabled)
     .flatMap((p) =>
       p.commands.map((c) => ({
-        word: c.name,
-        description: c.description ?? `${p.displayName || p.name} 的指令`,
+        type: 'command',
+        name: c.name.slice(0, 14),
+        desc: (c.description ?? `${p.displayName || p.name} 的指令`).slice(0, 30),
+        // 声明了权限的命令映射为平台原生的"仅管理员可点击"
+        only_admin: c.permission === 'bot_admin' || c.permission === 'group_admin',
       })),
     )
+    .slice(0, 20)
   panelsBody.value = JSON.stringify(
-    { panels: [{ name: '机器人指令', scene: 'group', instructions }] },
+    {
+      scope: panelsScope.value,
+      target_type: 'all',
+      panel: { remark: '由 qqbot-workers 面板同步', items },
+    },
     null,
     2,
   )
@@ -114,7 +123,7 @@ async function sendPanels() {
   try {
     const res = await api.sendQQPanels(JSON.parse(panelsBody.value))
     panelsResult.value = JSON.stringify(res, null, 2)
-    push(res.ok ? '指令面板已提交' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
+    push(res.ok ? '指令面板已创建' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
   } catch (e) {
     panelsResult.value = String((e as Error).message)
   } finally {
@@ -126,7 +135,7 @@ async function viewPanels() {
   panelsBusy.value = true
   panelsResult.value = ''
   try {
-    panelsResult.value = JSON.stringify(await api.qqPanels(), null, 2)
+    panelsResult.value = JSON.stringify(await api.qqPanels(panelsScope.value), null, 2)
   } catch (e) {
     panelsResult.value = String((e as Error).message)
   } finally {
@@ -201,14 +210,19 @@ async function createLink() {
         </QCard>
         <QCard
           title="QQ 指令面板"
-          description="用户点机器人看到的可点指令列表。点「生成草稿」把已启用插件的命令填进请求体，字段以官方文档《创建指令面板》为准，发送前可修改"
+          description="用户点机器人看到的可点指令列表（scope 支持 c2c/group/channel/dm，一个面板最多 20 项，机器人最多 20 个面板）。声明了权限的命令会自动带上 only_admin"
         >
           <form class="flex flex-col gap-3" @submit.prevent="sendPanels">
-            <QField id="panels-body" label="请求体（JSON）">
+            <QField id="panels-scope" label="生效场景">
+              <template #default>
+                <QSelect id="panels-scope" v-model="panelsScope" :options="[{ label: '群聊（group）', value: 'group' }, { label: '单聊（c2c）', value: 'c2c' }]" />
+              </template>
+            </QField>
+            <QField id="panels-body" label="请求体（JSON，可编辑）">
               <template #default="{ describedBy }"><QTextarea id="panels-body" v-model="panelsBody" mono :rows="10" :described-by="describedBy" /></template>
             </QField>
             <div class="flex gap-2">
-              <QButton type="button" :disabled="panelsBusy" @click="draftPanels">从已启用插件生成草稿</QButton>
+              <QButton type="button" :disabled="panelsBusy" @click="draftPanels">从已启用插件生成</QButton>
               <QButton type="button" variant="secondary" :loading="panelsBusy" @click="viewPanels">查看当前面板</QButton>
               <QButton type="submit" variant="primary" :loading="panelsBusy" :disabled="!panelsBody.trim()">发送到 QQ</QButton>
             </div>

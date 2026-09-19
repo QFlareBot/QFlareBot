@@ -23,6 +23,7 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
 | `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调）、sid（内置，查 OpenID/会话 ID/群角色） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
+| `scripts/probe-qq-api.mjs` | — | QQ OpenAPI 探测脚本：实测接口真实形状（凭证从线上 KV 或 .dev.vars 读，不回显） |
 | `templates/plugin` | — | 插件仓库模板（CI workflow + 声明清单约定） |
 | `docs/design.md` | — | 设计决策记录 |
 | `docs/capabilities.md` | — | QQ 平台能力 → 插件契约对照表（哪些已封装、哪些走 `api.raw`） |

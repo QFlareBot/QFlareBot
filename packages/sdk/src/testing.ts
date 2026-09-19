@@ -290,9 +290,9 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
     async reviewJoinRequest(g, m, decision, id) {
       record('POST', `/v2/groups/approval_join_request/${m}`, { ...decision, join_request_id: id })
     },
-    async joinStrategies() {
-      record('GET', '/v2/groups/join_approval_strategy')
-      return []
+    async joinStrategies(cursor = '') {
+      record('GET', `/v2/groups/join_approval_strategy${cursor ? `?cursor=${cursor}` : ''}`)
+      return { strategies: [], nextCursor: '' }
     },
     async setJoinStrategy(g, strategy) {
       record('PUT', '/v2/groups/join_approval_strategy', { group_openid: g, ...strategy })

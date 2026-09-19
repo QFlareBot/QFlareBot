@@ -838,21 +838,33 @@ describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
     })
   }
 
-  it('GET/POST /admin/qq/panels 透传到 QQ 并原样返回平台响应', async () => {
+  it('GET/POST/DELETE /admin/qq/panels 校验 scope 并透传到 QQ', async () => {
     const qq = createQQFetch()
     const runtime = createRuntime({ plugins: [], fetchImpl: qq.fetchImpl })
     const env = createEnv()
 
-    const view = await runtime.fetch!(adminRequest('GET', '/qq/panels'), env, createExecutionContext())
-    expect(view.status).toBe(200)
-    expect(await view.json()).toMatchObject({ ok: true, status: 200, data: { panel_id: 'p1' } })
+    const missingScope = await runtime.fetch!(adminRequest('GET', '/qq/panels'), env, createExecutionContext())
+    expect(missingScope.status).toBe(400)
 
-    const created = await runtime.fetch!(adminRequest('POST', '/qq/panels', { panels: [{ name: 'x' }] }), env, createExecutionContext())
+    const view = await runtime.fetch!(adminRequest('GET', '/qq/panels?scope=group'), env, createExecutionContext())
+    expect(view.status).toBe(200)
+    expect(await view.json()).toMatchObject({ ok: true, status: 200, data: { records: [], is_end: true } })
+
+    const created = await runtime.fetch!(
+      adminRequest('POST', '/qq/panels', { scope: 'group', target_type: 'all', panel: { items: [] } }),
+      env,
+      createExecutionContext(),
+    )
     expect(created.status).toBe(200)
     expect((await created.json()).data).toMatchObject({ panel_id: 'p1' })
-    const sent = qq.sent.filter((s) => s.url.includes('/v2/panels')).reverse()[0]
+
+    const removed = await runtime.fetch!(adminRequest('DELETE', '/qq/panels/p1'), env, createExecutionContext())
+    expect(removed.status).toBe(200)
+    expect((await removed.json()).ok).toBe(true)
+
+    const sent = qq.sent.filter((s) => s.url.includes('/v2/panels')).find((s) => s.body.scope === 'group')
     expect(sent).toBeDefined()
-    expect(sent!.body).toEqual({ panels: [{ name: 'x' }] })
+    expect(sent!.body).toMatchObject({ scope: 'group', target_type: 'all', panel: { items: [] } })
   })
 
   it('POST /admin/qq/url-link 透传并返回链接', async () => {

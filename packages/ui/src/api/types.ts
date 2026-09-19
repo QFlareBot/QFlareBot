@@ -5,6 +5,8 @@ export interface CommandSpec {
   description?: string
   usage?: string
   aliases?: string[]
+  /** 权限层级（bot_admin / group_admin / member），同步指令面板时映射为 only_admin */
+  permission?: string
 }
 
 export interface PluginInfo {

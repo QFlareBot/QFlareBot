@@ -17,12 +17,14 @@ export function createGroupApi(client: Caller): GroupApi {
     info: (g) => client.call<GroupInfo>('GET', `${base(g)}/info`, undefined, '获取群信息'),
     botState: (g) => client.call('GET', `${base(g)}/bot_state`, undefined, '获取机器人群内状态'),
 
-    async joinStrategies() {
-      const data = await client.call<
-        { strategies?: JoinApprovalStrategy[]; list?: JoinApprovalStrategy[] } | JoinApprovalStrategy[]
-      >('GET', '/v2/groups/join_approval_strategy', undefined, '查询入群自动审批策略')
-      if (Array.isArray(data)) return data
-      return data.strategies ?? data.list ?? []
+    async joinStrategies(cursor = '') {
+      const data = await client.call<{ strategies?: JoinApprovalStrategy[]; next_cursor?: string }>(
+        'GET',
+        `/v2/groups/join_approval_strategy${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+        undefined,
+        '查询入群自动审批策略',
+      )
+      return { strategies: data.strategies ?? [], nextCursor: data.next_cursor ?? '' }
     },
 
     async setJoinStrategy(g, strategy) {
