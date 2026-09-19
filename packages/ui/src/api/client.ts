@@ -1,4 +1,4 @@
-import type { EventRecord, Snapshot, Status, TestEventResult } from './types.js'
+import type { EventRecord, InstallPluginResult, InstallRecord, Snapshot, Status, TestEventResult, TriggerBuildResult } from './types.js'
 
 const SESSION_KEY = 'qqbot.session'
 
@@ -62,4 +62,7 @@ export const api = {
   testEvent: (body: Record<string, unknown>) => request<TestEventResult>('POST', '/test-event', body),
   send: (scene: string, targetId: string, message: unknown) =>
     request<{ ok: boolean; result: { ok: boolean; status: number; messageId?: string; error?: string } }>('POST', '/send', { scene, targetId, message }),
+  installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
+  triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),
+  builds: () => request<{ ok: true; builds: InstallRecord[] }>('GET', '/builds'),
 }

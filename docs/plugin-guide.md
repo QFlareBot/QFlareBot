@@ -62,11 +62,12 @@ npm run sync             # 把 dist/manifest.json 复制到仓库根目录（声
 npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSession / createMockContext
 ```
 
-装到机器人：`POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}`，再 `POST /admin/builds` 触发构建。构建机拉源码编译，声明清单与源码不一致会直接失败。
+装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接（等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}` 后再 `POST /admin/builds` 触发构建）。构建机拉源码编译，声明清单与源码不一致会直接失败。
 
 ## 2. 规则
 
-- **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。可以 import `@qqbot/sdk` 与普通 npm 包（构建时打进去），`cloudflare:workers` 需在处理器内部 `import()`。
+- **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。`cloudflare:workers` 需在处理器内部 `import()`。
+- **不发 npm 包**：插件以源码仓库分发，构建机编译部署，全程不向 npm 发布任何东西。源码里 `import` 第三方库是普通的依赖（构建时一并打进产物），不是发包——目前构建机解析的是**机器人仓库已安装的依赖**：插件要用新库，先在机器人仓库 `pnpm add` 再重建；构建报"未打包的外部依赖"就是这个原因。
 - **命名**：包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。
 - **版本**：取自 `package.json` 的 `version`。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。

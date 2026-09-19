@@ -74,7 +74,7 @@ pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |
 | `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit |
 
-面板的安装 UI 尚未接入，以上端点可用 curl / 任意客户端调用。
+面板 → 插件页可以直接粘贴仓库链接安装（自动解析最新 commit）并查看构建记录；以上端点也可用 curl / 任意客户端调用。
 
 ## 本地清单格式
 

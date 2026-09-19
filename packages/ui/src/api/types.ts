@@ -96,3 +96,35 @@ export interface Snapshot {
   commandPrefixes?: string[]
   safeMode?: boolean
 }
+
+/** —— 自部署（安装与构建账本），与 runtime 的 manifestStore.ts 保持一致 —— */
+
+export interface InstallRecord {
+  id: string
+  action: 'install' | 'upgrade' | 'uninstall' | 'build'
+  name: string | null
+  source: string | null
+  manifestHash: string
+  buildUuid: string | null
+  cfStatus: string | null
+  status: 'pending' | 'building' | 'ok' | 'failed'
+  commitHash: string | null
+  error: string | null
+  ts: number
+}
+
+export interface InstallPluginResult {
+  ok: true
+  plugin: { name: string; version: string; source: string }
+  previous?: { version: string }
+  hash: string
+  install: InstallRecord
+}
+
+export interface TriggerBuildResult {
+  ok: true
+  buildUuid: string
+  branch: string
+  hash: string
+  install: InstallRecord
+}
