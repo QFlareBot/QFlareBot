@@ -82,7 +82,14 @@ async function extractGitSource(name, source) {
 /** 就地构建 git: 来源的插件，校验声明清单，返回替换后的清单条目 */
 async function buildGitPlugin(entry) {
   const pluginDir = await extractGitSource(entry.name, entry.source)
-  const { manifest, outFile } = await buildPlugin({ cwd: pluginDir })
+  let sdkEntry
+  try {
+    sdkEntry = fileURLToPath(import.meta.resolve('@qqbot/sdk'))
+  } catch {}
+  const { manifest, outFile } = await buildPlugin({
+    cwd: pluginDir,
+    ...(sdkEntry ? { alias: { '@qqbot/sdk': sdkEntry } } : {}),
+  })
 
   if (manifest.name !== entry.name) {
     throw new Error(`${entry.name} 的源码声明 name 为 ${manifest.name}——插件源与安装记录不一致，请卸载后重装`)

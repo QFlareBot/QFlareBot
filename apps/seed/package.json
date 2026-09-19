@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@qqbot/runtime": "workspace:*",
+    "@qqbot/sdk": "workspace:*",
     "@qqbot/ui": "workspace:*",
     "qqbot-plugin-echo": "workspace:*",
     "qqbot-plugin-image": "workspace:*",

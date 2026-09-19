@@ -1,5 +1,6 @@
 import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 import type { Manifest } from '@qqbot/sdk'
 import { extractPluginManifest, type ExtractManifestOptions } from './manifest.js'
@@ -18,6 +19,16 @@ export interface BuildPluginResult {
   size: number
 }
 
+function resolveDefaultAlias(custom?: Record<string, string>): Record<string, string> {
+  const merged: Record<string, string> = { ...custom }
+  if (!merged['@qqbot/sdk']) {
+    try {
+      merged['@qqbot/sdk'] = fileURLToPath(import.meta.resolve('@qqbot/sdk'))
+    } catch {}
+  }
+  return merged
+}
+
 /** 制品必须自包含：除 `cloudflare:*` 外不允许留下任何未打包的 import */
 function findBareImports(metafile: esbuild.Metafile): string[] {
   const main = Object.values(metafile.outputs).find((o) => o.entryPoint !== undefined)
@@ -31,7 +42,8 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Bui
   const entry = path.resolve(cwd, options.entry ?? 'src/index.ts')
   const outDir = path.resolve(cwd, options.out ?? 'dist')
   const outFile = path.join(outDir, 'plugin.js')
-  const alias = options.alias ? { alias: options.alias } : {}
+  const resolvedAlias = resolveDefaultAlias(options.alias)
+  const alias = Object.keys(resolvedAlias).length > 0 ? { alias: resolvedAlias } : {}
 
   // 先抽清单：定义或校验有问题时不留下半成品
   const manifest = await extractPluginManifest({ entry, cwd, ...alias })

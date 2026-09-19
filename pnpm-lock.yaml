@@ -29,6 +29,9 @@ importers:
       '@qqbot/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@qqbot/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@qqbot/ui':
         specifier: workspace:*
         version: link:../../packages/ui

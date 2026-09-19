@@ -89,9 +89,12 @@ function identify(rawType: string, d: RawMessageEvent & RawInteractionEvent & Ra
   return { scene: 'unknown', targetId: '', userId: userOpenid || author.id || '', userName }
 }
 
-/** 去掉频道消息里的 <@!id> 提及与首尾空白 */
+/**
+ * 去掉消息里的 <@id> 提及与首尾空白。ID 有两种形状：频道是纯数字（<@!123456>），
+ * 群是 32 位十六进制 openid（<@1A2B…>），都按十六进制字符集匹配。
+ */
 function cleanContent(content: string | undefined): string {
-  return (content ?? '').replace(/<@!?\d+>/g, '').trim()
+  return (content ?? '').replace(/<@!?[0-9A-Fa-f]+>/g, '').trim()
 }
 
 function toAttachments(d: RawMessageEvent): Attachment[] {
