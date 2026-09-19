@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r --filter './packages/**' run build",
+    "build": "pnpm -r --filter './packages/**' --filter './plugins/**' run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -25,6 +25,8 @@
     "wrangler": "^4.86.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
