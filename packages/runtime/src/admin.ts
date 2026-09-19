@@ -1,4 +1,4 @@
-import { createTokenProvider, type WebhookPayload } from '@qqbot/api'
+import { QQBotClient, createTokenProvider, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
@@ -263,6 +263,26 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       return error(`QQ 开放平台鉴权失败：${(err as Error).message}`, 400)
     }
     await writeBotConfig(scope.env, { appId, secret })
+    // 顺手拉一次机器人资料存进快照，运行时经 session.botName/botAvatar 下发，零额外 API。
+    // 拉取失败不影响凭证保存，只是资料为空。
+    try {
+      const client = new QQBotClient({ appId, secret, fetchImpl: deps.options.fetchImpl })
+      const { status, data } = await client.raw<{ username?: unknown; avatar?: unknown }>('GET', '/users/@me')
+      if (status === 200) {
+        const snapshot = await readSnapshot(scope.env, true)
+        await writeSnapshot(scope.env, {
+          ...snapshot,
+          bot: {
+            name: typeof data?.username === 'string' ? data.username : '',
+            avatar: typeof data?.avatar === 'string' ? data.avatar : '',
+          },
+        })
+      } else {
+        deps.logger.warn('拉取机器人资料失败', { status })
+      }
+    } catch (err) {
+      deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 将为空', { error: (err as Error).message })
+    }
     deps.logger.info('机器人凭证已更新', { appId })
     return json({ ok: true, appId })
   }

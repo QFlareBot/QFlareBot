@@ -7,12 +7,14 @@ import {
 } from '@qqbot/api'
 import {
   EVENT_ID_REPLYABLE,
+  isMessageEvent,
   qqAvatar,
   toEventName,
   type Attachment,
   type Interaction,
   type InteractionCode,
   type InteractionType,
+  type Mention,
   type OutgoingMessage,
   type Scene,
   type SendOptions,
@@ -34,6 +36,9 @@ export interface Sender {
 
 export interface SessionOptions {
   botId: string
+  /** 机器人资料，来自快照（面板保存凭证时从 /users/@me 拉取）；未配置为空串 */
+  botName?: string
+  botAvatar?: string
   sender: Sender
   maxPassiveReplies: number
 }
@@ -149,6 +154,17 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     scene === 'group' && (role === 'owner' || role === 'admin' || role === 'member')
       ? (role as 'owner' | 'admin' | 'member')
       : undefined
+  const mentions: Mention[] = (d.mentions ?? []).map((m) => ({
+    id: typeof m.id === 'string' ? m.id : '',
+    username: typeof m.username === 'string' ? m.username : '',
+    bot: m.bot === true,
+  }))
+  const event = toEventName(rawType)
+  // 是否在呼叫本机器人：单聊/频道私信天然是；at_message 事件平台已过滤出被 @ 的消息；
+  // 其余消息类型只有 mentions 里的 bot 标记可参考（多个机器人在群时可能误判，尽力而为）
+  const atMe =
+    isMessageEvent(event) &&
+    (scene === 'c2c' || scene === 'guild_dm' || rawType.includes('AT_MESSAGE') || mentions.some((m) => m.bot))
   const eventId = payload.id ?? `${rawType}:${d.id ?? Date.now()}`
   const messageId = typeof d.id === 'string' && rawType.includes('MESSAGE') ? d.id : undefined
   const eventReplyId = !messageId && EVENT_ID_REPLYABLE.has(rawType) ? eventId : undefined
@@ -184,8 +200,10 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
 
   const session: Session = {
     botId: options.botId,
+    botName: options.botName ?? '',
+    botAvatar: options.botAvatar ?? '',
     platform: 'qq',
-    event: toEventName(rawType),
+    event,
     rawType,
     id: eventId,
     timestamp,
@@ -200,6 +218,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     refIndex: extractRefIndex(d),
     canReply: passive() !== null,
     content: cleanContent(d.content),
+    mentions,
+    atMe,
     attachments: toAttachments(d),
     interaction: rawType === 'INTERACTION_CREATE' ? buildInteraction(d, sender) : undefined,
 

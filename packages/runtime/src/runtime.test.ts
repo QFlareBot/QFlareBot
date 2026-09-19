@@ -755,3 +755,76 @@ describe('三层权限', () => {
     expect(c2c.memberRole).toBeUndefined()
   })
 })
+
+describe('第一批打包：mentions / atMe / 机器人资料', () => {
+  const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
+  const opts = { botId: 'b', sender, maxPassiveReplies: 5 }
+
+  it('at_message 事件 atMe 恒为 true；普通群消息按 mentions 的 bot 标记推断', () => {
+    const at = buildSession(groupMessagePayload('hi'), opts)
+    expect(at.atMe).toBe(true)
+    expect(at.mentions).toEqual([])
+
+    const mentioned = buildSession(
+      {
+        op: 0,
+        id: 'GROUP_MESSAGE_CREATE:x',
+        t: 'GROUP_MESSAGE_CREATE',
+        d: {
+          id: 'm',
+          content: 'hi',
+          author: { member_openid: 'U1' },
+          group_openid: 'G1',
+          mentions: [{ id: 'BOT', username: 'bot', bot: true }],
+        },
+      },
+      opts,
+    )
+    expect(mentioned.atMe).toBe(true)
+    expect(mentioned.mentions).toEqual([{ id: 'BOT', username: 'bot', bot: true }])
+
+    const plain = buildSession(
+      { op: 0, id: 'GROUP_MESSAGE_CREATE:y', t: 'GROUP_MESSAGE_CREATE', d: { id: 'm2', content: 'hi', author: { member_openid: 'U1' }, group_openid: 'G1' } },
+      opts,
+    )
+    expect(plain.atMe).toBe(false)
+  })
+
+  it('单聊天然 atMe，交互事件恒为 false', () => {
+    const c2c = buildSession(
+      { op: 0, id: 'C2C:x', t: 'C2C_MESSAGE_CREATE', d: { id: 'm', content: 'hi', author: { user_openid: 'U9' } } },
+      opts,
+    )
+    expect(c2c.atMe).toBe(true)
+
+    const interaction = buildSession(
+      { op: 0, id: 'I:x', t: 'INTERACTION_CREATE', d: { id: 'i', type: 11, scene: 'group', group_openid: 'G1', data: { type: 11, resolved: { button_id: 'k' } } } },
+      opts,
+    )
+    expect(interaction.atMe).toBe(false)
+  })
+
+  it('botName/botAvatar 来自 SessionOptions，未配置为空串', () => {
+    expect(buildSession(groupMessagePayload('hi'), { ...opts, botName: '小助手', botAvatar: 'https://a/640' }).botName).toBe('小助手')
+    expect(buildSession(groupMessagePayload('hi'), opts).botAvatar).toBe('')
+  })
+
+  it('面板保存凭证时拉取 /users/@me 存进快照', async () => {
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/bot`, {
+        method: 'PUT',
+        headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ appId: '123', secret: TEST_SECRET }),
+      }),
+      env,
+      createExecutionContext(),
+    )
+    expect(await res.json()).toMatchObject({ ok: true, appId: '123' })
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!)).toMatchObject({
+      bot: { name: '测试机器人', avatar: 'https://thirdqq.qlogo.cn/bot/640' },
+    })
+  })
+})

@@ -76,6 +76,11 @@ export interface Snapshot {
   admins?: string[]
   /** 权限不足时的统一回复文案；未设置则静默跳过（当作没匹配到） */
   permissionDeniedReply?: string
+  /**
+   * 机器人资料：面板保存凭证时调一次 /users/@me 取回，随快照下发（session.botName/botAvatar）。
+   * 不做运行时拉取与缓存——改资料后重新保存一次凭证即可刷新。
+   */
+  bot?: { name?: string; avatar?: string }
 }
 
 export interface PluginState {

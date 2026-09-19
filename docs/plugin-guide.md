@@ -128,7 +128,11 @@ commands: {
 
 平台新事件自动落到 `qq.raw.<t 小写>`（如 `qq.raw.group_msg_reject`），不必等框架发版。
 
-`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸或任意 openid 用 `@qqbot/sdk` 导出的 `qqAvatar(botId, openid, 140)`）、`memberRole`（群聊时的群主/管理员/成员角色）、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
+`session` 只读字段（完整类型见 `@qqbot/sdk`）：
+
+- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，其余群消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`
+- **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
+- **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 
 ## 4. 回复消息
 

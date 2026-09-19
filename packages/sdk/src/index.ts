@@ -11,6 +11,7 @@ export {
 export type {
   Scene,
   Attachment,
+  Mention,
   ImageSource,
   MediaSource,
   MediaType,
@@ -105,7 +106,7 @@ export {
 } from './plugin.js'
 
 export { extractManifest, validateManifest, type Manifest } from './manifest.js'
-export { qqAvatar, type AvatarSize } from './avatar.js'
+export { qqAvatar, qqAt, type AvatarSize } from './identity.js'
 export {
   normalizePlugin,
   type NormalizedPlugin,

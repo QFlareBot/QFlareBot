@@ -21,6 +21,8 @@
 | **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊；群聊自动退化为 end 时一次性回复 |
 | 撤回 | `session.recall(id?)` / `ctx.api.recallMessage()` | 2 分钟内；群管理员可撤成员消息 |
 | **用户头像**（官方 CDN 规范） | `session.avatarUrl`（640） / `qqAvatar(botId, openid, size)` | 纯拼接 `thirdqq.qlogo.cn/qqapp/{botId}/{openid}/{size}`（size 40/100/140/640），不发请求、无缓存 |
+| **@ 提及**（拼接文本） | `qqAt(openid)` → `<@openid>` | 放进 text / markdown content 即可；`session.mentions` 反向读取消息里 @ 了谁 |
+| **机器人自身资料** `/users/@me` | `session.botName` / `botAvatar`（或 `api.raw('GET', '/users/@me')`） | 面板保存凭证时拉取一次存快照，运行时零 API；改资料后重新保存凭证即可刷新 |
 | Ark / Embed（频道） | raw | |
 | 表情回应 / 置顶 / 公告（频道） | raw | |
 
@@ -28,7 +30,7 @@
 
 | 平台事件 | 事件名 | Session 字段 |
 | --- | --- | --- |
-| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、attachments、refIndex |
+| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、attachments、refIndex、mentions、atMe、memberRole |
 | C2C_MESSAGE_CREATE | `qq.c2c.message` | 同上 |
 | AT_MESSAGE_CREATE / MESSAGE_CREATE / DIRECT_MESSAGE_CREATE | `qq.guild.*` | |
 | GROUP_ADD_ROBOT / GROUP_DEL_ROBOT | `qq.group.robot_added` / `robot_removed` | canReply（event_id） |

@@ -21,7 +21,11 @@ export default definePlugin({
           `${SCENE_LABEL[session.scene] ?? session.scene} ID：${session.targetId || '（未知）'}`,
         ]
         if (session.memberRole) lines.push(`群角色：${ROLE_LABEL[session.memberRole] ?? session.memberRole}`)
-        lines.push(`机器人 AppID：${session.botId}`)
+        lines.push(
+          session.botName
+            ? `机器人：${session.botName}（AppID：${session.botId}）`
+            : `机器人 AppID：${session.botId}`,
+        )
         if (session.avatarUrl) lines.push(`头像：${session.avatarUrl}`)
         return lines.join('\n')
       },

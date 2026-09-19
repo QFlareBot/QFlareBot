@@ -13,6 +13,14 @@ export interface Attachment {
   size?: number
 }
 
+/** 消息里 @ 的一个对象（`mentions` 数组项） */
+export interface Mention {
+  id: string
+  username: string
+  /** 平台标记的被 @ 者是否为机器人 */
+  bot: boolean
+}
+
 export type MediaType = 'image' | 'video' | 'voice' | 'file'
 
 /**
@@ -133,6 +141,10 @@ export interface Interaction {
  */
 export interface Session {
   readonly botId: string
+  /** 机器人昵称（面板保存凭证时从 /users/@me 拉取存快照；未保存过为空串） */
+  readonly botName: string
+  /** 机器人头像 URL（来源同 botName；未保存过为空串） */
+  readonly botAvatar: string
   readonly platform: 'qq'
   readonly event: EventName
   /** QQ 原始事件类型（payload.t） */
@@ -165,6 +177,13 @@ export interface Session {
   readonly canReply: boolean
   /** 去掉 @ 与首尾空白后的正文 */
   readonly content: string
+  /** 消息里 @ 的对象（含机器人）；部分事件平台不下发，为空数组 */
+  readonly mentions: ReadonlyArray<Mention>
+  /**
+   * 这条消息是否在呼叫本机器人：单聊/频道私信天然是；@ 消息（at_message）由事件类型判定；
+   * 其余群消息按 mentions 里的 bot 标记尽力推断。非消息事件恒为 false。
+   */
+  readonly atMe: boolean
   readonly attachments: readonly Attachment[]
   /** 仅 INTERACTION_CREATE 事件有值 */
   readonly interaction: Interaction | undefined

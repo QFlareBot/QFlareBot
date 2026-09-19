@@ -8,6 +8,7 @@ import type {
   Attachment,
   Interaction,
   InteractionCode,
+  Mention,
   OutgoingMessage,
   Scene,
   SendOptions,
@@ -19,7 +20,7 @@ import type {
 import type { ButtonInput, CommandInput, PluginDefinition } from './plugin.js'
 import { normalizePlugin } from './normalize.js'
 import { deliverReply } from './reply.js'
-import { qqAvatar } from './avatar.js'
+import { qqAvatar } from './identity.js'
 
 export interface MockSessionOptions {
   content?: string
@@ -33,6 +34,10 @@ export interface MockSessionOptions {
   messageId?: string | null
   refIndex?: string
   botId?: string
+  botName?: string
+  botAvatar?: string
+  mentions?: Mention[]
+  atMe?: boolean
   raw?: unknown
   attachments?: Attachment[]
   interaction?: Partial<Pick<Interaction, 'id' | 'type' | 'buttonId' | 'buttonData' | 'featureId' | 'messageId' | 'feedback'>>
@@ -86,6 +91,8 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
 
   return {
     botId: options.botId ?? 'test-bot',
+    botName: options.botName ?? '',
+    botAvatar: options.botAvatar ?? '',
     platform: 'qq',
     event: options.event ?? (interaction ? 'qq.interaction' : 'qq.group.at_message'),
     rawType: options.rawType ?? (interaction ? 'INTERACTION_CREATE' : 'GROUP_AT_MESSAGE_CREATE'),
@@ -102,6 +109,9 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     refIndex: options.refIndex,
     canReply: true,
     content: options.content ?? '',
+    // 默认事件是 at_message（已被 @），atMe 跟着默认走
+    mentions: options.mentions ?? [],
+    atMe: options.atMe ?? true,
     attachments: options.attachments ?? [],
     interaction,
     replies,

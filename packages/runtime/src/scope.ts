@@ -72,6 +72,8 @@ export class RequestScope {
     }
     const session = buildSession(payload, {
       botId: this.botId,
+      botName: this.snapshot.bot?.name ?? '',
+      botAvatar: this.snapshot.bot?.avatar ?? '',
       sender: counting,
       maxPassiveReplies: this.options.maxPassiveReplies,
     })

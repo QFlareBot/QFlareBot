@@ -333,6 +333,12 @@ export function createQQFetch() {
     if (url.includes('getAppAccessToken')) {
       return new Response(JSON.stringify({ access_token: 'tok', expires_in: 7200 }), { status: 200 })
     }
+    if (url.includes('/users/@me')) {
+      return new Response(
+        JSON.stringify({ id: 'bot-1', username: '测试机器人', avatar: 'https://thirdqq.qlogo.cn/bot/640', bot: true }),
+        { status: 200 },
+      )
+    }
     sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
     return new Response(JSON.stringify({ id: `sent-${sent.length}` }), { status: 200 })
   }

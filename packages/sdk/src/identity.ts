@@ -10,3 +10,11 @@ export function qqAvatar(botId: string, openid: string, size: AvatarSize = 640):
   if (!botId || !openid) return ''
   return `https://thirdqq.qlogo.cn/qqapp/${botId}/${openid}/${size}`
 }
+
+/**
+ * 拼一条 @ 提及文本（`<@{openid}>`），放进 text 或 markdown content 即可。
+ * 频道的数字 id 与群/单聊的 openid 都是按这个形状下发的；openid 为空时返回空串。
+ */
+export function qqAt(openid: string): string {
+  return openid ? `<@${openid}>` : ''
+}
