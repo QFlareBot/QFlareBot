@@ -17,6 +17,7 @@ import {
   type InstallRecord,
   type ManifestPluginEntry,
 } from './manifestStore.js'
+import { clearInstallMarker, purgePluginData, runUninstallHook } from './purge.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
 
@@ -114,8 +115,18 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
   return json({ ok: true, plugin: entry, ...(existing ? { previous: { version: existing.version } } : {}), hash, install })
 }
 
-/** DELETE /admin/manifest/plugins/:name */
-export async function uninstallManifestPlugin(name: string, scope: RequestScope, deps: AdminDeps): Promise<Response> {
+/**
+ * DELETE /admin/manifest/plugins/:name[?purge=true]
+ *
+ * 数据默认**保留**：卸载多半是不想要了，但误删不可逆，而留下的数据在
+ * `GET /admin/storage` 里会被标成孤儿，随时可以清——比默认删安全，又不至于管不了。
+ */
+export async function uninstallManifestPlugin(
+  name: string,
+  purgeData: boolean,
+  scope: RequestScope,
+  deps: AdminDeps,
+): Promise<Response> {
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1，无法卸载插件', 503)
 
@@ -124,10 +135,26 @@ export async function uninstallManifestPlugin(name: string, scope: RequestScope,
     const bundled = deps.registry.get(name)
     return error(bundled ? '该插件由仓库清单内置：请从 qqbot.manifest.json 移除后重新构建' : `未安装：${name}`, 404)
   }
+
+  // 趁插件代码还在这次部署里，先让它自己收尾；重建之后就没机会了
+  const registered = deps.registry.get(name)
+  const { hook, hookError } = registered
+    ? await runUninstallHook(registered, scope.contexts, purgeData, deps.logger)
+    : { hook: 'none' as const, hookError: undefined }
+
+  const purged = purgeData ? await purgePluginData(name, scope.env) : null
+  await clearInstallMarker(name, scope.env)
+
   await deleteManifestPlugin(db, name)
   const hash = await manifestHash(await listManifestPlugins(db))
   const install = await insertInstall(db, { action: 'uninstall', name, source: existing.source, manifestHash: hash, status: 'pending' })
-  return json({ ok: true, removed: existing, hash, install })
+  return json({
+    ok: true,
+    removed: existing,
+    hash,
+    install,
+    data: { purged: purgeData, hook, ...(hookError ? { hookError } : {}), ...(purged ?? {}) },
+  })
 }
 
 function buildsApi(scope: RequestScope, deps: AdminDeps): CloudflareBuildsApi | null {

@@ -128,3 +128,36 @@ export interface TriggerBuildResult {
   hash: string
   install: InstallRecord
 }
+
+/** —— 存储视图，与 runtime 的 purge.ts 保持一致 —— */
+
+export interface StorageUsage {
+  plugin: string
+  kvKeys: number
+  tables: { name: string; rows: number }[]
+  r2Objects: number
+  r2Bytes: number
+}
+
+export interface StorageReport {
+  ok: true
+  bindings: { kv: boolean; d1: boolean; r2: boolean }
+  plugins: StorageUsage[]
+  /** 不属于任何已装插件的残留数据——卸载时选了保留，或插件从清单里被手工移掉 */
+  orphans: StorageUsage[]
+  /** 连候选插件名都对不上的表，只能人工处置 */
+  unattributedTables: string[]
+}
+
+export interface UninstallResult {
+  ok: true
+  removed: { name: string; version: string; source: string }
+  data: {
+    purged: boolean
+    hook: 'none' | 'ok' | 'failed'
+    hookError?: string
+    kvKeys?: number
+    tables?: string[]
+    r2Objects?: number
+  }
+}

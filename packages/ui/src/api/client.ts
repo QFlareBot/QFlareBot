@@ -1,4 +1,14 @@
-import type { EventRecord, InstallPluginResult, InstallRecord, Snapshot, Status, TestEventResult, TriggerBuildResult } from './types.js'
+import type {
+  EventRecord,
+  InstallPluginResult,
+  InstallRecord,
+  Snapshot,
+  Status,
+  StorageReport,
+  TestEventResult,
+  TriggerBuildResult,
+  UninstallResult,
+} from './types.js'
 
 const SESSION_KEY = 'qqbot.session'
 
@@ -65,4 +75,13 @@ export const api = {
   installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
   triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),
   builds: () => request<{ ok: true; builds: InstallRecord[] }>('GET', '/builds'),
+  /** purge 为真时连插件数据一起清；默认保留，之后会在存储页列为孤儿 */
+  uninstallPlugin: (name: string, purge = false) =>
+    request<UninstallResult>('DELETE', `/manifest/plugins/${encodeURIComponent(name)}${purge ? '?purge=true' : ''}`),
+  storage: () => request<StorageReport>('GET', '/storage'),
+  purgeOrphan: (name: string) =>
+    request<{ ok: true; plugin: string; kvKeys: number; tables: string[]; r2Objects: number }>(
+      'DELETE',
+      `/storage/orphans/${encodeURIComponent(name)}`,
+    ),
 }

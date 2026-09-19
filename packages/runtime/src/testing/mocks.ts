@@ -120,9 +120,12 @@ export function createExecutionContext(): ExecutionContext & { flush(): Promise<
 export function createManifestD1(): D1Database & {
   plugins: Map<string, Record<string, unknown>>
   installs: Map<string, Record<string, unknown>>
+  /** 插件表名 → 行数，喂给 purge.ts 的 sqlite_master 查询 */
+  tables: Map<string, number>
 } {
   const plugins = new Map<string, Record<string, unknown>>()
   const installs = new Map<string, Record<string, unknown>>()
+  const tables = new Map<string, number>()
   let params: unknown[] = []
 
   const prepare = (sql: string) => {
@@ -194,6 +197,10 @@ export function createManifestD1(): D1Database & {
           const results = [...plugins.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string))
           return { results } as { results: T[] }
         }
+        if (sql.includes('FROM sqlite_master')) {
+          const results = [...tables.keys()].filter((n) => n.startsWith('p_')).sort().map((name) => ({ name }))
+          return { results } as { results: T[] }
+        }
         if (sql.includes('FROM rt_installs ORDER')) {
           const limit = params[0] as number
           const results = [...installs.values()].sort((a, b) => (b.ts as number) - (a.ts as number)).slice(0, limit)
@@ -202,6 +209,8 @@ export function createManifestD1(): D1Database & {
         throw new Error(`fake D1 不支持：${sql}`)
       },
       async first<T>() {
+        const count = /^SELECT COUNT\(\*\) AS n FROM (\w+)$/.exec(sql)
+        if (count) return { n: tables.get(count[1]!) ?? 0 } as T
         if (sql.includes('WHERE name = ?')) {
           return (plugins.get(params[0] as string) ?? null) as T | null
         }
@@ -214,13 +223,23 @@ export function createManifestD1(): D1Database & {
   return {
     plugins,
     installs,
+    tables,
     prepare,
-    async exec() {
+    async exec(sql: string) {
+      const drop = /^DROP TABLE IF EXISTS (\w+)$/.exec(sql)
+      if (drop) {
+        tables.delete(drop[1]!)
+        return { count: 1, duration: 0 }
+      }
       return { count: 0, duration: 0 }
     },
     batch: async () => [],
     dump: async () => new ArrayBuffer(0),
-  } as unknown as D1Database & { plugins: Map<string, Record<string, unknown>>; installs: Map<string, Record<string, unknown>> }
+  } as unknown as D1Database & {
+    plugins: Map<string, Record<string, unknown>>
+    installs: Map<string, Record<string, unknown>>
+    tables: Map<string, number>
+  }
 }
 
 export const TEST_SECRET = 'DG5g3B4j9X2KOErG'

@@ -8,6 +8,7 @@ import {
   triggerBuild,
   uninstallManifestPlugin,
 } from './adminManifest.js'
+import { purgeOrphan, storageReport } from './adminStorage.js'
 import { validateConfig } from './configSchema.js'
 import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
@@ -124,7 +125,9 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
  * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
  * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）
- * DELETE /admin/manifest/plugins/:name  卸载插件（移出 D1 清单）
+ * DELETE /admin/manifest/plugins/:name[?purge=true]  卸载插件（移出 D1 清单；purge=true 连数据一起清）
+ * GET  /admin/storage               各插件的 KV/D1/R2 占用，以及不属于任何已装插件的孤儿数据
+ * DELETE /admin/storage/orphans/:name  清掉某个已卸载插件的残留数据
  * POST /admin/builds                触发 Workers Builds 重建（{ branch } 可选），返回 buildUuid
  * GET  /admin/builds                安装/构建账本，顺带同步进行中构建的状态与 commit
  */
@@ -198,7 +201,14 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
 
   if (sub === '/manifest/plugins' && method === 'POST') return installManifestPlugin(request, scope, deps)
   const manifestRemove = matchPath('/manifest/plugins/:name', sub)
-  if (manifestRemove && method === 'DELETE') return uninstallManifestPlugin(manifestRemove.name!, scope, deps)
+  if (manifestRemove && method === 'DELETE') {
+    const purge = url.searchParams.get('purge') === 'true'
+    return uninstallManifestPlugin(manifestRemove.name!, purge, scope, deps)
+  }
+
+  if (sub === '/storage' && method === 'GET') return storageReport(scope, deps)
+  const orphanPurge = matchPath('/storage/orphans/:name', sub)
+  if (orphanPurge && method === 'DELETE') return purgeOrphan(orphanPurge.name!, scope, deps)
 
   if (sub === '/builds' && method === 'POST') return triggerBuild(request, scope, deps)
   if (sub === '/builds' && method === 'GET') return listBuildsStatus(scope, deps)

@@ -36,7 +36,20 @@ Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import
 
 种子仓库的本地投影命令（`pnpm project`）与构建机（`manifest:prepare`）跑同一个投影库，产出一致（投影哈希相同），互不覆盖。
 
-## 5. 契约稳定性规则
+## 5. 插件数据：前缀即所有权
+
+三种存储都按插件名加前缀——KV 是 `p:<名>:`、R2 是 `p/<名>/`、D1 是表名 `p_<名>_`。KV 和 R2 的前缀在包装层拼键时强制，插件拿不到原始 binding；D1 过去只有 `db.table()` 给个建议值，`run/exec` 收裸 SQL，等于零约束。现在 SQL 里必须写 `{表名}` 占位，指向别处的表名一律抛错（`sqlite_master`、引号包名、库名限定、`ATTACH`/`PRAGMA` 都拦）。
+
+**这不是安全边界**，插件和运行时编译进同一个 Worker、同一个 JS realm，真要使坏绕得过去；`permissions` 同样只用于安装前展示。前缀强制要买的是另外两样东西：插件之间不会撞表或误删，以及——**框架凭前缀才枚举得出一个插件建过哪些表**。卸载能把数据清干净，唯一的前提就是这个；表名逃出命名空间的那部分数据，框架永远只能留成孤儿。
+
+由此：
+
+- **卸载分两步**：先调插件的 `onUninstall(ctx, { purgeData })`（趁它的代码还在这次部署里，重建之后就没机会了），再由框架按前缀兜底清理。钩子抛错不挡兜底——插件写坏了不该让数据永远清不掉。
+- **数据默认保留**。卸载多半是不想要了，但误删不可逆。留下的数据在 `GET /admin/storage` 里列为孤儿（名字从 KV/R2 的键前缀反推，D1 的从 `rt_installs` 账本补），可以单独清掉。「默认删」和「管不了」之间的第三条路是「默认留但看得见」。
+- **`onInstall` 的 `rt:installed:<名>` 标记无条件删掉**。数据清了，重装必须重新建表；数据留着，`onInstall` 本来就要求幂等。留着标记的后果是重装后它静默不跑。
+- **跨插件访问数据走 service，不走数据层**。直读别人的表是隐形依赖：对方一卸载，消费者静默坏掉，框架看不见这层关系。`services` + `depends` 把依赖写进清单，安装时校验，面板上可见。
+
+## 6. 契约稳定性规则
 
 1. **SDK 与 Runtime 分离**：`@qqbot/sdk` 只有类型、`definePlugin`（恒等函数）与测试工具；插件 bundle 中不允许任何运行时 import，所有能力由注入的 `ctx`/`session` 提供。框架升级不要求插件重新打包。
 2. **契约有版本**（`apiVersion`）；旧契约的适配器是独立 compat 包，只在清单含旧插件时投影进 bundle。
@@ -47,11 +60,11 @@ Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import
 7. 第一天就带 `botId`、`platform`，事件名带命名空间（`qq.group.at_message`）。
 8. 契约冻结点是 `definePlugin` 的入口形状与声明清单（manifest.json）；构建产物是瞬态产物，不作为分发契约，构建工具链版本随仓库 pin。
 
-## 6. Durable Object 政策
+## 7. Durable Object 政策
 
 DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天约 11,000 GB-s，免费版每日额度 13,000 GB-s。因此**核心主路径不碰 DO**（验签、匹配、分发、回复只用 KV/D1）。对插件不做限制：可声明自定义 DO 类（投影时前缀重导出为 `P_<插件>_<类>` 并注册），框架负责成本可见与文档说明。
 
-## 7. 冲突处理
+## 8. 冲突处理
 
 - 命令名：manifest 静态声明，安装前检测；运行时按 `priority` 排序，命令默认 `block: true`
 - 同事件多处理器：priority + block（NoneBot 模型），快照可覆盖优先级
@@ -62,17 +75,17 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 - Cron：框架只注册一个 Cron Trigger，按插件表达式分发（免费版 Trigger 仅 5 个）
 - 全局篡改：同 isolate 无法禁止，靠构建期 lint 与审核
 
-## 8. 里程碑
+## 9. 里程碑
 
 **M1（本仓库当前）**：sdk / api / runtime / projector / plugin-cli / 四个示例插件 / 种子应用 / 插件模板。平台能力覆盖见 `capabilities.md`：按键（自动升级 markdown）、`buttons` 匹配器与交互自动 ack、event_id 被动回复、引用、视频/语音/文件、流式（单聊）、撤回、输入中、群管理。清单投影、多模块部署元数据、Versions API 客户端已实现但**未对线上 API 实测**。
 
-## 9. 面板与插件页面
+## 10. 面板与插件页面
 
 面板是 `@qqbot/ui`（Vue 3），构建产物内联进 Worker 制品由运行时返回——自我部署不需要额外的 Cloudflare API，UI 与管理 API 永远同版本。插件页面走**解耦**方案：插件路由返回任意 HTML，面板以 sandbox iframe 打开，`@qqbot/ui-bridge` 提供 token、主题与 postMessage 通道；不做"插件写 Vue 组件挂进面板"的原生扩展，避免把面板组件 API 变成公共契约。鉴权是无状态 HMAC 令牌（会话 7 天、桥接 1 小时且限定插件），轮换 `ADMIN_TOKEN` 即全部失效。详见 `ui.md`，设计 token 见 `../design-system/qqbot-workers/MASTER.md`。
 
-## 10. 里程碑（更新）
+## 11. 里程碑（更新）
 
-**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）。构建日志内嵌与线上 Builds 实测未做。
+**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）、插件数据所有权（D1 表名前缀强制、卸载清理、`GET /admin/storage` 存储视图，见第 5 节）。构建日志内嵌与线上 Builds 实测未做。
 
 **M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、面板安装页（源码安装 + 构建日志内嵌）、Access 集成指引、Dynamic Workers 脚本引擎插件。
 

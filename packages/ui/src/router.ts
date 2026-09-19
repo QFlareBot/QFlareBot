@@ -14,6 +14,7 @@ export const router = createRouter({
         { path: 'plugins', component: () => import('./pages/PluginsPage.vue') },
         { path: 'plugins/:name', component: () => import('./pages/PluginDetailPage.vue') },
         { path: 'plugin-ui/:name', component: () => import('./pages/PluginUiPage.vue') },
+        { path: 'storage', component: () => import('./pages/StoragePage.vue') },
         { path: 'debug', component: () => import('./pages/DebugPage.vue') },
         { path: 'settings', component: () => import('./pages/SettingsPage.vue') },
       ],

@@ -57,9 +57,24 @@ export interface ScopedR2 {
   list(prefix?: string, options?: { limit?: number }): Promise<StoredObject[]>
 }
 
-/** 按插件名加表前缀的 D1；`table('x')` 返回真实表名，SQL 中请用它拼接 */
+/**
+ * 按插件名加表前缀的 D1。SQL 里用 `{表名}` 占位，运行时展开成 `p_<插件名>_表名`：
+ *
+ * ```ts
+ * await ctx.db.exec('CREATE TABLE IF NOT EXISTS {notes} (id TEXT PRIMARY KEY, text TEXT)')
+ * await ctx.db.run('INSERT INTO {notes} (id, text) VALUES (?, ?)', id, text)
+ * ```
+ *
+ * 指向别的插件或框架自己的表会直接抛错——这既是防撞名误删，也是**卸载时框架
+ * 清得掉你的数据**的前提：表名不带前缀，框架就枚举不出你建过哪些表。
+ *
+ * 要读别的插件的数据，让对方 `services` 导出方法、你在 `depends` 里声明，
+ * 不要直接查它的表：直连是隐形依赖，对方一卸载你就静默坏掉。
+ */
 export interface ScopedDB {
+  /** @deprecated 直接在 SQL 里写 `{表名}` 占位即可，不必手动拼前缀 */
   table(name: string): string
+  /** 建表等 DDL，可含多条语句；不接受绑定参数 */
   exec(sql: string): Promise<void>
   run(sql: string, ...params: unknown[]): Promise<{ changes: number }>
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T[]>

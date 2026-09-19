@@ -143,7 +143,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 | 存储 | 隔离方式 | 要点 |
 | --- | --- | --- |
 | `ctx.kv` | 键前缀 `p:<名>:` | `get / getJSON<T> / put(key, value, { ttl? }) / delete / list(prefix?)`；ttl 最小 60 秒 |
-| `ctx.db` | 表名前缀 `p_<名>_` | `ctx.db.table('notes')` 返回真实表名，拼进 SQL；`run(sql, ...params)` / `all<T>` / `first<T>` 支持参数绑定；`exec` 跑建表语句 |
+| `ctx.db` | 表名前缀 `p_<名>_` | SQL 里写 `{表名}` 占位，运行时展开；`run(sql, ...params)` / `all<T>` / `first<T>` 支持参数绑定；`exec` 跑建表语句 |
 | `ctx.r2` | 键前缀 `p/<名>/` | 大文件：`put(key, value, { contentType? }) / get / getText / getJSON / getStream / delete / head / list` |
 
 未绑定 D1 / R2 时调用会抛可读错误（绑定见 seed 的 `wrangler.jsonc`）。建表放 `hooks.onInstall`：
@@ -151,16 +151,34 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 ```ts
 hooks: {
   async onInstall({ ctx }) {
-    await ctx.db.exec(`CREATE TABLE IF NOT EXISTS ${ctx.db.table('notes')} (
-      user_id TEXT PRIMARY KEY, note TEXT, ts INTEGER NOT NULL)`)
+    await ctx.db.exec('CREATE TABLE IF NOT EXISTS {notes} (user_id TEXT PRIMARY KEY, note TEXT, ts INTEGER NOT NULL)')
   },
   async onBoot({ ctx }) { /* 每个 isolate 一次的轻量初始化 */ },
 },
 ```
 
-注意：**没有 onUpgrade 钩子**——升级版本不触发任何钩子，表结构/数据迁移请在 `onBoot` 里做惰性检查（`onInstall` 的 KV 标记保证它跨部署只跑一次）。`onEnable` / `onDisable` / `onUninstall` 已在契约中但运行时尚未接入。
+D1 的 `{表名}` 不是语法糖，是硬规则：SQL 里出现不带本插件前缀的表名会**直接抛错**，`sqlite_master`、加引号、加库名限定都拦，`ATTACH` / `PRAGMA` 整条拒绝。字符串字面量和注释里的内容不受影响，往库里塞 JSON 不会被误伤。
 
-跨插件共享能力不用共享存储：提供方声明 `services: { 名: (ctx) => 对象 }`，使用方声明 `depends: { 名: '*' }` 后 `ctx.service<类型>('名')`。depends 未满足会在安装时被拒绝。
+这么做有两个原因，第二个才是重点：一是插件之间不会撞表或误删；二是**框架凭前缀才知道你建过哪些表，卸载时才清得掉你的数据**。表名一旦逃出命名空间，那部分数据就永远变成没人管的孤儿。
+
+```ts
+await ctx.db.run('INSERT INTO {notes} (user_id, note, ts) VALUES (?, ?, ?)', id, note, Date.now())
+const rows = await ctx.db.all<Note>('SELECT * FROM {notes} WHERE user_id = ? ORDER BY ts DESC', id)
+```
+
+注意：**没有 onUpgrade 钩子**——升级版本不触发任何钩子，表结构/数据迁移请在 `onBoot` 里做惰性检查（`onInstall` 的 KV 标记保证它跨部署只跑一次）。`onEnable` / `onDisable` 已在契约中但运行时尚未接入；`onUninstall` 已接入，见下。
+
+### 卸载时的数据
+
+卸载会先调用你的 `hooks.onUninstall(ctx, { purgeData })`——趁插件代码还在这次部署里，给你一次收尾机会（前缀之外的东西、外部服务上的资源）。它抛错不会挡住后面的清理。
+
+之后框架按前缀兜底：`purgeData` 为真时删光你的 KV 键、R2 对象和 D1 表。**默认是 false**，数据留着；面板的存储页会把它标成孤儿，可以随时单独清掉。无论清不清数据，`onInstall` 的"已装过"标记都会删掉，所以重装一定会重新建表。
+
+### 要读别的插件的数据
+
+不要直接查它的表——查不到（前缀拦着），而且就算能查也不该查：直连是隐形依赖，对方改表结构或被卸载，你会静默坏掉，框架也看不见这层关系。
+
+正确做法是让数据的持有方导出 service：提供方声明 `services: { 名: (ctx) => 对象 }`，使用方声明 `depends: { 名: '*' }` 后 `ctx.service<类型>('名')`。这样依赖写在清单里，安装时会校验，面板上看得见。depends 未满足会在安装时被拒绝。
 
 ## 7. 定时任务与主动推送
 

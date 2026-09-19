@@ -70,9 +70,11 @@ pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
 | --- | --- |
 | `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins }`；`BUILD_TOKEN` 优先，未配置走管理鉴权 |
 | `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`；校验声明清单、撞名、conflicts、depends |
-| `DELETE /admin/manifest/plugins/:name` | 卸载（移出 D1 清单） |
+| `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）；`purge=true` 连插件数据一起清，默认保留 |
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |
 | `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit |
+| `GET /admin/storage` | 各插件占用的 KV 键数 / D1 表与行数 / R2 对象数与字节数，以及不属于任何已装插件的孤儿数据 |
+| `DELETE /admin/storage/orphans/:name` | 清掉某个已卸载插件的残留数据（对还装着的插件返回 409） |
 
 面板 → 插件页可以直接粘贴仓库链接安装（自动解析最新 commit）并查看构建记录；以上端点也可用 curl / 任意客户端调用。
 

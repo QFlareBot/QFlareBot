@@ -1,10 +1,15 @@
 import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
 import { createLogger } from './logger.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
+import { scopeSql, tablePrefix } from './sqlScope.js'
 import type { RuntimeEnv, Snapshot } from './types.js'
 
+/** 插件数据的键前缀。卸载时按它枚举并清理，见 purge.ts */
+export const kvPrefix = (plugin: string): string => `p:${plugin}:`
+export const r2Prefix = (plugin: string): string => `p/${plugin}/`
+
 function createScopedKV(kv: KVNamespace, name: string): ScopedKV {
-  const prefix = `p:${name}:`
+  const prefix = kvPrefix(name)
   return {
     get: (key) => kv.get(prefix + key),
     getJSON: <T>(key: string) => kv.get<T>(prefix + key, 'json'),
@@ -27,7 +32,7 @@ function createScopedKV(kv: KVNamespace, name: string): ScopedKV {
 }
 
 function createScopedR2(bucket: R2Bucket | undefined, name: string): ScopedR2 {
-  const prefix = `p/${name}/`
+  const prefix = r2Prefix(name)
   if (!bucket) {
     const missing = async (): Promise<never> => {
       throw new Error('未绑定 R2（wrangler.jsonc 的 r2_buckets），插件无法使用 ctx.r2')
@@ -90,28 +95,30 @@ function createScopedR2(bucket: R2Bucket | undefined, name: string): ScopedR2 {
 }
 
 function createScopedDB(db: D1Database | undefined, name: string): ScopedDB {
-  const prefix = `p_${name.replace(/[^a-zA-Z0-9_]/g, '_')}_`
+  const prefix = tablePrefix(name)
   if (!db) {
     const missing = async () => {
       throw new Error('未绑定 D1（wrangler.jsonc 的 d1_databases），插件无法使用 ctx.db')
     }
     return { table: (n) => prefix + n, exec: missing, run: missing, all: missing, first: missing }
   }
+  // 展开 {表名} 占位并拦下指向别处的表；见 sqlScope.ts
+  const scope = (sql: string): string => scopeSql(sql, prefix)
   return {
     table: (n) => prefix + n,
     async exec(sql) {
-      await db.exec(sql)
+      await db.exec(scope(sql))
     },
     async run(sql, ...params) {
-      const result = await db.prepare(sql).bind(...params).run()
+      const result = await db.prepare(scope(sql)).bind(...params).run()
       return { changes: result.meta.changes ?? 0 }
     },
     async all<T>(sql: string, ...params: unknown[]) {
-      const result = await db.prepare(sql).bind(...params).all<T & Record<string, unknown>>()
+      const result = await db.prepare(scope(sql)).bind(...params).all<T & Record<string, unknown>>()
       return result.results as T[]
     },
     async first<T>(sql: string, ...params: unknown[]) {
-      return (await db.prepare(sql).bind(...params).first<T & Record<string, unknown>>()) as T | null
+      return (await db.prepare(scope(sql)).bind(...params).first<T & Record<string, unknown>>()) as T | null
     },
   }
 }
