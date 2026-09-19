@@ -14,3 +14,6 @@ packages/ui/public/tokens.css
 
 # Claude Code 本地技能/配置，不进版本库
 .claude/
+
+# 本地工具状态目录，不进版本库
+.freebuff/
