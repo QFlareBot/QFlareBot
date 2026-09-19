@@ -1,4 +1,4 @@
-import { CloudflareBuildsApi } from '@qqbot/projector'
+import { CloudflareBuildsApi, type BuildRecord } from '@qqbot/projector'
 import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
@@ -164,11 +164,15 @@ function buildsApi(scope: RequestScope, deps: AdminDeps): CloudflareBuildsApi | 
   return new CloudflareBuildsApi({ accountId: CF_ACCOUNT_ID, apiToken: CF_BUILDS_TOKEN, fetchImpl: deps.options.fetchImpl })
 }
 
-function cfStatusToInstall(status: string): InstallRecord['status'] {
-  const v = status.toLowerCase()
-  if (v === 'success') return 'ok'
-  if (v === 'failed' || v === 'canceled' || v === 'cancelled') return 'failed'
-  return 'building'
+/**
+ * Builds API 的"完成与否"在 build_outcome（success/fail/skipped/cancelled/terminated），
+ * status 只有 queued/initializing/running/stopped——只看 status 会把完成的构建永远当"构建中"。
+ */
+function buildToInstallState(build: BuildRecord): { status: InstallRecord['status']; cfStatus: string | null } {
+  const outcome = build.build_outcome
+  if (outcome === 'success') return { status: 'ok', cfStatus: 'success' }
+  if (outcome) return { status: 'failed', cfStatus: outcome }
+  return { status: 'building', cfStatus: build.status ?? null }
 }
 
 /** POST /admin/builds —— 触发 Workers Builds 重建当前清单（body 可传 { branch }） */
@@ -217,6 +221,7 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
   const api = buildsApi(scope, deps)
   const { CF_WORKER_TAG } = scope.env
   let syncError: string | null = null
+  let byUuid: Map<string, BuildRecord> | null = null
   if (!api || !CF_WORKER_TAG) {
     // 装过插件但没有 Builds 凭据：状态永远同步不了，如实告知
     if (rows.some((r) => r.status === 'building' || r.status === 'pending')) {
@@ -225,29 +230,45 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
   } else if (rows.some((r) => r.buildUuid && (r.status === 'building' || r.status === 'pending'))) {
     try {
       const builds = await api.listBuilds(CF_WORKER_TAG)
-      const byUuid = new Map(builds.filter((b) => b.build_uuid).map((b) => [b.build_uuid!, b]))
-      for (const row of rows) {
-        if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
-        const build = byUuid.get(row.buildUuid)
-        if (!build?.status) continue
-        const next = cfStatusToInstall(build.status)
-        const commitHash = build.build_trigger_metadata?.commit_hash ?? null
-        if (next !== row.status || (commitHash && commitHash !== row.commitHash)) {
-          await updateInstallByBuildUuid(db, row.buildUuid, {
-            status: next,
-            cfStatus: build.status,
-            commitHash,
-            ...(next === 'failed' ? { error: `构建状态：${build.status}` } : {}),
-          })
-          row.status = next
-          row.cfStatus = build.status
-          row.commitHash = commitHash
-        }
-      }
+      byUuid = new Map(builds.filter((b) => b.build_uuid).map((b) => [b.build_uuid!, b]))
     } catch (err) {
       // 同步失败必须可见，否则账本会永远停在"构建中"（例如 CF_WORKER_TAG 填成了 worker 名字）
       syncError = err instanceof Error ? err.message : String(err)
       deps.logger.warn('构建状态同步失败', { error: syncError })
+    }
+  }
+
+  if (byUuid) {
+    for (const row of rows) {
+      if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
+      const build = byUuid.get(row.buildUuid)
+      if (!build) continue
+      const { status: next, cfStatus } = buildToInstallState(build)
+      const commitHash = build.build_trigger_metadata?.commit_hash ?? null
+      if (next !== row.status || (cfStatus && cfStatus !== row.cfStatus) || (commitHash && commitHash !== row.commitHash)) {
+        await updateInstallByBuildUuid(db, row.buildUuid, {
+          status: next,
+          cfStatus,
+          commitHash,
+          ...(next === 'failed' ? { error: `构建未成功：${cfStatus}` } : {}),
+        })
+        row.status = next
+        row.cfStatus = cfStatus
+        row.commitHash = commitHash
+      }
+    }
+    // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛——
+    // 多半是 CF_WORKER_TAG 配错（填成了名字，指向了别的 worker）
+    const NOT_FOUND_MS = 30 * 60 * 1000
+    for (const row of rows) {
+      if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
+      if (!byUuid.has(row.buildUuid) && Date.now() - row.ts > NOT_FOUND_MS) {
+        const message = 'Cloudflare 构建列表中找不到该构建：请检查 CF_WORKER_TAG 是否为 workers/scripts 返回的 tag（而不是名字）'
+        await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
+        row.status = 'failed'
+        row.cfStatus = 'not_found'
+        row.error = message
+      }
     }
   }
 

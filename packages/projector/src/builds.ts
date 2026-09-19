@@ -4,7 +4,10 @@ import { CloudflareApiError, type CloudflareApiMessage } from './cloudflare.js'
 export interface BuildRecord {
   build_uuid?: string
   uuid?: string
+  /** 运行阶段：queued / initializing / running / stopped——完成与否要看 build_outcome */
   status?: string
+  /** 终态结果：success / fail / skipped / cancelled / terminated；进行中为空 */
+  build_outcome?: string
   branch?: string
   created_at?: string
   build_trigger_metadata?: { branch?: string; commit_hash?: string }

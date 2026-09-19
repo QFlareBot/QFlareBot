@@ -55,7 +55,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       'raw.githubusercontent.com/me/qqbot-plugin-needy/c3d4e5f6a7/manifest.json': declaredManifest({ name: 'needy', depends: { greet: '*' } }),
       'raw.githubusercontent.com/me/qqbot-plugin-hello/f6a7b8c9d0/manifest.json': declaredManifest({ version: '2.0.0' }),
     },
-    [{ build_uuid: 'build-9', status: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
+    [{ build_uuid: 'build-9', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
   )
   const runtime = createRuntime({ plugins, fetchImpl })
   const env = createEnv({
@@ -237,5 +237,89 @@ describe('自部署触发与状态同步', () => {
     expect(res.status).toBe(502)
     const data = (await res.json()) as { error: string }
     expect(data.error).toContain('Invalid token')
+  })
+})
+
+describe('构建状态同步的真实形状', () => {
+  it('outcome 映射：success→ok、fail→failed、无 outcome（进行中）→building', async () => {
+    const buildsFixture = [
+      { build_uuid: 'b-ok', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'a'.repeat(40) } },
+      { build_uuid: 'b-fail', status: 'stopped', build_outcome: 'fail' },
+      { build_uuid: 'b-run', status: 'running' },
+    ]
+    const fetchImpl = createFetchMock({}, buildsFixture)
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({
+      DB: createManifestD1(),
+      CF_ACCOUNT_ID: 'acc',
+      CF_BUILDS_TOKEN: 'tok',
+      CF_WORKER_TAG: 'tag',
+      CF_TRIGGER_UUID: 'trig-1',
+    })
+    const { insertInstall, listInstalls } = await import('./manifestStore.js')
+    const db = env.DB!
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h1', status: 'building', buildUuid: 'b-ok' }, Date.now() - 60_000)
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h2', status: 'building', buildUuid: 'b-fail' }, Date.now() - 60_000)
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h3', status: 'building', buildUuid: 'b-run' }, Date.now() - 60_000)
+
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/builds`, { headers: { authorization: `Bearer ${ADMIN}` } }),
+      env,
+      createExecutionContext(),
+    )
+    const { builds } = (await res.json()) as { builds: Array<{ status: string; cfStatus: string | null; commitHash: string | null }> }
+    void builds
+    const rows = await import('./manifestStore.js').then((m) => m.listInstalls(db))
+    const map = new Map(rows.map((r) => [r.buildUuid, r]))
+    expect(map.get('b-ok')).toMatchObject({ status: 'ok', commitHash: 'a'.repeat(40), cfStatus: 'success' })
+    expect(map.get('b-fail')).toMatchObject({ status: 'failed', cfStatus: 'fail' })
+    expect(map.get('b-run')).toMatchObject({ status: 'building' })
+  })
+
+  it('构建列表中找不到且超过 30 分钟：收敛为失败并提示检查 CF_WORKER_TAG', async () => {
+    const fetchImpl = createFetchMock({}, [])
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({
+      DB: createManifestD1(),
+      CF_ACCOUNT_ID: 'acc',
+      CF_BUILDS_TOKEN: 'tok',
+      CF_WORKER_TAG: 'tag',
+      CF_TRIGGER_UUID: 'trig-1',
+    })
+    const { insertInstall } = await import('./manifestStore.js')
+    const db = env.DB!
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'ghost' }, Date.now() - 31 * 60 * 1000)
+
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/builds`, { headers: { authorization: `Bearer ${ADMIN}` } }),
+      env,
+      createExecutionContext(),
+    )
+    const { builds } = (await res.json()) as { builds: Array<{ status: string; error: string | null }> }
+    expect(builds[0]).toMatchObject({ status: 'failed' })
+    expect(builds[0]!.error).toContain('CF_WORKER_TAG')
+  })
+
+  it('列表中找不到但未满 30 分钟：保持构建中', async () => {
+    const fetchImpl = createFetchMock({}, [])
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({
+      DB: createManifestD1(),
+      CF_ACCOUNT_ID: 'acc',
+      CF_BUILDS_TOKEN: 'tok',
+      CF_WORKER_TAG: 'tag',
+      CF_TRIGGER_UUID: 'trig-1',
+    })
+    const { insertInstall } = await import('./manifestStore.js')
+    const db = env.DB!
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'ghost' }, Date.now() - 5 * 60 * 1000)
+
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/builds`, { headers: { authorization: `Bearer ${ADMIN}` } }),
+      env,
+      createExecutionContext(),
+    )
+    const { builds } = (await res.json()) as { builds: Array<{ status: string }> }
+    expect(builds[0]).toMatchObject({ status: 'building' })
   })
 })
