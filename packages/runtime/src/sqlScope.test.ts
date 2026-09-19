@@ -47,6 +47,16 @@ describe('占位符展开', () => {
       'CREATE TABLE p_hello_a (x); CREATE TABLE p_hello_b (y);',
     )
   })
+
+  it('SQLite UPSERT：ON CONFLICT ... DO UPDATE SET 里的 SET 不当表名查', () => {
+    expect(
+      scope(
+        'INSERT INTO {notes} (id, val) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET val = excluded.val, ts = excluded.ts;',
+      ),
+    ).toBe(
+      'INSERT INTO p_hello_notes (id, val) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET val = excluded.val, ts = excluded.ts;',
+    )
+  })
 })
 
 describe('越界的表名一律拒绝', () => {

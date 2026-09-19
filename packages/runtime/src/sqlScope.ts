@@ -139,8 +139,13 @@ export function scopeSql(sql: string, prefix: string): string {
         }
         stmt.expectTable = false
       } else if (TABLE_KEYWORDS.has(up)) {
-        stmt.expectTable = true
-        if (up === 'INDEX' || up === 'TRIGGER') stmt.onMeansTable = true
+        // SQLite UPSERT：ON CONFLICT ... DO UPDATE SET 里的 UPDATE 不是独立的 UPDATE 语句，后面紧跟 SET 而非表名
+        if (up === 'UPDATE' && stmt.recent[stmt.recent.length - 1]?.up === 'DO') {
+          stmt.expectTable = false
+        } else {
+          stmt.expectTable = true
+          if (up === 'INDEX' || up === 'TRIGGER') stmt.onMeansTable = true
+        }
       } else if (up === 'ON' && stmt.onMeansTable) {
         stmt.expectTable = true
       } else if (up === 'TO' && stmt.sawRename && !stmt.sawColumn) {
