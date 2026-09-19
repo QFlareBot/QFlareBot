@@ -8,6 +8,6 @@ ADMIN_TOKEN=随机长字符串
 # BUILD_TOKEN=随机长字符串
 # CF_ACCOUNT_ID=Cloudflare 账号 ID
 # CF_BUILDS_TOKEN=user-scoped API token（Workers Builds Configuration Edit + Workers Scripts Read）
-# CF_WORKER_TAG=Worker 的 tag（GET /accounts/.../workers/scripts 返回的 id）
+# CF_WORKER_TAG=Worker 的 tag（GET /accounts/.../workers/scripts 返回的 tag 字段，id 是名字）
 # CF_TRIGGER_UUID=Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers）
 # CF_BUILD_BRANCH=main
