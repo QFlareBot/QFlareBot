@@ -21,6 +21,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 必须先构建：包之间靠 dist/ 里的 .d.ts 互相引用（runtime 引 projector），
+      # 干净 clone 上直接 typecheck 会报 TS2307 找不到模块
+      - run: pnpm build
+
       - run: pnpm -r typecheck
       - run: pnpm test
 

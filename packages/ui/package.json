@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "dev": "cp ../ui-bridge/src/tokens.css public/tokens.css && vite",
-    "build": "cp ../ui-bridge/src/tokens.css public/tokens.css && vite build && node scripts/pack.mjs",
+    "build": "mkdir -p public && cp ../ui-bridge/src/tokens.css public/tokens.css && vite build && node scripts/pack.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
