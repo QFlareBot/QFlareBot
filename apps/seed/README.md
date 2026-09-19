@@ -52,7 +52,7 @@ pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
    | --- | --- |
    | `CF_ACCOUNT_ID` | Cloudflare 账号 ID |
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
-   | `CF_WORKER_TAG` | Worker 的 tag：`GET /accounts/{account_id}/workers/scripts` 返回的 `id`（不是名字） |
+   | `CF_WORKER_TAG` | Worker 的 tag：`GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错） |
    | `CF_TRIGGER_UUID` | `GET /accounts/{account_id}/builds/workers/{tag}/triggers` 返回的 `trigger_uuid` |
    | `CF_BUILD_BRANCH` | 可选，默认 `main` |
    | `BUILD_TOKEN` | 可选，同上第 3 步的 `MANIFEST_TOKEN` |
