@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronRight } from 'lucide-vue-next'
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { api } from '../api/client.js'
 import type { InstallRecord, PluginInfo } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
@@ -138,11 +138,21 @@ async function runUpdate(p: PluginInfo) {
   void refreshBuilds()
 }
 
-// —— 构建记录 ——
+// —— 构建记录：默认折叠，首次展开才拉取（顺带省一次状态同步调用） ——
 
+const buildsOpen = ref(false)
+const buildsLoaded = ref(false)
 const builds = ref<InstallRecord[]>([])
 const buildsLoading = ref(false)
 const buildsSyncError = ref('')
+
+function toggleBuilds() {
+  buildsOpen.value = !buildsOpen.value
+  if (buildsOpen.value && !buildsLoaded.value) {
+    buildsLoaded.value = true
+    void refreshBuilds()
+  }
+}
 
 async function refreshBuilds() {
   buildsLoading.value = true
@@ -156,7 +166,6 @@ async function refreshBuilds() {
     buildsLoading.value = false
   }
 }
-onMounted(() => void refreshBuilds())
 
 // —— 重新构建：重试失败的构建、或让插件吃上机器人仓库的新依赖 ——
 
@@ -217,28 +226,37 @@ function formatTs(ts: number): string {
       </QField>
     </QCard>
 
-    <QCard class="mt-4" title="构建记录" description="安装 / 升级 / 卸载 / 构建都会记录在这里，只保留最近 100 条">
+    <QCard
+      class="mt-4"
+      title="构建记录"
+      description="默认折叠，点右上角展开；安装 / 升级 / 卸载 / 构建都会记录，只保留最近 100 条"
+    >
       <template #actions>
         <QButton size="sm" variant="ghost" :loading="rebuilding" @click="rebuild">重新构建</QButton>
-        <QButton size="sm" variant="ghost" :loading="buildsLoading" @click="refreshBuilds">刷新</QButton>
+        <QButton size="sm" variant="ghost" :loading="buildsLoading && buildsOpen" @click="toggleBuilds">
+          {{ buildsOpen ? '收起' : '展开' }}
+        </QButton>
       </template>
-      <p v-if="buildsSyncError" class="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
-        构建状态同步失败：{{ buildsSyncError }}（请检查 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，其中 WORKER_TAG 是 scripts 列表返回的 tag 而不是名字）
-      </p>
-      <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点刷新同步构建状态。" />
-      <ul v-else class="divide-y divide-border">
-        <li v-for="b in builds" :key="b.id" class="flex items-center gap-2 px-4 py-2">
-          <QBadge :tone="STATUS_META[b.status].tone">{{ STATUS_META[b.status].label }}</QBadge>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2 text-sm">
-              <span class="font-medium text-fg">{{ ACTION_LABELS[b.action] }}{{ b.name ? ` ${b.name}` : '' }}</span>
-              <span v-if="b.commitHash" class="font-mono text-xs text-fg-subtle">{{ b.commitHash.slice(0, 7) }}</span>
+      <template v-if="buildsOpen">
+        <p v-if="buildsSyncError" class="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
+          构建状态同步失败：{{ buildsSyncError }}（请检查 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，其中 WORKER_TAG 是 scripts 列表返回的 tag 而不是名字）
+        </p>
+        <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点刷新同步构建状态。" />
+        <ul v-else class="divide-y divide-border">
+          <li v-for="b in builds" :key="b.id" class="flex items-center gap-2 px-4 py-2">
+            <QBadge :tone="STATUS_META[b.status].tone">{{ STATUS_META[b.status].label }}</QBadge>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <span class="font-medium text-fg">{{ ACTION_LABELS[b.action] }}{{ b.name ? ` ${b.name}` : '' }}</span>
+                <span v-if="b.commitHash" class="font-mono text-xs text-fg-subtle">{{ b.commitHash.slice(0, 7) }}</span>
+              </div>
+              <p class="truncate text-xs text-fg-muted">{{ b.error ?? b.source ?? '' }}</p>
             </div>
-            <p class="truncate text-xs text-fg-muted">{{ b.error ?? b.source ?? '' }}</p>
-          </div>
-          <span class="shrink-0 text-xs text-fg-subtle">{{ formatTs(b.ts) }}</span>
-        </li>
-      </ul>
+            <span class="shrink-0 text-xs text-fg-subtle">{{ formatTs(b.ts) }}</span>
+          </li>
+        </ul>
+      </template>
+      <p v-else class="text-xs text-fg-muted">已折叠——展开后查看记录并同步构建状态。</p>
     </QCard>
 
     <QCard class="mt-4" flush title="已装插件" description="构建上线后出现在这里；来自仓库内置清单的插件需改仓库后重建。点「检查更新」拉取插件源码仓库的最新提交">
