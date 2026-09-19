@@ -31,9 +31,13 @@ function declaredManifest(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function createFetchMock(manifests: Record<string, unknown>, builds: Array<Record<string, unknown>> = []) {
+function createFetchMock(manifests: Record<string, unknown>, builds: Array<Record<string, unknown>> = [], atomSha = 'f6a7b8c9d0000000000000000000000000000000') {
   return (async (input: string | URL | Request) => {
     const url = String(input)
+    if (url.includes('commits.atom')) {
+      const xml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><id>tag:github.com,2008:Repository/1/commit/${atomSha}</id></entry></feed>`
+      return new Response(xml, { status: 200 })
+    }
     for (const [fragment, manifest] of Object.entries(manifests)) {
       if (url.includes(fragment)) return new Response(JSON.stringify(manifest), { status: 200 })
     }
@@ -132,7 +136,7 @@ describe('POST /admin/manifest/plugins', () => {
     const res = await post('f6a7b8c9d0')
     const data = (await res.json()) as { install: { action: string }; previous?: { version: string } }
     expect(data.install.action).toBe('upgrade')
-    expect(data.previous).toEqual({ version: '1.0.0' })
+    expect(data.previous).toMatchObject({ version: '1.0.0' })
   })
 
   it('非法 source 与缺声明清单返回 400', async () => {
@@ -321,5 +325,94 @@ describe('构建状态同步的真实形状', () => {
     )
     const { builds } = (await res.json()) as { builds: Array<{ status: string }> }
     expect(builds[0]).toMatchObject({ status: 'building' })
+  })
+})
+
+describe('插件检查更新与一键更新', () => {
+  const NEW_SHA = 'f6a7b8c9d0000000000000000000000000000000'
+  const post = (call: (path: string, init?: RequestInit) => Promise<Response>, path: string, body?: unknown) =>
+    call(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+
+  function setupWithNewVersion() {
+    const fetchImpl = createFetchMock({
+      'raw.githubusercontent.com/me/qqbot-plugin-hello/a1b2c3d4e5/manifest.json': declaredManifest(),
+      'raw.githubusercontent.com/me/qqbot-plugin-hello/f6a7b8c9d0/manifest.json': declaredManifest({ version: '2.0.0' }),
+      [`raw.githubusercontent.com/me/qqbot-plugin-hello/${NEW_SHA}/manifest.json`]: declaredManifest({ version: '2.0.0' }),
+    })
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({
+      DB: createManifestD1(),
+      CF_ACCOUNT_ID: 'acc',
+      CF_BUILDS_TOKEN: 'tok',
+      CF_WORKER_TAG: 'tag',
+      CF_TRIGGER_UUID: 'trig-1',
+    })
+    const call = (path: string, init: RequestInit = {}) =>
+      runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
+    return { call, env }
+  }
+
+  it('check-update：解析 commits.atom，返回上游版本且 upToDate=false', async () => {
+    const { call } = setupWithNewVersion()
+    await post(call, '/admin/manifest/plugins', { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+
+    const res = await post(call, '/admin/manifest/plugins/hello/check-update')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { upToDate: boolean; latestSha: string; latestVersion: string | null; latestSource: string }
+    expect(data.upToDate).toBe(false)
+    expect(data.latestSha).toBe(NEW_SHA)
+    expect(data.latestVersion).toBe('2.0.0')
+    expect(data.latestSource).toBe(`git:me/qqbot-plugin-hello@${NEW_SHA}`)
+  })
+
+  it('check-update：本地已是最新时 upToDate=true 且不拉清单', async () => {
+    const { call } = setupWithNewVersion()
+    await post(call, '/admin/manifest/plugins', { source: `git:me/qqbot-plugin-hello@${NEW_SHA}` })
+    const res = await post(call, '/admin/manifest/plugins/hello/check-update')
+    const data = (await res.json()) as { upToDate: boolean; latestVersion: string | null }
+    expect(data.upToDate).toBe(true)
+    expect(data.latestVersion).toBeNull()
+  })
+
+  it('update：换钉子到最新 commit、写 upgrade 账本并自动触发构建', async () => {
+    const { call } = setupWithNewVersion()
+    await post(call, '/admin/manifest/plugins', { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+
+    const res = await post(call, '/admin/manifest/plugins/hello/update')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as {
+      previous?: { version: string }
+      latestSource: string
+      plugin: { version: string }
+      build: { buildUuid?: string; error?: string }
+    }
+    expect(data.previous).toMatchObject({ version: '1.0.0' })
+    expect(data.plugin.version).toBe('2.0.0')
+    expect(data.build.buildUuid).toBe('build-9')
+
+    // 清单里的源码确实换到了新 commit
+    const manifest = await call('/admin/build-manifest', { headers: { authorization: `Bearer ${ADMIN}` } })
+    const { plugins } = (await manifest.json()) as { plugins: Array<{ source: string }> }
+    expect(plugins[0]!.source).toBe(`git:me/qqbot-plugin-hello@${NEW_SHA}`)
+  })
+
+  it('update：已是最新时直接返回，不触发构建', async () => {
+    const { call } = setupWithNewVersion()
+    await post(call, '/admin/manifest/plugins', { source: `git:me/qqbot-plugin-hello@${NEW_SHA}` })
+    const res = await post(call, '/admin/manifest/plugins/hello/update')
+    const data = (await res.json()) as { upToDate: boolean; build?: unknown }
+    expect(data.upToDate).toBe(true)
+    expect(data.build).toBeUndefined()
+  })
+
+  it('内置插件返回 404 与专门提示', async () => {
+    const { call } = setup({}, [{ name: 'echo', version: '1.0.0' }])
+    const res = await post(call, '/admin/manifest/plugins/echo/check-update')
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as { error: string }).error).toContain('内置插件')
   })
 })

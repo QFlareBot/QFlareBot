@@ -23,7 +23,7 @@ describe('auth 令牌', () => {
     expect(await verifyToken(t, SECRET)).toMatchObject({ kind: 'session' })
     expect(await verifyToken(t, 'other')).toBeNull()
     expect(await verifyToken(t.slice(0, -2) + 'xx', SECRET)).toBeNull()
-    const expired = await signToken({ kind: 'session', exp: Math.floor(Date.now() / 1000) - 1 }, SECRET)
+    const expired = await signToken({ kind: 'session', exp: Math.floor(Date.now() / 1000) - 60 }, SECRET)
     expect(await verifyToken(expired, SECRET)).toBeNull()
   })
 

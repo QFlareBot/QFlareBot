@@ -2,11 +2,13 @@ import { QQBotClient, createTokenProvider, type WebhookPayload } from '@qqbot/ap
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
+  checkPluginUpdate,
   handleBuildManifest,
   installManifestPlugin,
   listBuildsStatus,
   triggerBuild,
   uninstallManifestPlugin,
+  updatePlugin,
 } from './adminManifest.js'
 import { purgeOrphan, storageReport } from './adminStorage.js'
 import { validateConfig } from './configSchema.js'
@@ -131,6 +133,8 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
  * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
  * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）
+ * POST /admin/manifest/plugins/:name/check-update  解析上游仓库最新 commit，只查不装
+ * POST /admin/manifest/plugins/:name/update        升级到上游最新 commit 并自动触发构建
  * DELETE /admin/manifest/plugins/:name[?purge=true]  卸载插件（移出 D1 清单；purge=true 连数据一起清）
  * GET  /admin/storage               各插件的 KV/D1/R2 占用，以及不属于任何已装插件的孤儿数据
  * DELETE /admin/storage/orphans/:name  清掉某个已卸载插件的残留数据
@@ -206,6 +210,10 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   }
 
   if (sub === '/manifest/plugins' && method === 'POST') return installManifestPlugin(request, scope, deps)
+  const checkUpdate = matchPath('/manifest/plugins/:name/check-update', sub)
+  if (checkUpdate && method === 'POST') return checkPluginUpdate(checkUpdate.name!, scope, deps)
+  const pluginUpdate = matchPath('/manifest/plugins/:name/update', sub)
+  if (pluginUpdate && method === 'POST') return updatePlugin(pluginUpdate.name!, scope, deps)
   const manifestRemove = matchPath('/manifest/plugins/:name', sub)
   if (manifestRemove && method === 'DELETE') {
     const purge = url.searchParams.get('purge') === 'true'

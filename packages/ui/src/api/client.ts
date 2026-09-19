@@ -82,6 +82,21 @@ export const api = {
   qqMenu: () => request<{ ok: boolean; status: number; data: unknown }>('GET', '/qq/menu'),
   saveQQMenu: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('PUT', '/qq/menu', body),
   installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
+  checkPluginUpdate: (name: string) =>
+    request<{ ok: true; name: string; current: string; latestSha: string; latestVersion: string | null; upToDate: boolean; latestSource?: string }>(
+      'POST',
+      `/manifest/plugins/${encodeURIComponent(name)}/check-update`,
+    ),
+  updatePlugin: (name: string) =>
+    request<{
+      ok: true
+      name: string
+      upToDate?: boolean
+      previous?: { version: string }
+      latestSource?: string
+      install?: { status: string }
+      build?: { buildUuid?: string; error?: string }
+    }>('POST', `/manifest/plugins/${encodeURIComponent(name)}/update`),
   triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),
   builds: () => request<{ ok: true; builds: InstallRecord[]; syncError?: string }>('GET', '/builds'),
   /** purge 为真时连插件数据一起清；默认保留，之后会在存储页列为孤儿 */

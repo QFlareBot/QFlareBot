@@ -64,6 +64,8 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接（等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}` 后再 `POST /admin/builds` 触发构建）。构建机拉源码编译，声明清单与源码不一致会直接失败。
 
+安装记录钉在具体 commit 上——推了新代码不会自动生效。面板里点插件的「检查更新 / 更新到 vX.Y.Z」（`POST /admin/manifest/plugins/:name/check-update` 与 `/update`）会解析上游默认分支最新 commit、就地升级并自动触发构建；私有仓库不支持自动解析，更新时手贴新 commit 的 git: 链接。
+
 ## 2. 规则
 
 - **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。`cloudflare:workers` 需在处理器内部 `import()`。

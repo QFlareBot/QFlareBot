@@ -91,6 +91,53 @@ async function install() {
   void refreshBuilds()
 }
 
+// —— 插件检查更新与一键更新 ——
+
+const availableUpdate = ref<Record<string, string>>({})
+const checkedLatest = ref<Record<string, boolean>>({})
+const checking = ref('')
+const updating = ref('')
+
+async function checkUpdate(p: PluginInfo) {
+  checking.value = p.name
+  try {
+    const res = await api.checkPluginUpdate(p.name)
+    if (res.upToDate) {
+      checkedLatest.value[p.name] = true
+      push(`${p.displayName} 已是最新`, 'success')
+    } else {
+      availableUpdate.value[p.name] = res.latestVersion ?? '新版本'
+      push(`${p.displayName} 有更新：${p.version} → ${res.latestVersion ?? '新版本'}`, 'success')
+    }
+  } catch (e) {
+    delete checkedLatest.value[p.name]
+    push((e as Error).message, 'error')
+  } finally {
+    checking.value = ''
+  }
+}
+
+async function runUpdate(p: PluginInfo) {
+  updating.value = p.name
+  try {
+    const res = await api.updatePlugin(p.name)
+    if (res.upToDate) {
+      push(`${p.displayName} 已是最新`, 'success')
+    } else if (res.build?.buildUuid) {
+      push(`${p.displayName} 已更新并触发构建，上线后版本号会变化`, 'success')
+      delete availableUpdate.value[p.name]
+    } else {
+      push(`${p.displayName} 源码已更新，但触发构建失败：${res.build?.error ?? '未知原因'}`, 'warning')
+    }
+    void refresh()
+  } catch (e) {
+    push((e as Error).message, 'error')
+  } finally {
+    updating.value = ''
+  }
+  void refreshBuilds()
+}
+
 // —— 构建记录 ——
 
 const builds = ref<InstallRecord[]>([])
@@ -194,7 +241,7 @@ function formatTs(ts: number): string {
       </ul>
     </QCard>
 
-    <QCard class="mt-4" flush title="已装插件" description="构建上线后出现在这里；来自仓库内置清单的插件需改仓库后重建">
+    <QCard class="mt-4" flush title="已装插件" description="构建上线后出现在这里；来自仓库内置清单的插件需改仓库后重建。点「检查更新」拉取插件源码仓库的最新提交">
       <QEmpty v-if="!plugins.length" title="没有已安装的插件" description="在上方粘贴插件仓库链接安装，或在 apps/seed 的清单里加入内置插件。" />
       <ul v-else class="divide-y divide-border">
         <li v-for="p in plugins" :key="p.name" class="flex items-center gap-2 pr-2 pl-4">
@@ -207,12 +254,31 @@ function formatTs(ts: number): string {
                 <QBadge v-if="p.error" tone="danger">加载失败</QBadge>
                 <QBadge v-else-if="!p.enabled" tone="neutral">已禁用</QBadge>
                 <QBadge v-if="p.ui" tone="accent">有页面</QBadge>
+                <QBadge v-if="availableUpdate[p.name]" tone="warning">可更新到 {{ availableUpdate[p.name] }}</QBadge>
               </div>
               <p class="truncate text-xs text-fg-muted">{{ p.error ?? p.description ?? summary(p).join(' · ') }}</p>
             </div>
             <span class="hidden text-xs text-fg-subtle sm:block">{{ summary(p).join(' · ') }}</span>
-            <ChevronRight class="size-4 shrink-0 text-fg-subtle" aria-hidden="true" />
           </RouterLink>
+          <QButton
+            v-if="availableUpdate[p.name]"
+            size="sm"
+            variant="primary"
+            :loading="updating === p.name"
+            @click="runUpdate(p)"
+          >
+            更新到 {{ availableUpdate[p.name] }}
+          </QButton>
+          <QButton
+            v-else
+            size="sm"
+            variant="ghost"
+            :loading="checking === p.name"
+            @click="checkUpdate(p)"
+          >
+            {{ checkedLatest[p.name] ? '已是最新' : '检查更新' }}
+          </QButton>
+          <ChevronRight class="size-4 shrink-0 text-fg-subtle" aria-hidden="true" />
         </li>
       </ul>
     </QCard>

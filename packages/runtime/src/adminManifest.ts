@@ -83,23 +83,37 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
   const body = await readJson<{ source?: string }>(request)
   const source = body?.source?.trim()
   if (!source) return error('需要 source，例如 git:owner/repo@a1b2c3d4e5', 400)
+  const out = await installFromSource(source, scope, deps)
+  if (!out.ok) return error(out.error, out.status)
+  return json({ ok: true, plugin: out.plugin, ...(out.previous ? { previous: out.previous } : {}), hash: out.hash, install: out.install })
+}
+
+type InstallOutcome =
+  | { ok: true; plugin: ManifestPluginEntry; previous?: { version: string }; hash: string; install: InstallRecord }
+  | { ok: false; error: string; status: number }
+
+/** 安装/升级一个 git 来源的插件：拉声明清单校验、冲突与依赖检查、写入 D1 并记一条 pending 账本 */
+async function installFromSource(source: string, scope: RequestScope, deps: AdminDeps): Promise<InstallOutcome> {
+  const db = await requireDb(scope)
+  if (!db) return { ok: false, error: '未绑定 D1，无法安装插件', status: 503 }
+
   const git = parseGitSource(source)
-  if (!git) return error(`source 需为 git:<owner>/<repo>@<commit>[#<子目录>] 格式：${source}`, 400)
+  if (!git) return { ok: false, error: `source 需为 git:<owner>/<repo>@<commit>[#<子目录>] 格式：${source}`, status: 400 }
 
   const declared = await fetchDeclaredManifest(git, deps.options.fetchImpl)
-  if (typeof declared === 'string') return error(declared, 400)
+  if (typeof declared === 'string') return { ok: false, error: declared, status: 400 }
   const problems = validateManifest(declared)
-  if (problems.length > 0) return error(`声明清单非法：${problems.join('；')}`, 400)
+  if (problems.length > 0) return { ok: false, error: `声明清单非法：${problems.join('；')}`, status: 400 }
 
   const installed = await listManifestPlugins(db)
   const registryNames = new Set(deps.registry.all().map((p) => p.manifest.name))
   const allNames = new Set<string>([...installed.map((p) => p.name), ...registryNames])
 
   const conflict = (declared.conflicts ?? []).find((c) => allNames.has(c))
-  if (conflict) return error(`安装 ${declared.name} 与已装插件冲突：${declared.name} conflicts ${conflict}`, 409)
+  if (conflict) return { ok: false, error: `安装 ${declared.name} 与已装插件冲突：${declared.name} conflicts ${conflict}`, status: 409 }
   const missingDeps = Object.keys(declared.depends ?? {}).filter((d) => !allNames.has(d) && !deps.registry.providerOf(d))
   if (missingDeps.length > 0) {
-    return error(`依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`, 400)
+    return { ok: false, error: `依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`, status: 400 }
   }
 
   const existing = installed.find((p) => p.name === declared.name)
@@ -113,7 +127,84 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
     manifestHash: hash,
     status: 'pending',
   })
-  return json({ ok: true, plugin: entry, ...(existing ? { previous: { version: existing.version } } : {}), hash, install })
+  return { ok: true, plugin: entry, ...(existing ? { previous: { version: existing.version } } : {}), hash, install }
+}
+
+/**
+ * 从仓库的 commits.atom 解析默认分支最新 commit。
+ * 不走匿名 GitHub API：Workers 共享出口 IP，60 次/小时的限额会被打爆；atom feed 宽松且无需鉴权。
+ * 私有仓库的 atom 401，只能手贴 git: 链接。
+ */
+export async function resolveLatestCommit(owner: string, repo: string, fetchImpl: typeof fetch): Promise<string> {
+  const res = await fetchImpl(`https://github.com/${owner}/${repo}/commits.atom`, { redirect: 'follow' })
+  if (!res.ok) {
+    throw new Error(`拉取 ${owner}/${repo} 的 commits.atom 失败（HTTP ${res.status}）。私有仓库不支持自动检查更新，请直接粘贴 git:owner/repo@commit`)
+  }
+  const xml = await res.text()
+  const firstEntry = /<entry>[\s\S]*?<\/entry>/.exec(xml)?.[0] ?? ''
+  const sha = /commit\/([0-9a-f]{40})<\/id>/i.exec(firstEntry)?.[1]
+  if (!sha) throw new Error('commits.atom 里没有解析到 commit——仓库是空的？')
+  return sha
+}
+
+/** POST /admin/manifest/plugins/:name/check-update —— 解析上游最新 commit，只查不装 */
+export async function checkPluginUpdate(name: string, scope: RequestScope, deps: AdminDeps): Promise<Response> {
+  const db = await requireDb(scope)
+  if (!db) return error('未绑定 D1，无法检查更新', 503)
+  const existing = await getManifestPlugin(db, name)
+  if (!existing) return error(`未安装或为仓库内置插件（内置插件请改仓库后重新构建）：${name}`, 404)
+  const git = parseGitSource(existing.source)
+  if (!git) return error(`来源不是 git 形式，无法自动检查更新：${existing.source}`, 400)
+
+  let latestSha: string
+  try {
+    latestSha = await resolveLatestCommit(git.owner, git.repo, deps.options.fetchImpl)
+  } catch (err) {
+    return error((err as Error).message, 502)
+  }
+  const latestSource = `git:${git.owner}/${git.repo}@${latestSha}${git.subdir ? `#${git.subdir}` : ''}`
+  const upToDate = latestSha === git.sha
+  let latestVersion: string | null = null
+  if (!upToDate) {
+    const declared = await fetchDeclaredManifest({ ...git, sha: latestSha }, deps.options.fetchImpl)
+    if (typeof declared !== 'string') latestVersion = declared.version
+  }
+  return json({ ok: true, name, current: existing.source, latestSha, latestVersion, upToDate, latestSource })
+}
+
+/** POST /admin/manifest/plugins/:name/update —— 升级到上游最新 commit 并自动触发构建 */
+export async function updatePlugin(name: string, scope: RequestScope, deps: AdminDeps): Promise<Response> {
+  const db = await requireDb(scope)
+  if (!db) return error('未绑定 D1，无法更新插件', 503)
+  const existing = await getManifestPlugin(db, name)
+  if (!existing) return error(`未安装或为仓库内置插件（内置插件请改仓库后重新构建）：${name}`, 404)
+  const git = parseGitSource(existing.source)
+  if (!git) return error(`来源不是 git 形式，无法自动更新：${existing.source}`, 400)
+
+  let latestSha: string
+  try {
+    latestSha = await resolveLatestCommit(git.owner, git.repo, deps.options.fetchImpl)
+  } catch (err) {
+    return error((err as Error).message, 502)
+  }
+  if (latestSha === git.sha) return json({ ok: true, name, upToDate: true, current: existing.source })
+
+  const latestSource = `git:${git.owner}/${git.repo}@${latestSha}${git.subdir ? `#${git.subdir}` : ''}`
+  const outcome = await installFromSource(latestSource, scope, deps)
+  if (!outcome.ok) return error(outcome.error, outcome.status)
+
+  // 就地触发构建：换钉子之后不构建，新版永远不会上线
+  const build = await triggerProjectionBuild(scope, deps)
+  return json({
+    ok: true,
+    name,
+    upToDate: false,
+    previous: { version: existing.version, source: existing.source },
+    latestSource,
+    plugin: outcome.plugin,
+    install: outcome.install,
+    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
+  })
 }
 
 /**
@@ -175,29 +266,31 @@ function buildToInstallState(build: BuildRecord): { status: InstallRecord['statu
   return { status: 'building', cfStatus: build.status ?? null }
 }
 
-/** POST /admin/builds —— 触发 Workers Builds 重建当前清单（body 可传 { branch }） */
-export async function triggerBuild(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
+/** 触发一次 Workers Build 重建当前清单；build 端点与插件一键更新共用 */
+async function triggerProjectionBuild(
+  scope: RequestScope,
+  deps: AdminDeps,
+  branch?: string,
+): Promise<{ ok: true; buildUuid: string; branch: string; hash: string; install: InstallRecord } | { ok: false; error: string; status: number }> {
   const env = scope.env
   const missing = (['CF_ACCOUNT_ID', 'CF_BUILDS_TOKEN', 'CF_WORKER_TAG', 'CF_TRIGGER_UUID'] as const).filter((k) => !env[k])
   if (missing.length > 0) {
-    return error(`自部署未配置，缺少环境变量：${missing.join('、')}（设置步骤见 seed README）`, 503)
+    return { ok: false, status: 503, error: `自部署未配置，缺少环境变量：${missing.join('、')}（设置步骤见 seed README）` }
   }
   const db = await requireDb(scope)
-  if (!db) return error('未绑定 D1，无法记录构建', 503)
+  if (!db) return { ok: false, status: 503, error: '未绑定 D1，无法记录构建' }
 
-  const body = await readJson<{ branch?: string }>(request).catch(() => null)
-  const branch = body?.branch?.trim() || env.CF_BUILD_BRANCH || 'main'
   const hash = await manifestHash(await listManifestPlugins(db))
-
   const api = buildsApi(scope, deps)
-  if (!api) return error('自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN', 503)
+  if (!api) return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN' }
+  const branchName = branch ?? env.CF_BUILD_BRANCH ?? 'main'
   let buildUuid: string
   try {
-    ;({ buildUuid } = await api.triggerBuild(env.CF_TRIGGER_UUID!, { branch }))
+    ;({ buildUuid } = await api.triggerBuild(env.CF_TRIGGER_UUID!, { branch: branchName }))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: message })
-    return error(`触发构建失败：${message}`, 502)
+    return { ok: false, status: 502, error: `触发构建失败：${message}` }
   }
 
   await markPendingBuilding(db, hash, buildUuid)
@@ -209,7 +302,15 @@ export async function triggerBuild(request: Request, scope: RequestScope, deps: 
     status: 'building',
     buildUuid,
   })
-  return json({ ok: true, buildUuid, branch, hash, install })
+  return { ok: true, buildUuid, branch: branchName, hash, install }
+}
+
+/** POST /admin/builds —— 触发 Workers Builds 重建当前清单（body 可传 { branch }） */
+export async function triggerBuild(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
+  const body = await readJson<{ branch?: string }>(request).catch(() => null)
+  const out = await triggerProjectionBuild(scope, deps, body?.branch?.trim() || undefined)
+  if (!out.ok) return error(out.error, out.status)
+  return json({ ok: true, buildUuid: out.buildUuid, branch: out.branch, hash: out.hash, install: out.install })
 }
 
 /** GET /admin/builds —— 安装/构建账本；配置了 CF_* 时顺带同步进行中构建的状态与 commit */
