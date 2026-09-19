@@ -128,9 +128,18 @@ export interface GroupInfo {
   [key: string]: unknown
 }
 
-/** 入群自动审批策略；平台字段透传（请求/响应字段待实测后收紧） */
+/**
+ * 入群自动审批策略：命中白名单号码的入群申请自动通过。
+ * 一个机器人最多 20 个策略；仅当机器人在关联群拥有管理员身份时策略才会运行。
+ * 请求/响应字段为官方文档（2026-09 核对）。
+ */
 export interface JoinApprovalStrategy {
-  group_openid?: string
+  strategy_id?: string
+  is_enable?: 'on' | 'off' | string
+  expire_at?: string
+  remark?: string
+  group_openids?: string[]
+  group_ids?: Array<number | string>
   [key: string]: unknown
 }
 
@@ -160,8 +169,37 @@ export interface GroupApi {
   botState(groupOpenid: string): Promise<Record<string, unknown>>
   /** 查询入群自动审批策略列表（平台标注内邀）；游标分页 */
   joinStrategies(cursor?: string): Promise<{ strategies: JoinApprovalStrategy[]; nextCursor: string }>
-  /** 为群设置/更新入群自动审批策略；strategy 字段按平台文档透传 */
-  setJoinStrategy(groupOpenid: string, strategy: JoinApprovalStrategy): Promise<void>
+  /**
+   * 创建入群自动审批策略：`groupOpenids` 与 `groupIds` 二选一必填（互斥，≤100 个）。
+   * 不传 `expireAt` 平台默认一年过期；默认启用。返回服务端生成的 `strategyId`。
+   */
+  createJoinStrategy(input: {
+    groupOpenids?: string[]
+    groupIds?: Array<number | string>
+    isEnable?: 'on' | 'off'
+    expireAt?: Date | string
+    remark?: string
+  }): Promise<{ strategyId: string; isEnable?: string; expireAt?: string }>
+  /** 修改策略：启停、过期时间、备注或增删关联群 */
+  updateJoinStrategy(
+    strategyId: string,
+    patch: {
+      isEnable?: 'on' | 'off'
+      expireAt?: Date | string
+      remark?: string
+      groupAction?: { op: 'add' | 'del'; groupOpenids?: string[]; groupIds?: Array<number | string> }
+    },
+  ): Promise<{ isEnable?: string; expireAt?: string }>
+  /** 删除策略 */
+  deleteJoinStrategy(strategyId: string): Promise<void>
+  /** 对策略关联的全部群发起全量扫描（异步，约 10 分钟完成） */
+  executeJoinStrategy(strategyId: string): Promise<void>
+  /** 批量增删策略的白名单 QQ 号码（单次 ≤10000） */
+  updateJoinStrategyWhitelist(
+    strategyId: string,
+    op: 'add' | 'del',
+    qqNumbers: string[],
+  ): Promise<{ whitelistUserCount?: number; updatedAt?: string }>
   /** 逐页拉取成员，每页最多 30 */
   members(groupOpenid: string, cursor?: string): Promise<{ members: GroupMember[]; nextCursor: string }>
   member(groupOpenid: string, memberOpenid: string): Promise<GroupMember>

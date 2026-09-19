@@ -55,7 +55,7 @@
 | 接口 | 方法 |
 | --- | --- |
 | 群信息 / 机器人群内状态 | `info(g)`（`GroupInfo`）/ `botState(g)` |
-| 入群自动审批策略 查询 / 设置 | `joinStrategies()` / `setJoinStrategy(g, strategy)`（平台字段透传，平台标注内邀） |
+| **入群自动审批策略**（白名单号码自动过审；机器人 ≤20 个策略，需有群管理员身份才运行；2026-09 实测闭环） | `joinStrategies(cursor?)` / `createJoinStrategy()` / `updateJoinStrategy()` / `deleteJoinStrategy()` / `executeJoinStrategy()` / `updateJoinStrategyWhitelist()` | 创建时 `groupOpenids` 与 `groupIds` 二选一（≤100）；`isEnable` on/off；不传 `expireAt` 默认一年 |
 | 成员列表（游标分页，每页 30） / 成员信息 | `members(g, cursor)` / `member(g, m)` |
 | 批量移除（≤20，可同时拉黑） | `removeMembers(g, ids, { addToBlacklist })` |
 | 黑名单查询 / 操作 | `blacklist(g)` / `updateBlacklist(g, 'add' \| 'del', ids)` |
@@ -72,7 +72,7 @@
 | --- | --- | --- | --- |
 | **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：从已启用插件的命令一键生成请求体，声明了 `permission` 的命令自动带 `only_admin: true` |
 | **分享/邀请链接**（点击直达机器人会话；请求体可为空，响应 `{ retcode, msg, data: { url } }`） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接 |
-| 自定义菜单（**仅单聊**，全局一份；`menu.items` ≤10：switch/send_message/link/menu，子菜单 ≤5，PUT 5 QPM） | `GET/PUT /v2/menu` | 暂 raw | — |
+| **自定义菜单**（仅单聊，全局一份；`menu.items` ≤10：switch/send_message/link/menu，子菜单 ≤5，PUT 5 QPM） | `GET/PUT /v2/menu` | `GET` / `PUT /admin/qq/menu` | 设置 → 自定义菜单（查看回填 + JSON 编辑保存） |
 | 频道 API 权限申请 | — | 暂 raw | — |
 
 指令面板创建请求体（官方 schema 摘录）：`{ scope, target_type?, group_openids?/user_openids?, panel: { items: [{ type: 'command'|'link', name, desc, only_admin?, link? }], remark?, version? } }` → 响应 `{ panel_id }`。`target_type=specific`（仅 c2c/group）配合 openid 列表可按群/用户定点生效。列表查询响应 `{ records: PanelRecord[], next_cursor, is_end }`。`items[].name` ≤14 字符、`desc` ≤30 字符。
@@ -87,5 +87,4 @@
 - `api.bot.qq.com` 为文档统一域名（2026-08-10 起），已确认与 `api.sgroup.qq.com` 同网关；如需回退可传 `baseUrl`。
 - 群管理接口按文档字段实现，未在有管理员权限的群里实测。
 - 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此按钮回调暂不鉴权。
-- `group.info` 与 `join_approval_strategy` 的**查询**响应已于 2026-09 实测核对；审批策略的**设置**（PUT）请求体字段仍待实测。
-- 指令面板与 `generate_url_link` 的字段已实测核对；自定义菜单 schema 已从官方文档取得但尚未接入面板。
+- 入群自动审批策略已于 2026-09 实测完整闭环（创建关闭态策略 → 列表 → 白名单 → 删除，线上状态已还原）；自定义菜单的 PUT 已接入（schema 与 GET 同源），未单独线上回写验证。

@@ -160,6 +160,40 @@ async function createLink() {
     urlLinkBusy.value = false
   }
 }
+
+// —— 自定义菜单：仅单聊场景、全局一份，PUT 整体覆盖（5 QPM）——
+
+const menuBody = ref('')
+const menuResult = ref('')
+const menuBusy = ref(false)
+
+async function viewMenu() {
+  menuBusy.value = true
+  menuResult.value = ''
+  try {
+    const res = await api.qqMenu()
+    menuResult.value = JSON.stringify(res, null, 2)
+    if (res.ok && (res.data as { menu?: object }).menu) menuBody.value = JSON.stringify({ menu: (res.data as { menu: object }).menu }, null, 2)
+  } catch (e) {
+    menuResult.value = String((e as Error).message)
+  } finally {
+    menuBusy.value = false
+  }
+}
+
+async function saveMenu() {
+  menuBusy.value = true
+  menuResult.value = ''
+  try {
+    const res = await api.saveQQMenu(JSON.parse(menuBody.value))
+    menuResult.value = JSON.stringify(res, null, 2)
+    push(res.ok ? '菜单已保存' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
+  } catch (e) {
+    menuResult.value = String((e as Error).message)
+  } finally {
+    menuBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -237,6 +271,22 @@ async function createLink() {
             </QField>
             <div><QButton type="submit" variant="primary" :loading="urlLinkBusy">生成链接</QButton></div>
             <pre v-if="urlLinkResult" class="max-h-40 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ urlLinkResult }}</pre>
+          </form>
+        </QCard>
+
+        <QCard
+          title="自定义菜单"
+          description="单聊会话里的快捷入口（仅单聊场景，全局一份，保存即整体覆盖）。items ≤10；type 支持 send_message / link / switch / menu（子菜单 ≤5）；name ≤10 字符。"
+        >
+          <form class="flex flex-col gap-3" @submit.prevent="saveMenu">
+            <QField id="menu-body" label="菜单配置（JSON，可编辑）" hint="示例：{ 'menu': { 'items': [ { 'type': 'send_message', 'name': '帮助', 'send_message': '/help' } ] } }">
+              <template #default="{ describedBy }"><QTextarea id="menu-body" v-model="menuBody" mono :rows="10" :described-by="describedBy" /></template>
+            </QField>
+            <div class="flex gap-2">
+              <QButton type="button" variant="secondary" :loading="menuBusy" @click="viewMenu">查看当前菜单</QButton>
+              <QButton type="submit" variant="primary" :loading="menuBusy" :disabled="!menuBody.trim()">保存到 QQ</QButton>
+            </div>
+            <pre v-if="menuResult" class="max-h-56 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ menuResult }}</pre>
           </form>
         </QCard>
 

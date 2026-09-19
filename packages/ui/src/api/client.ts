@@ -79,6 +79,8 @@ export const api = {
   deleteQQPanel: (panelId: string) =>
     request<{ ok: boolean; status: number; data: unknown }>('DELETE', `/qq/panels/${encodeURIComponent(panelId)}`),
   createUrlLink: (body: Record<string, unknown>) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/url-link', body),
+  qqMenu: () => request<{ ok: boolean; status: number; data: unknown }>('GET', '/qq/menu'),
+  saveQQMenu: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('PUT', '/qq/menu', body),
   installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
   triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),
   builds: () => request<{ ok: true; builds: InstallRecord[] }>('GET', '/builds'),

@@ -294,8 +294,23 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
       record('GET', `/v2/groups/join_approval_strategy${cursor ? `?cursor=${cursor}` : ''}`)
       return { strategies: [], nextCursor: '' }
     },
-    async setJoinStrategy(g, strategy) {
-      record('PUT', '/v2/groups/join_approval_strategy', { group_openid: g, ...strategy })
+    async createJoinStrategy(input) {
+      record('POST', '/v2/groups/join_approval_strategy', input)
+      return { strategyId: 'st_mock', isEnable: input.isEnable ?? 'on', expireAt: '' }
+    },
+    async updateJoinStrategy(strategyId, patch) {
+      record('PATCH', `/v2/groups/join_approval_strategy/${strategyId}`, patch)
+      return { expireAt: '', ...(patch.isEnable ? { isEnable: patch.isEnable } : {}) }
+    },
+    async deleteJoinStrategy(strategyId) {
+      record('DELETE', `/v2/groups/join_approval_strategy/${strategyId}`)
+    },
+    async executeJoinStrategy(strategyId) {
+      record('POST', `/v2/groups/join_approval_strategy/${strategyId}/execute`)
+    },
+    async updateJoinStrategyWhitelist(strategyId, op, qqNumbers) {
+      record('POST', `/v2/groups/join_approval_strategy/${strategyId}/whitelist_users`, { op, whitelist_users: qqNumbers })
+      return { whitelistUserCount: qqNumbers.length }
     },
   }
   return {

@@ -27,13 +27,82 @@ export function createGroupApi(client: Caller): GroupApi {
       return { strategies: data.strategies ?? [], nextCursor: data.next_cursor ?? '' }
     },
 
-    async setJoinStrategy(g, strategy) {
-      await client.call(
-        'PUT',
+    async createJoinStrategy(input) {
+      const { groupOpenids, groupIds, isEnable, expireAt, remark } = input
+      // 二选一：两边都有或都没有都算非法（平台规则）
+      const hasOpenids = !!groupOpenids?.length
+      const hasIds = !!groupIds?.length
+      if (hasOpenids === hasIds) throw new Error('groupOpenids 与 groupIds 二选一必填（互斥，不能同时传或都不传）')
+      if ((groupOpenids?.length ?? 0) > 100 || (groupIds?.length ?? 0) > 100) throw new Error('关联群最多 100 个')
+      const data = await client.call<{ strategy_id?: string; is_enable?: string; expire_at?: string }>(
+        'POST',
         '/v2/groups/join_approval_strategy',
-        { group_openid: g, ...strategy },
-        '设置入群自动审批策略',
+        {
+          ...(groupOpenids?.length ? { group_openids: groupOpenids } : {}),
+          ...(groupIds?.length ? { group_ids: groupIds } : {}),
+          ...(isEnable ? { is_enable: isEnable } : {}),
+          ...(expireAt ? { expire_at: toRfc3339(expireAt) } : {}),
+          ...(remark ? { remark } : {}),
+        },
+        '创建入群自动审批策略',
       )
+      return {
+        strategyId: data.strategy_id ?? '',
+        ...(data.is_enable ? { isEnable: data.is_enable } : {}),
+        ...(data.expire_at ? { expireAt: data.expire_at } : {}),
+      }
+    },
+
+    async updateJoinStrategy(strategyId, patch) {
+      if (patch.groupAction) {
+        const { op, groupOpenids, groupIds } = patch.groupAction
+        if (op !== 'add' && op !== 'del') throw new Error('groupAction.op 仅支持 add/del')
+        if (!!groupOpenids?.length === !!groupIds?.length) throw new Error('groupAction 的 groupOpenids 与 groupIds 二选一')
+      }
+      const data = await client.call<{ is_enable?: string; expire_at?: string }>(
+        'PATCH',
+        `/v2/groups/join_approval_strategy/${strategyId}`,
+        {
+          ...(patch.isEnable ? { is_enable: patch.isEnable } : {}),
+          ...(patch.expireAt ? { expire_at: toRfc3339(patch.expireAt) } : {}),
+          ...(patch.remark ? { remark: patch.remark } : {}),
+          ...(patch.groupAction
+            ? {
+                group_action: {
+                  op: patch.groupAction.op,
+                  ...(patch.groupAction.groupOpenids?.length ? { group_openids: patch.groupAction.groupOpenids } : {}),
+                  ...(patch.groupAction.groupIds?.length ? { group_ids: patch.groupAction.groupIds } : {}),
+                },
+              }
+            : {}),
+        },
+        '修改入群自动审批策略',
+      )
+      return {
+        ...(data.is_enable ? { isEnable: data.is_enable } : {}),
+        ...(data.expire_at ? { expireAt: data.expire_at } : {}),
+      }
+    },
+
+    deleteJoinStrategy: (strategyId) =>
+      client.call('DELETE', `/v2/groups/join_approval_strategy/${strategyId}`, {}, '删除入群自动审批策略'),
+
+    executeJoinStrategy: (strategyId) =>
+      client.call('POST', `/v2/groups/join_approval_strategy/${strategyId}/execute`, {}, '执行入群自动审批策略'),
+
+    async updateJoinStrategyWhitelist(strategyId, op, qqNumbers) {
+      if (op !== 'add' && op !== 'del') throw new Error('op 仅支持 add/del')
+      if (!qqNumbers.length || qqNumbers.length > 10000) throw new Error('白名单号码单次 1～10000 个')
+      const data = await client.call<{ whitelist_user_count?: number; updated_at?: string }>(
+        'POST',
+        `/v2/groups/join_approval_strategy/${strategyId}/whitelist_users`,
+        { op, whitelist_users: qqNumbers },
+        '修改审批策略白名单',
+      )
+      return {
+        ...(data.whitelist_user_count !== undefined ? { whitelistUserCount: data.whitelist_user_count } : {}),
+        ...(data.updated_at ? { updatedAt: data.updated_at } : {}),
+      }
     },
 
     async members(g, cursor = '') {

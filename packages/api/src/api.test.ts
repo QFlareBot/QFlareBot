@@ -237,16 +237,12 @@ describe('资料与群策略', () => {
     expect(await client.group.info('G1')).toMatchObject({ group_name: '测试群' })
   })
 
-  it('审批策略：GET 游标分页归一化，PUT 携带 group_openid', async () => {
+  it('审批策略：GET 游标分页归一化', async () => {
     const fetchMock: FetchMock = vi.fn(async () =>
       jsonResponse({ strategies: [{ group_openid: 'G1', enabled: true }], next_cursor: 'c2' }),
     )
     const client = makeClient(fetchMock)
     expect(await client.group.joinStrategies()).toEqual({ strategies: [{ group_openid: 'G1', enabled: true }], nextCursor: 'c2' })
-    await client.group.setJoinStrategy('G1', { auto_approve: true })
-    const [url, init] = fetchMock.mock.calls[1]! as [string, RequestInit]
-    expect(String(url)).toContain('/v2/groups/join_approval_strategy')
-    expect(JSON.parse(String(init.body))).toEqual({ group_openid: 'G1', auto_approve: true })
   })
 
   it('审批策略游标拼进查询串', async () => {
@@ -309,5 +305,73 @@ describe('错误语义化', () => {
     expect(result.error).toContain('boom')
     expect(result.error).toContain('999999')
     expect(result.error).not.toContain('白名单')
+  })
+})
+
+describe('入群自动审批策略', () => {
+  function makeClient(fetchMock: FetchMock) {
+    return new QQBotClient({
+      appId: 'app',
+      secret: 's',
+      fetchImpl: fetchMock,
+      tokenProvider: { get: async () => 'tok', invalidate: async () => {} },
+    })
+  }
+
+  it('创建：openid 与群号二选一，缺省校验与字段转换', async () => {
+    const client = makeClient(vi.fn(async () => jsonResponse({})))
+    await expect(client.group.createJoinStrategy({})).rejects.toThrow('二选一')
+    await expect(client.group.createJoinStrategy({ groupOpenids: ['G1'], groupIds: ['123'] })).rejects.toThrow('二选一')
+
+    const fetchMock: FetchMock = vi.fn(async () =>
+      jsonResponse({ strategy_id: 'st_1', is_enable: 'off', expire_at: '2027-01-01T00:00:00Z' }),
+    )
+    const out = await makeClient(fetchMock).group.createJoinStrategy({
+      groupOpenids: ['G1'],
+      isEnable: 'off',
+      expireAt: '2027-01-01T00:00:00Z',
+      remark: '测试',
+    })
+    expect(out).toMatchObject({ strategyId: 'st_1', isEnable: 'off' })
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(JSON.parse(String(init!.body))).toEqual({
+      group_openids: ['G1'],
+      is_enable: 'off',
+      expire_at: '2027-01-01T00:00:00Z',
+      remark: '测试',
+    })
+  })
+
+  it('修改：group_action 与启停字段', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ is_enable: 'off' }))
+    const out = await makeClient(fetchMock).group.updateJoinStrategy('st_1', {
+      isEnable: 'off',
+      groupAction: { op: 'add', groupOpenids: ['G2'] },
+    })
+    expect(out.isEnable).toBe('off')
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(JSON.parse(String(init!.body))).toEqual({
+      is_enable: 'off',
+      group_action: { op: 'add', group_openids: ['G2'] },
+    })
+    await expect(
+      makeClient(vi.fn(async () => jsonResponse({}))).group.updateJoinStrategy('st_1', {
+        groupAction: { op: 'add' },
+      }),
+    ).rejects.toThrow('二选一')
+  })
+
+  it('删除、执行与白名单走正确端点', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ whitelist_user_count: 2, updated_at: '2026-09-20T00:00:00Z' }))
+    const client = makeClient(fetchMock)
+    await client.group.deleteJoinStrategy('st_1')
+    await client.group.executeJoinStrategy('st_1')
+    const out = await client.group.updateJoinStrategyWhitelist('st_1', 'add', ['10000', '10001'])
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]))
+    expect(urls[0]).toContain('/join_approval_strategy/st_1')
+    expect(urls[1]).toContain('/join_approval_strategy/st_1/execute')
+    expect(urls[2]).toContain('/join_approval_strategy/st_1/whitelist_users')
+    expect(out.whitelistUserCount).toBe(2)
+    await expect(client.group.updateJoinStrategyWhitelist('st_1', 'add', [])).rejects.toThrow('10000')
   })
 })

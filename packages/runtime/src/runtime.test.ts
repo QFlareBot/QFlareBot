@@ -883,3 +883,33 @@ describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
     expect(res.status).toBe(503)
   })
 })
+
+describe('自定义菜单端点', () => {
+  function adminRequest(method: string, path: string, body?: unknown) {
+    return new Request(`${BASE}/admin${path}`, {
+      method,
+      headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  }
+
+  it('GET 回显当前菜单，PUT 校验 menu 字段并透传', async () => {
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+
+    const view = await runtime.fetch!(adminRequest('GET', '/qq/menu'), env, createExecutionContext())
+    expect(view.status).toBe(200)
+    expect(await view.json()).toMatchObject({ ok: true, data: { version: 1 } })
+
+    const missing = await runtime.fetch!(adminRequest('PUT', '/qq/menu', {}), env, createExecutionContext())
+    expect(missing.status).toBe(400)
+
+    const menu = { menu: { items: [{ type: 'send_message', name: '帮助', send_message: '/help' }] } }
+    const saved = await runtime.fetch!(adminRequest('PUT', '/qq/menu', menu), env, createExecutionContext())
+    expect(saved.status).toBe(200)
+    expect((await saved.json()).ok).toBe(true)
+    const sent = qq.sent.filter((s) => s.url.includes('/v2/menu')).find((s) => s.body.menu)
+    expect(sent!.body).toEqual(menu)
+  })
+})
