@@ -71,3 +71,4 @@
 - `file_data`（base64 直传）在原型中实测可用，但当前文档只列 `url` 与分片上传；大文件请用 `url`。
 - `api.bot.qq.com` 为文档统一域名（2026-08-10 起），已确认与 `api.sgroup.qq.com` 同网关；如需回退可传 `baseUrl`。
 - 群管理接口按文档字段实现，未在有管理员权限的群里实测。
+- 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此按钮回调暂不鉴权。

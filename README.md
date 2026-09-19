@@ -21,7 +21,7 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/plugin-cli` | `@qqbot/plugin-cli` | `qqbot-plugin build`：把插件打成单文件 ESM 并抽出 manifest.json |
 | `packages/ui` | `@qqbot/ui` | 管理面板（Vue 3），构建为可嵌入 Worker 的资源表 |
 | `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
-| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调） |
+| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调）、sid（内置，查 OpenID/会话 ID/群角色） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
 | `templates/plugin` | — | 插件仓库模板（CI workflow + 声明清单约定） |
 | `docs/design.md` | — | 设计决策记录 |

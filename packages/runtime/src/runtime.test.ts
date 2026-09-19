@@ -646,3 +646,112 @@ describe('无前缀解析与头像', () => {
     expect(s.avatarUrl).toBe('https://thirdqq.qlogo.cn/qqapp/1903864677/U1/640')
   })
 })
+
+describe('三层权限', () => {
+  async function testEvent(runtime: ReturnType<typeof createRuntime>, env = createEnv(), body: Record<string, unknown>) {
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/test-event`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      env,
+      createExecutionContext(),
+    )
+    expect(res.status).toBe(200)
+    return (await res.json()) as { matched: Array<{ plugin: string }>; outbox: Array<{ message: unknown }> }
+  }
+
+  const admin = definePlugin({
+    name: 'admin',
+    version: '1.0.0',
+    commands: { ban: { permission: 'bot_admin', handler: ({ argText }) => `封禁 ${argText}` } },
+  })
+  const group = definePlugin({
+    name: 'group',
+    version: '1.0.0',
+    commands: { mute: { permission: 'group_admin', handler: ({ argText }) => `已禁言 ${argText}` } },
+    regex: [{ pattern: '^静言 (.+)$', permission: 'group_admin', handler: ({ match }) => `已静言 ${match[1]}` }],
+  })
+  const open = definePlugin({
+    name: 'open',
+    version: '1.0.0',
+    commands: { hello: () => 'hi' },
+    regex: [{ pattern: '.*', handler: () => 'caught' }],
+  })
+
+  function withSnapshot(fields: Record<string, unknown>) {
+    const env = createEnv()
+    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 1, plugins: {}, ...fields }))
+    resetSnapshotCache()
+    return env
+  }
+
+  it('普通成员触发 bot_admin 命令被静默跳过；名单内用户通过', async () => {
+    const runtime = createRuntime({ plugins: [admin] })
+    expect((await testEvent(runtime, undefined, { content: '/ban 张三' })).outbox).toEqual([])
+
+    const env = withSnapshot({ admins: ['test-user'] })
+    expect((await testEvent(runtime, env, { content: '/ban 张三' })).outbox[0]!.message).toBe('封禁 张三')
+  })
+
+  it('群管理员与群主通过 group_admin，普通成员不行；正则同样受控', async () => {
+    const runtime = createRuntime({ plugins: [group] })
+    expect((await testEvent(runtime, undefined, { content: '/mute 李四' })).outbox).toEqual([])
+    expect((await testEvent(runtime, undefined, { content: '/mute 李四', raw: { member_role: 'member' } })).outbox).toEqual([])
+
+    const adminRole = await testEvent(runtime, undefined, { content: '/mute 李四', raw: { member_role: 'admin' } })
+    expect(adminRole.outbox[0]!.message).toBe('已禁言 李四')
+    const owner = await testEvent(runtime, undefined, { content: '静言 李四', raw: { member_role: 'OWNER' } })
+    expect(owner.outbox[0]!.message).toBe('已静言 李四')
+  })
+
+  it('单聊层级塌缩：group_admin 只有 Bot 管理员能用', async () => {
+    const runtime = createRuntime({ plugins: [group] })
+    expect((await testEvent(runtime, undefined, { scene: 'c2c', targetId: 'U1', content: '/mute 李四' })).outbox).toEqual([])
+
+    const env = withSnapshot({ admins: ['test-user'] })
+    expect(
+      (await testEvent(runtime, env, { scene: 'c2c', targetId: 'U1', content: '/mute 李四' })).outbox[0]!.message,
+    ).toBe('已禁言 李四')
+  })
+
+  it('统一回复仅在没有其他候选命中时触发，不遮蔽其他插件', async () => {
+    const env = withSnapshot({ permissionDeniedReply: '权限不足' })
+
+    // 只有高权限命令、无其他候选：回复统一文案
+    const solo = createRuntime({ plugins: [admin] })
+    expect((await testEvent(solo, env, { content: '/ban 张三' })).outbox[0]!.message).toBe('权限不足')
+    // 完全没有候选命中的消息不回复
+    expect((await testEvent(solo, env, { content: '/hello' })).outbox).toEqual([])
+
+    // 有普通成员可命中的候选时，不遮蔽、也不补拒绝文案
+    const shadowed = createRuntime({ plugins: [admin, open] })
+    expect((await testEvent(shadowed, env, { content: '/ban 张三' })).outbox.map((o) => o.message)).toEqual(['caught'])
+  })
+
+  it('session.memberRole 来自入站角色并归一化，未知值与单聊为 undefined', () => {
+    const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
+    const opts = { botId: 'b', sender, maxPassiveReplies: 5 }
+
+    const plain = buildSession(groupMessagePayload('hi'), opts)
+    expect(plain.memberRole).toBeUndefined()
+
+    const owner = buildSession(
+      {
+        op: 0,
+        id: 'GROUP_AT_MESSAGE_CREATE:x',
+        t: 'GROUP_AT_MESSAGE_CREATE',
+        d: { id: 'm', content: 'hi', author: { member_openid: 'U1', member_role: 'OWNER' }, group_openid: 'G1' },
+      },
+      opts,
+    )
+    expect(owner.memberRole).toBe('owner')
+
+    const c2c = buildSession(
+      { op: 0, id: 'C2C:x', t: 'C2C_MESSAGE_CREATE', d: { id: 'm', content: 'hi', author: { member_role: 'admin' } } },
+      opts,
+    )
+    expect(c2c.memberRole).toBeUndefined()
+  })
+})

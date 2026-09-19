@@ -64,6 +64,7 @@ export {
   API_VERSION,
   definePlugin,
   type Permission,
+  type PermissionTier,
   type JsonSchema,
   type MatchOptions,
   type CommandInput,

@@ -10,6 +10,13 @@ export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin'
 
 export type JsonSchema = Record<string, unknown>
 
+/**
+ * 命令/正则的权限层级，**达标制**：上层自动通过下层的门槛。
+ * 1 超级管理员 = Bot 管理员（运行时快照的名单）＞ 2 群主与群管理员（入站 member_role）＞ 3 普通成员。
+ * 按钮回调暂不鉴权。
+ */
+export type PermissionTier = 'bot_admin' | 'group_admin' | 'member'
+
 /** 所有匹配器共享的调度字段 */
 export interface MatchOptions {
   /** 数值越大越先执行，默认 0 */
@@ -100,6 +107,8 @@ export interface CommandSpec extends MatchOptions {
    * 群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']` 使用。
    */
   bare?: boolean
+  /** 门槛层级，不声明即 `'member'`（人人可用） */
+  permission?: PermissionTier
 }
 
 export type Command<C = unknown> = CommandHandler<C> | (CommandSpec & { handler: CommandHandler<C> })
@@ -107,6 +116,8 @@ export type Command<C = unknown> = CommandHandler<C> | (CommandSpec & { handler:
 export interface RegexSpec extends MatchOptions {
   pattern: string
   flags?: string
+  /** 门槛层级，不声明即 `'member'`（人人可用） */
+  permission?: PermissionTier
 }
 
 export type RegexRule<C = unknown> = RegexSpec & { handler: RegexHandler<C> }

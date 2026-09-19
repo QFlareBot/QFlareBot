@@ -29,6 +29,7 @@ export interface MockSessionOptions {
   targetId?: string
   userId?: string
   userName?: string
+  memberRole?: 'owner' | 'admin' | 'member'
   messageId?: string | null
   refIndex?: string
   botId?: string
@@ -96,6 +97,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     userId: options.userId ?? 'mock-user',
     userName: options.userName ?? '测试用户',
     avatarUrl: qqAvatar(options.botId ?? 'test-bot', options.userId ?? 'mock-user'),
+    memberRole: options.memberRole,
     messageId,
     refIndex: options.refIndex,
     canReply: true,

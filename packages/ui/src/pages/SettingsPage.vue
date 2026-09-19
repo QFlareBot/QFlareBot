@@ -7,6 +7,7 @@ import QCard from '../components/ui/QCard.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
+import QTextarea from '../components/ui/QTextarea.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
@@ -50,7 +51,7 @@ watch(
   { immediate: true },
 )
 
-async function saveSnapshot(patch: { safeMode?: boolean; commandPrefixes?: string[] }) {
+async function saveSnapshot(patch: { safeMode?: boolean; commandPrefixes?: string[]; admins?: string[]; permissionDeniedReply?: string }) {
   savingSnap.value = true
   try {
     const { snapshot } = await api.snapshot()
@@ -62,6 +63,26 @@ async function saveSnapshot(patch: { safeMode?: boolean; commandPrefixes?: strin
   } finally {
     savingSnap.value = false
   }
+}
+
+const adminsText = ref('')
+const denyReply = ref('')
+watch(
+  status,
+  async (s) => {
+    if (!s || (adminsText.value || denyReply.value)) return
+    const { snapshot } = await api.snapshot()
+    adminsText.value = (snapshot.admins ?? []).join('\n')
+    denyReply.value = snapshot.permissionDeniedReply ?? ''
+  },
+  { immediate: true },
+)
+
+function savePermission() {
+  return saveSnapshot({
+    admins: adminsText.value.split(/\s+/).filter(Boolean),
+    permissionDeniedReply: denyReply.value.trim() || undefined,
+  })
 }
 </script>
 
@@ -95,6 +116,20 @@ async function saveSnapshot(patch: { safeMode?: boolean; commandPrefixes?: strin
               <template #default="{ describedBy }"><QInput id="prefixes" v-model="prefixes" mono :described-by="describedBy" /></template>
             </QField>
             <div><QButton type="submit" :loading="savingSnap">保存前缀</QButton></div>
+          </form>
+        </QCard>
+        <QCard
+          title="权限"
+          description="命令可声明 permission（bot_admin / group_admin / member），达标制：上层自动通过下层门槛；按钮回调暂不鉴权"
+        >
+          <form class="flex flex-col gap-3" @submit.prevent="savePermission">
+            <QField id="admins" label="Bot 管理员（超级管理员）" hint="一行一个用户 openid；在会话里发 /sid 可查询自己的 openid">
+              <template #default="{ describedBy }"><QTextarea id="admins" v-model="adminsText" mono :rows="4" :described-by="describedBy" /></template>
+            </QField>
+            <QField id="denyReply" label="权限不足回复" hint="留空 = 静默跳过；填写后，权限不足且没有其他插件命中时回复此文案">
+              <template #default="{ describedBy }"><QInput id="denyReply" v-model="denyReply" :described-by="describedBy" /></template>
+            </QField>
+            <div><QButton type="submit" :loading="savingSnap">保存权限设置</QButton></div>
           </form>
         </QCard>
         <QCard title="安全建议">

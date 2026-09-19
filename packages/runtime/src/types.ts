@@ -72,6 +72,10 @@ export interface Snapshot {
   commandPrefixes?: string[]
   /** 安全模式：跳过全部插件 */
   safeMode?: boolean
+  /** Bot 管理员（超级管理员）的用户 openid 名单，面板设置页维护 */
+  admins?: string[]
+  /** 权限不足时的统一回复文案；未设置则静默跳过（当作没匹配到） */
+  permissionDeniedReply?: string
 }
 
 export interface PluginState {

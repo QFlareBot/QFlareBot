@@ -5,6 +5,7 @@ import {
   type InteractionCode,
   type Logger,
   type NormalizedPlugin,
+  type PermissionTier,
   type PluginDefinition,
   type Session,
 } from '@qqbot/sdk'
@@ -109,16 +110,36 @@ function sceneAllowed(scenes: string[] | undefined, session: Session): boolean {
   return !scenes || scenes.includes(session.scene)
 }
 
+/** 权限不足但其余条件（命令词/正则/场景）都命中的匹配器，供统一回复兜底判断 */
+interface DeniedMatch {
+  plugin: string
+  kind: 'command' | 'regex'
+  name: string
+}
+
+/** 门槛层级：1 超级管理员（Bot 管理员名单）＞ 2 群主/群管理员（入站 member_role）＞ 3 普通成员 */
+function tierOf(permission: PermissionTier | undefined): 1 | 2 | 3 {
+  return permission === 'bot_admin' ? 1 : permission === 'group_admin' ? 2 : 3
+}
+
 function collectCandidates(
   session: Session,
   plugins: Array<{ registered: RegisteredPlugin; def: PluginDefinition<unknown> }>,
   deps: DispatchDeps,
-): Candidate[] {
+): { candidates: Candidate[]; denied: DeniedMatch[] } {
   const candidates: Candidate[] = []
+  const denied: DeniedMatch[] = []
   const prefixes = deps.snapshot.commandPrefixes ?? deps.commandPrefixes
   const command = isMessageEvent(session.event)
     ? parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
     : null
+
+  // 单聊没有群角色，层级塌缩成两档：Bot 管理员 / 普通成员
+  const userTier = deps.snapshot.admins?.includes(session.userId)
+    ? 1
+    : session.memberRole === 'owner' || session.memberRole === 'admin'
+      ? 2
+      : 3
 
   for (const { registered, def } of plugins) {
     const name = def.name
@@ -131,6 +152,10 @@ function collectCandidates(
         const names = [cmd.name, ...(cmd.aliases ?? [])]
         if (!names.some((c) => c.toLowerCase() === command.word.toLowerCase())) continue
         if (!sceneAllowed(cmd.scenes, session)) continue
+        if (userTier > tierOf(cmd.permission)) {
+          denied.push({ plugin: name, kind: 'command', name: cmd.name })
+          continue
+        }
         candidates.push({
           plugin: name,
           kind: 'command',
@@ -152,6 +177,10 @@ function collectCandidates(
         if (!sceneAllowed(rule.scenes, session)) continue
         const match = session.content.match(compileRegex(rule.pattern, rule.flags))
         if (!match) continue
+        if (userTier > tierOf(rule.permission)) {
+          denied.push({ plugin: name, kind: 'regex', name: rule.pattern })
+          continue
+        }
         candidates.push({
           plugin: name,
           kind: 'regex',
@@ -208,7 +237,7 @@ function collectCandidates(
   }
 
   // 稳定排序：优先级高的先执行，同级按注册顺序
-  return candidates.sort((a, b) => b.priority - a.priority)
+  return { candidates: candidates.sort((a, b) => b.priority - a.priority), denied }
 }
 
 /** 事件分发：中间件链 → 匹配器；任何插件的异常只记录、不影响其他插件 */
@@ -234,7 +263,9 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   }
 
   const runMatchers = async () => {
-    for (const c of collectCandidates(session, plugins, deps)) {
+    const { candidates, denied } = collectCandidates(session, plugins, deps)
+    if (denied.length) deps.logger.debug('权限不足，跳过候选', { denied })
+    for (const c of candidates) {
       report.matched.push({ plugin: c.plugin, kind: c.kind, name: c.name })
       try {
         const ctx = await deps.contexts.prepare(c.registered)
@@ -243,6 +274,14 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
         fail(c.plugin, `${c.kind}:${c.name}`, err)
       }
       if (c.block) break
+    }
+    // 权限不足默认静默跳过；配置了统一回复时，仅当没有任何候选命中才补一句，避免遮蔽其他插件
+    if (denied.length && !report.matched.length && deps.snapshot.permissionDeniedReply) {
+      try {
+        await deliverReply(session, deps.snapshot.permissionDeniedReply)
+      } catch (err) {
+        fail('runtime', 'permission-denied', err)
+      }
     }
   }
 

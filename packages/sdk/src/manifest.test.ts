@@ -122,3 +122,17 @@ describe('buttons 清单', async () => {
     expect((await runButton(p, 'deny')).code).toBe(4)
   })
 })
+
+describe('权限与裸命令的清单透传', () => {
+  it('bare 与 permission 进入清单供面板展示', () => {
+    const p = definePlugin({
+      name: 'perm',
+      commands: { sign: { bare: true, permission: 'bot_admin', handler: () => 'ok' } },
+      regex: [{ pattern: '^静言 (.+)$', permission: 'group_admin', handler: () => 'ok' }],
+    })
+    const m = extractManifest(p, { version: '1.0.0' })
+    expect(m.commands).toEqual([{ name: 'sign', bare: true, permission: 'bot_admin' }])
+    expect(m.regex).toEqual([{ pattern: '^静言 (.+)$', permission: 'group_admin' }])
+    expect(validateManifest(m)).toEqual([])
+  })
+})

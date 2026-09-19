@@ -95,6 +95,10 @@ export interface Snapshot {
   plugins: Record<string, { enabled: boolean; config?: unknown; priority?: number }>
   commandPrefixes?: string[]
   safeMode?: boolean
+  /** Bot 管理员（超级管理员）的用户 openid 名单 */
+  admins?: string[]
+  /** 权限不足时的统一回复文案；未设置则静默跳过 */
+  permissionDeniedReply?: string
 }
 
 /** —— 自部署（安装与构建账本），与 runtime 的 manifestStore.ts 保持一致 —— */

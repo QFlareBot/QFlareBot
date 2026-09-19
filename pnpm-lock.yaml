@@ -47,6 +47,9 @@ importers:
       qqbot-plugin-multi-reply:
         specifier: workspace:*
         version: link:../../plugins/multi-reply
+      qqbot-plugin-sid:
+        specifier: workspace:*
+        version: link:../../plugins/sid
     devDependencies:
       '@qqbot/plugin-cli':
         specifier: workspace:*
@@ -168,6 +171,15 @@ importers:
         version: link:../../packages/sdk
 
   plugins/multi-reply:
+    devDependencies:
+      '@qqbot/plugin-cli':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cli
+      '@qqbot/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
+  plugins/sid:
     devDependencies:
       '@qqbot/plugin-cli':
         specifier: workspace:*

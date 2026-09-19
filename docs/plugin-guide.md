@@ -98,6 +98,22 @@ commands: {
 
 裸命令只应在确实需要时用——群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']`。
 
+### 权限
+
+命令与正则可声明 `permission`（不声明即 `member`，人人可用），运行时在匹配阶段拦截，不达标连 handler 都不会执行：
+
+| 值 | 谁能通过 |
+| --- | --- |
+| `member` | 所有人（默认） |
+| `group_admin` | Bot 管理员、群主、群管理员（群角色来自入站消息） |
+| `bot_admin` | Bot 管理员（面板"设置 → 权限"里维护的 openid 名单） |
+
+**达标制**：上层自动通过下层门槛。单聊没有群角色，层级塌缩成"Bot 管理员 / 普通成员"两档——`group_admin` 命令在单聊只有 Bot 管理员能用。按钮回调**暂不鉴权**（回调事件不带群角色）。
+
+权限不足默认**静默跳过**（当作没匹配到，不遮蔽其他插件）；面板可设置统一回复文案，仅在没有任何插件命中时回复。需要更细的判断时在 handler 里读 `session.memberRole`（群聊时为 `'owner' | 'admin' | 'member'`，单聊/频道为 undefined）。
+
+配置 Bot 管理员名单前，先在会话里发内置插件的 `/sid` 查询自己的 openid——openid 按机器人隔离，别处复制来的无效。
+
 常用事件名（完整映射见 `docs/capabilities.md`）：
 
 | 事件名 | 含义 |
@@ -112,7 +128,7 @@ commands: {
 
 平台新事件自动落到 `qq.raw.<t 小写>`（如 `qq.raw.group_msg_reject`），不必等框架发版。
 
-`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸或任意 openid 用 `@qqbot/sdk` 导出的 `qqAvatar(botId, openid, 140)`）、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
+`session` 只读字段：`content`（去 @ 后正文）、`scene`、`targetId`、`userId`、`userName`、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸或任意 openid 用 `@qqbot/sdk` 导出的 `qqAvatar(botId, openid, 140)`）、`memberRole`（群聊时的群主/管理员/成员角色）、`messageId`、`refIndex`、`attachments`、`interaction`、`event`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）。
 
 ## 4. 回复消息
 

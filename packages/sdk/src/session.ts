@@ -152,6 +152,11 @@ export interface Session {
    * 其他尺寸用 `qqAvatar(session.botId, session.userId, 140)`。
    */
   readonly avatarUrl: string
+  /**
+   * 群角色（仅群聊）：owner 群主 / admin 群管理员 / member 普通成员，来自入站事件的
+   * author.member_role；单聊与频道没有此概念，未知值归一化为 undefined。
+   */
+  readonly memberRole: 'owner' | 'admin' | 'member' | undefined
   /** 被动回复所需的消息 id，非消息事件为 undefined */
   readonly messageId: string | undefined
   /** 当前消息可被引用的 ref index（message_scene.ext 中的 msg_idx） */

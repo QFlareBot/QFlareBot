@@ -141,6 +141,14 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   const rawType = payload.t ?? 'UNKNOWN'
   const d = (payload.d ?? {}) as RawMessageEvent & RawInteractionEvent & RawGroupEvent
   const { scene, targetId, userId, userName } = identify(rawType, d)
+  // 群消息的 author 自带成员角色；单聊/频道没有，未知值归一化为 undefined。
+  // 部分群事件（成员变动等）把角色放顶层，作回退读取。
+  const rawRole = typeof d.author?.member_role === 'string' ? d.author.member_role : (d as { member_role?: unknown }).member_role
+  const role = typeof rawRole === 'string' ? rawRole.toLowerCase() : ''
+  const memberRole =
+    scene === 'group' && (role === 'owner' || role === 'admin' || role === 'member')
+      ? (role as 'owner' | 'admin' | 'member')
+      : undefined
   const eventId = payload.id ?? `${rawType}:${d.id ?? Date.now()}`
   const messageId = typeof d.id === 'string' && rawType.includes('MESSAGE') ? d.id : undefined
   const eventReplyId = !messageId && EVENT_ID_REPLYABLE.has(rawType) ? eventId : undefined
@@ -187,6 +195,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     userId,
     userName,
     avatarUrl: qqAvatar(options.botId, userId),
+    memberRole,
     messageId,
     refIndex: extractRefIndex(d),
     canReply: passive() !== null,

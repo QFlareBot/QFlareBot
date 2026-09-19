@@ -1,0 +1,19 @@
+{
+  "name": "qqbot-plugin-sid",
+  "version": "0.1.0",
+  "description": "内置插件：查询自己的 OpenID、当前会话 ID、群角色与头像",
+  "type": "module",
+  "keywords": ["qqbot-plugin"],
+  "files": ["dist"],
+  "exports": "./src/index.ts",
+  "publishConfig": { "exports": "./dist/plugin.js" },
+  "scripts": {
+    "build": "qqbot-plugin build",
+    "test": "vitest run --root ../.. plugins/sid",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@qqbot/plugin-cli": "workspace:*",
+    "@qqbot/sdk": "workspace:*"
+  }
+}
