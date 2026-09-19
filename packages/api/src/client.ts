@@ -1,5 +1,6 @@
 import type {
   BotApi,
+  BotProfile,
   GroupApi,
   ImageSource,
   InteractionCode,
@@ -12,7 +13,7 @@ import type {
   StreamChunkOptions,
   UploadedMedia,
 } from '@qqbot/sdk'
-import { QQApiError } from './errors.js'
+import { describeApiError, QQApiError } from './errors.js'
 import { createGroupApi } from './group.js'
 import { createTokenProvider, type TokenCache, type TokenProvider } from './token.js'
 import { FileType, MsgType } from './types.js'
@@ -77,7 +78,7 @@ function toSendResult(res: { status: number; data: SendResponse | null; error?: 
   const result: SendResult = { ok, status: res.status, raw: res.data }
   if (res.data?.id) result.messageId = res.data.id
   if (res.data?.ext_info?.ref_idx) result.refIndex = res.data.ext_info.ref_idx
-  if (!ok) result.error = res.error ?? res.data?.message ?? `HTTP ${res.status}`
+  if (!ok) result.error = res.error ?? describeApiError(res.status, res.data)
   return result
 }
 
@@ -152,6 +153,11 @@ export class QQBotClient implements BotApi {
     const { status, data } = await this.raw<T>(method, path, body)
     if (status >= 300) throw new QQApiError(status, data, `${what} 失败 (HTTP ${status})`)
     return data
+  }
+
+  /** 机器人自身资料（GET /users/@me）；调用频率由插件自己控制，框架不做缓存 */
+  async me(): Promise<BotProfile> {
+    return this.call<BotProfile>('GET', '/users/@me', undefined, '获取机器人资料')
   }
 
   async uploadMedia(target: SendTarget, source: MediaSource | ImageSource): Promise<UploadedMedia> {

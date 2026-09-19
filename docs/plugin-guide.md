@@ -244,7 +244,7 @@ routes: [
 | --- | --- |
 | `ctx.config` | 面板保存的配置（回落 defaultConfig） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
-| `ctx.api` | QQ OpenAPI：`sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*` / `raw()` |
+| `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |
 | `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |
 | `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明） |
 | `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |

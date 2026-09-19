@@ -1,4 +1,4 @@
-import type { GroupApi, GroupMember, JoinRequest, MuteOp } from '@qqbot/sdk'
+import type { GroupApi, GroupInfo, GroupMember, JoinApprovalStrategy, JoinRequest, MuteOp } from '@qqbot/sdk'
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -14,8 +14,25 @@ function toRfc3339(value: Date | string): string {
 export function createGroupApi(client: Caller): GroupApi {
   const base = (g: string) => `/v2/groups/${g}`
   return {
-    info: (g) => client.call('GET', `${base(g)}/info`, undefined, '获取群信息'),
+    info: (g) => client.call<GroupInfo>('GET', `${base(g)}/info`, undefined, '获取群信息'),
     botState: (g) => client.call('GET', `${base(g)}/bot_state`, undefined, '获取机器人群内状态'),
+
+    async joinStrategies() {
+      const data = await client.call<
+        { strategies?: JoinApprovalStrategy[]; list?: JoinApprovalStrategy[] } | JoinApprovalStrategy[]
+      >('GET', '/v2/groups/join_approval_strategy', undefined, '查询入群自动审批策略')
+      if (Array.isArray(data)) return data
+      return data.strategies ?? data.list ?? []
+    },
+
+    async setJoinStrategy(g, strategy) {
+      await client.call(
+        'PUT',
+        '/v2/groups/join_approval_strategy',
+        { group_openid: g, ...strategy },
+        '设置入群自动审批策略',
+      )
+    },
 
     async members(g, cursor = '') {
       const data = await client.call<{ members?: GroupMember[]; next_cursor?: string }>(

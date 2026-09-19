@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { signCallback, verifyEvent, getKeyPair, bytesToHex } from './crypto.js'
 import { createTokenProvider, memoryTokenCache } from './token.js'
 import { QQBotClient } from './client.js'
+import { QQApiError } from './errors.js'
 
 const SECRET = 'DG5g3B4j9X2KOErG'
 
@@ -100,10 +101,10 @@ describe('QQBotClient.sendMessage', () => {
     expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string)).toMatchObject({ msg_type: 7, media: { file_info: 'FI' } })
   })
 
-  it('接口报错时返回 ok=false 与错误信息', async () => {
+  it('接口报错时返回 ok=false 与错误信息（附错误码）', async () => {
     const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ message: '主动消息失败, 无权限', code: 40034 }, 400))
     const result = await makeClient(fetchMock).sendMessage({ scene: 'group', id: 'G1' }, 'x')
-    expect(result).toMatchObject({ ok: false, status: 400, error: '主动消息失败, 无权限' })
+    expect(result).toMatchObject({ ok: false, status: 400, error: '主动消息失败, 无权限（错误码 40034）' })
   })
 })
 
@@ -193,7 +194,7 @@ describe('结果型方法不抛异常', () => {
     const f: FetchMock = vi.fn(async () => jsonResponse({ code: 10001, message: 'invalid appid or secret' }, 400))
     const c = new QQBotClient({ appId: 'a', secret: 's', fetchImpl: f })
     const r = await c.sendMessage({ scene: 'group', id: 'G' }, 'x')
-    expect(r).toMatchObject({ ok: false, status: 0, error: 'invalid appid or secret' })
+    expect(r).toMatchObject({ ok: false, status: 0, error: 'invalid appid or secret（错误码 10001）' })
     expect(await c.ackInteraction('I')).toBe(false)
     expect(await c.recallMessage({ scene: 'group', id: 'G' }, 'M')).toBe(false)
   })
@@ -209,5 +210,84 @@ describe('fetch 的 this 绑定', () => {
     const c = new QQBotClient({ appId: 'a', secret: 's', fetchImpl: strictFetch as typeof fetch, tokenProvider: { get: async () => 't', invalidate: async () => {} } })
     const r = await c.sendMessage({ scene: 'c2c', id: 'U' }, 'hi')
     expect(r.ok).toBe(true)
+  })
+})
+
+describe('资料与群策略', () => {
+  function makeClient(fetchMock: FetchMock) {
+    return new QQBotClient({
+      appId: 'app',
+      secret: 's',
+      fetchImpl: fetchMock,
+      tokenProvider: { get: async () => 'tok', invalidate: async () => {} },
+    })
+  }
+
+  it('me() 返回 /users/@me 资料', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ id: 'bot-1', username: '小助手', avatar: 'https://x/640' }))
+    const client = makeClient(fetchMock)
+    const profile = await client.me()
+    expect(profile).toMatchObject({ id: 'bot-1', username: '小助手', avatar: 'https://x/640' })
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/users/@me')
+  })
+
+  it('group.info 返回 GroupInfo', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ group_openid: 'G1', group_name: '测试群' }))
+    const client = makeClient(fetchMock)
+    expect(await client.group.info('G1')).toMatchObject({ group_name: '测试群' })
+  })
+
+  it('审批策略：GET 归一化列表，PUT 携带 group_openid', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ strategies: [{ group_openid: 'G1', enabled: true }] }))
+    const client = makeClient(fetchMock)
+    expect(await client.group.joinStrategies()).toEqual([{ group_openid: 'G1', enabled: true }])
+    await client.group.setJoinStrategy('G1', { auto_approve: true })
+    const [url, init] = fetchMock.mock.calls[1]! as [string, RequestInit]
+    expect(String(url)).toContain('/v2/groups/join_approval_strategy')
+    expect(JSON.parse(String(init.body))).toEqual({ group_openid: 'G1', auto_approve: true })
+  })
+
+  it('审批策略列表支持数组与对象两种响应形状', async () => {
+    const asArray: FetchMock = vi.fn(async () => jsonResponse([{ group_openid: 'G1' }]))
+    expect(await makeClient(asArray).group.joinStrategies()).toEqual([{ group_openid: 'G1' }])
+    const asList: FetchMock = vi.fn(async () => jsonResponse({ list: [{ group_openid: 'G2' }] }))
+    expect(await makeClient(asList).group.joinStrategies()).toEqual([{ group_openid: 'G2' }])
+  })
+})
+
+describe('错误语义化', () => {
+  function makeClient(fetchMock: FetchMock) {
+    return new QQBotClient({
+      appId: 'app',
+      secret: 's',
+      fetchImpl: fetchMock,
+      tokenProvider: { get: async () => 'tok', invalidate: async () => {} },
+    })
+  }
+
+  it('QQApiError message 附加已知错误码说明与原值', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ code: 11253, message: 'forbidden' }, 404))
+    const err = await makeClient(fetchMock).group.members('G1').catch((e: unknown) => e as Error)
+    expect(err).toBeInstanceOf(QQApiError)
+    expect(err.message).toContain('11253')
+    expect(err.message).toContain('白名单')
+    expect((err as QQApiError).code).toBe(11253)
+  })
+
+  it('SendResult.error 同样带语义提示', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ code: 11253, message: 'forbidden' }, 404))
+    const result = await makeClient(fetchMock).sendMessage({ scene: 'group', id: 'G1' }, 'hi')
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('11253')
+    expect(result.error).toContain('白名单')
+  })
+
+  it('未收录的错误码只透传平台 message 与原值', async () => {
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ code: 999999, message: 'boom' }, 500))
+    const result = await makeClient(fetchMock).sendMessage({ scene: 'c2c', id: 'U1' }, 'hi')
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('boom')
+    expect(result.error).toContain('999999')
+    expect(result.error).not.toContain('白名单')
   })
 })

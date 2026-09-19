@@ -108,6 +108,28 @@ export interface GroupMember {
   union_openid?: string
 }
 
+/** 机器人自身资料（GET /users/@me） */
+export interface BotProfile {
+  id: string
+  username: string
+  avatar: string
+  /** 平台未完全类型化，其余字段原样保留 */
+  [key: string]: unknown
+}
+
+/** 群资料（GET /v2/groups/{id}/info）；字段名以平台实际返回为准，未列出的原样保留 */
+export interface GroupInfo {
+  group_openid?: string
+  group_name?: string
+  [key: string]: unknown
+}
+
+/** 入群自动审批策略；平台字段透传（请求/响应字段待实测后收紧） */
+export interface JoinApprovalStrategy {
+  group_openid?: string
+  [key: string]: unknown
+}
+
 export interface JoinRequest {
   join_request_id: string
   member_openid: string
@@ -130,8 +152,12 @@ export type MuteOp =
   | { op: 'del'; memberOpenid: string }
 
 export interface GroupApi {
-  info(groupOpenid: string): Promise<Record<string, unknown>>
+  info(groupOpenid: string): Promise<GroupInfo>
   botState(groupOpenid: string): Promise<Record<string, unknown>>
+  /** 查询入群自动审批策略列表（平台标注内邀，未开白名单会报错） */
+  joinStrategies(): Promise<JoinApprovalStrategy[]>
+  /** 为群设置/更新入群自动审批策略；strategy 字段按平台文档透传 */
+  setJoinStrategy(groupOpenid: string, strategy: JoinApprovalStrategy): Promise<void>
   /** 逐页拉取成员，每页最多 30 */
   members(groupOpenid: string, cursor?: string): Promise<{ members: GroupMember[]; nextCursor: string }>
   member(groupOpenid: string, memberOpenid: string): Promise<GroupMember>
@@ -162,6 +188,8 @@ export interface BotApi {
     path: string,
     body?: unknown,
   ): Promise<{ status: number; data: T }>
+  /** 机器人自身资料（GET /users/@me）；调用频率由插件自己控制，框架不做缓存 */
+  me(): Promise<BotProfile>
   sendMessage(target: SendTarget, message: OutgoingMessage, options?: SendOptions): Promise<SendResult>
   /** 上传富媒体，返回可放入 media.file_info 的凭证 */
   uploadMedia(target: SendTarget, media: MediaSource | ImageSource): Promise<UploadedMedia>

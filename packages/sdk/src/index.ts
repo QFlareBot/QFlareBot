@@ -59,6 +59,9 @@ export type {
   PluginContext,
   ScopedR2,
   StoredObject,
+  BotProfile,
+  GroupInfo,
+  JoinApprovalStrategy,
 } from './context.js'
 
 export {

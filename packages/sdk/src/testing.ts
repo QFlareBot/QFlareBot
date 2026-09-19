@@ -288,7 +288,14 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
       return []
     },
     async reviewJoinRequest(g, m, decision, id) {
-      record('POST', `/v2/groups/${g}/approval_join_request/${m}`, { ...decision, join_request_id: id })
+      record('POST', `/v2/groups/approval_join_request/${m}`, { ...decision, join_request_id: id })
+    },
+    async joinStrategies() {
+      record('GET', '/v2/groups/join_approval_strategy')
+      return []
+    },
+    async setJoinStrategy(g, strategy) {
+      record('PUT', '/v2/groups/join_approval_strategy', { group_openid: g, ...strategy })
     },
   }
   return {
@@ -297,6 +304,10 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
     async raw(method, path, body) {
       record(method, path, body)
       return { status: 200, data: {} as never }
+    },
+    async me() {
+      record('GET', '/users/@me')
+      return { id: 'mock-bot', username: 'MockBot', avatar: '' }
     },
     async sendMessage(target, message, options?: SendOptions) {
       record('POST', `send:${target.scene}:${target.id}`, { message, options })

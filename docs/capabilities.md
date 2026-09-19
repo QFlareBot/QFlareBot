@@ -22,7 +22,7 @@
 | 撤回 | `session.recall(id?)` / `ctx.api.recallMessage()` | 2 分钟内；群管理员可撤成员消息 |
 | **用户头像**（官方 CDN 规范） | `session.avatarUrl`（640） / `qqAvatar(botId, openid, size)` | 纯拼接 `thirdqq.qlogo.cn/qqapp/{botId}/{openid}/{size}`（size 40/100/140/640），不发请求、无缓存 |
 | **@ 提及**（拼接文本） | `qqAt(openid)` → `<@openid>` | 放进 text / markdown content 即可；`session.mentions` 反向读取消息里 @ 了谁 |
-| **机器人自身资料** `/users/@me` | `session.botName` / `botAvatar`（或 `api.raw('GET', '/users/@me')`） | 面板保存凭证时拉取一次存快照，运行时零 API；改资料后重新保存凭证即可刷新 |
+| **机器人自身资料** `/users/@me` | `session.botName` / `botAvatar`（随快照下发）或 `ctx.api.me()` 直调（`BotProfile`） | 快照方案运行时零 API，改资料后重新保存凭证即可刷新；`api.me()` 不缓存，频率插件自控 |
 | Ark / Embed（频道） | raw | |
 | 表情回应 / 置顶 / 公告（频道） | raw | |
 
@@ -54,13 +54,13 @@
 
 | 接口 | 方法 |
 | --- | --- |
-| 群信息 / 机器人群内状态 | `info(g)` / `botState(g)` |
+| 群信息 / 机器人群内状态 | `info(g)`（`GroupInfo`）/ `botState(g)` |
+| 入群自动审批策略 查询 / 设置 | `joinStrategies()` / `setJoinStrategy(g, strategy)`（平台字段透传，平台标注内邀） |
 | 成员列表（游标分页，每页 30） / 成员信息 | `members(g, cursor)` / `member(g, m)` |
 | 批量移除（≤20，可同时拉黑） | `removeMembers(g, ids, { addToBlacklist })` |
 | 黑名单查询 / 操作 | `blacklist(g)` / `updateBlacklist(g, 'add' \| 'del', ids)` |
 | 禁言（≤20 人，≤30 天） / 禁言状态 | `mute(g, [{ op: 'add', memberOpenid, expireAt }])` / `muteState(g)` |
 | 入群申请列表 / 审批 | `joinRequests(g)` / `reviewJoinRequest(g, m, { approve } \| { approve: false, reason, addToBlacklist }, joinRequestId)` |
-| 入群自动审批策略 CRUD | raw：`/v2/groups/join_approval_strategy*` |
 
 成员列表、批量移除、黑名单三组接口平台标注"内邀接入中"，未开白名单会返回 11253。
 
@@ -68,9 +68,14 @@
 
 自定义菜单 `/v2/menu`、指令面板 `/v2/panels*`、分享链接 `/v2/generate_url_link`、频道 API 权限申请。这些改的是机器人整体外观，后续放到面板而不是插件契约里。
 
+## 错误语义
+
+非 2xx 统一抛 `QQApiError`（结果型方法转为 `SendResult.error`，不再抛）。message 由 `describeApiError` 生成：平台 message 优先，附加已收录错误码/状态码的中文说明与错误码原值（如 `主动消息失败, 无权限（错误码 40034）`）。`err.code` / `err.traceId` / `err.body` 可取原始信息；已知码表在 `@qqbot/api` 的 `errors.ts`，遇到新错误码欢迎补录。
+
 ## 未验证项
 
 - `file_data`（base64 直传）在原型中实测可用，但当前文档只列 `url` 与分片上传；大文件请用 `url`。
 - `api.bot.qq.com` 为文档统一域名（2026-08-10 起），已确认与 `api.sgroup.qq.com` 同网关；如需回退可传 `baseUrl`。
 - 群管理接口按文档字段实现，未在有管理员权限的群里实测。
 - 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此按钮回调暂不鉴权。
+- `group.info` 的字段名（`group_name` 等）与 `join_approval_strategy` 的请求/响应字段按文档路径透传实现，待在有管理权限的群里实测后收紧类型。
