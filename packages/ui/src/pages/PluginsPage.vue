@@ -95,11 +95,14 @@ async function install() {
 
 const builds = ref<InstallRecord[]>([])
 const buildsLoading = ref(false)
+const buildsSyncError = ref('')
 
 async function refreshBuilds() {
   buildsLoading.value = true
   try {
-    builds.value = (await api.builds()).builds
+    const res = await api.builds()
+    builds.value = res.builds
+    buildsSyncError.value = res.syncError ?? ''
   } catch {
     builds.value = []
   } finally {
@@ -107,6 +110,23 @@ async function refreshBuilds() {
   }
 }
 onMounted(() => void refreshBuilds())
+
+// —— 重新构建：重试失败的构建、或让插件吃上机器人仓库的新依赖 ——
+
+const rebuilding = ref(false)
+
+async function rebuild() {
+  rebuilding.value = true
+  try {
+    await api.triggerBuild()
+    push('已触发重新构建，完成后插件自动上线', 'success')
+  } catch (e) {
+    push(`触发构建失败：${(e as Error).message}`, 'error')
+  } finally {
+    rebuilding.value = false
+  }
+  void refreshBuilds()
+}
 
 const STATUS_META: Record<InstallRecord['status'], { tone: 'neutral' | 'success' | 'warning' | 'danger'; label: string }> = {
   pending: { tone: 'neutral', label: '待构建' },
@@ -150,10 +170,14 @@ function formatTs(ts: number): string {
       </QField>
     </QCard>
 
-    <QCard class="mt-4" title="构建记录" description="安装 / 升级 / 卸载 / 构建都会记录在这里">
+    <QCard class="mt-4" title="构建记录" description="安装 / 升级 / 卸载 / 构建都会记录在这里，只保留最近 100 条">
       <template #actions>
+        <QButton size="sm" variant="ghost" :loading="rebuilding" @click="rebuild">重新构建</QButton>
         <QButton size="sm" variant="ghost" :loading="buildsLoading" @click="refreshBuilds">刷新</QButton>
       </template>
+      <p v-if="buildsSyncError" class="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
+        构建状态同步失败：{{ buildsSyncError }}（请检查 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，其中 WORKER_TAG 是 scripts 列表返回的 tag 而不是名字）
+      </p>
       <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点刷新同步构建状态。" />
       <ul v-else class="divide-y divide-border">
         <li v-for="b in builds" :key="b.id" class="flex items-center gap-2 px-4 py-2">

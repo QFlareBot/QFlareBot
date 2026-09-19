@@ -12,6 +12,7 @@ import {
   markPendingBuilding,
   parseGitSource,
   rawManifestUrl,
+  updateInstallById,
   updateInstallByBuildUuid,
   upsertManifestPlugin,
   type InstallRecord,
@@ -215,7 +216,13 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
 
   const api = buildsApi(scope, deps)
   const { CF_WORKER_TAG } = scope.env
-  if (api && CF_WORKER_TAG && rows.some((r) => r.buildUuid && (r.status === 'building' || r.status === 'pending'))) {
+  let syncError: string | null = null
+  if (!api || !CF_WORKER_TAG) {
+    // 装过插件但没有 Builds 凭据：状态永远同步不了，如实告知
+    if (rows.some((r) => r.status === 'building' || r.status === 'pending')) {
+      syncError = '未配置 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，无法同步构建状态'
+    }
+  } else if (rows.some((r) => r.buildUuid && (r.status === 'building' || r.status === 'pending'))) {
     try {
       const builds = await api.listBuilds(CF_WORKER_TAG)
       const byUuid = new Map(builds.filter((b) => b.build_uuid).map((b) => [b.build_uuid!, b]))
@@ -237,9 +244,24 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
           row.commitHash = commitHash
         }
       }
-    } catch {
-      // 状态同步失败不阻塞账本返回；下次查询再试
+    } catch (err) {
+      // 同步失败必须可见，否则账本会永远停在"构建中"（例如 CF_WORKER_TAG 填成了 worker 名字）
+      syncError = err instanceof Error ? err.message : String(err)
+      deps.logger.warn('构建状态同步失败', { error: syncError })
     }
   }
-  return json({ ok: true, builds: rows })
+
+  // 卡死收敛：超过 24h 仍是非终态的记录按失败处理，避免账本永远"构建中"（实际结果未知）
+  const STALE_MS = 24 * 60 * 60 * 1000
+  for (const row of rows) {
+    if ((row.status === 'building' || row.status === 'pending') && Date.now() - row.ts > STALE_MS) {
+      const message = '构建状态超过 24h 未同步，已按失败处理（实际结果未知）'
+      if (row.buildUuid) await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', error: message })
+      else await updateInstallById(db, row.id, { status: 'failed', error: message })
+      row.status = 'failed'
+      row.error = message
+    }
+  }
+
+  return json({ ok: true, builds: rows, ...(syncError ? { syncError } : {}) })
 }

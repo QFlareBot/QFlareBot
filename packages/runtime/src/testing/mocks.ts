@@ -156,8 +156,12 @@ export function createManifestD1(): D1Database & {
             number,
           ]
           installs.set(id!, { id, action, name, source, manifest_hash, build_uuid, cf_status, status, commit_hash, error, ts })
+          // 保留策略：只留最近 100 条（与 insertInstall 的 prune 行为一致）
+          const rows = [...installs.values()].sort((a, b) => (b.ts as number) - (a.ts as number))
+          for (const old of rows.slice(100)) installs.delete(old.id as string)
           return { meta: { changes: 1 } }
         }
+        if (sql.startsWith('DELETE FROM rt_installs')) return { meta: { changes: 0 } }
         if (sql.startsWith('DELETE FROM rt_manifest_plugins')) {
           plugins.delete(params[0] as string)
           return { meta: { changes: 1 } }
@@ -171,6 +175,15 @@ export function createManifestD1(): D1Database & {
             }
           }
           return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('UPDATE rt_installs SET status = ?, error = ? WHERE id = ?')) {
+          const [status, error, id] = params as [string, string | null, string]
+          const row = installs.get(id!)
+          if (row) {
+            row.status = status
+            row.error = error
+          }
+          return { meta: { changes: row ? 1 : 0 } }
         }
         if (sql.startsWith('UPDATE rt_installs SET status = ?')) {
           const [status, cf_status, commit_hash, error, build_uuid] = params as [

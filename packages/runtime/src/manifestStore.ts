@@ -187,6 +187,9 @@ export interface NewInstall {
   error?: string | null
 }
 
+/** 账本保留条数：账本是排障用的近期流水，不是审计日志，超出即清 */
+const INSTALL_RETENTION = 100
+
 export async function insertInstall(db: D1Database, input: NewInstall, now = Date.now()): Promise<InstallRecord> {
   await ensureSchema(db)
   const record: InstallRecord = {
@@ -209,7 +212,24 @@ export async function insertInstall(db: D1Database, input: NewInstall, now = Dat
     )
     .bind(record.id, record.action, record.name, record.source, record.manifestHash, record.buildUuid, record.cfStatus, record.status, record.commitHash, record.error, record.ts)
     .run()
+  // 顺带把超出保留条数的旧记录清掉；清理失败不影响安装本身（下次写入会再试）
+  await db
+    .prepare(
+      `DELETE FROM ${TABLE_INSTALLS} WHERE id NOT IN (SELECT id FROM ${TABLE_INSTALLS} ORDER BY ts DESC LIMIT ${INSTALL_RETENTION})`,
+    )
+    .run()
+    .catch(() => {})
   return record
+}
+
+/** 按 id 更新一条账本记录（用于没有 build_uuid 的卡死记录收敛） */
+export async function updateInstallById(
+  db: D1Database,
+  id: string,
+  patch: { status: InstallRecord['status']; error?: string | null },
+): Promise<void> {
+  await ensureSchema(db)
+  await db.prepare(`UPDATE ${TABLE_INSTALLS} SET status = ?, error = ? WHERE id = ?`).bind(patch.status, patch.error ?? null, id).run()
 }
 
 /** 触发构建后，把同哈希的 pending 安装记录并入这次构建 */

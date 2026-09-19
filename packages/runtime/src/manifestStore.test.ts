@@ -11,6 +11,7 @@ import {
   parseGitSource,
   rawManifestUrl,
   resetManifestSchema,
+  updateInstallById,
   updateInstallByBuildUuid,
   upsertManifestPlugin,
   type InstallRecord,
@@ -129,5 +130,28 @@ describe('存储', () => {
     await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'failed', error: 'HTTP 502' })
     const [row] = await listInstalls(d1)
     expect(row).toMatchObject({ status: 'failed', error: 'HTTP 502' })
+  })
+})
+
+describe('账本治理', () => {
+  it('卡死记录按 id 收敛为失败', async () => {
+    reset()
+    await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building' })
+    const [row] = await listInstalls(d1)
+    await updateInstallById(d1, row!.id, { status: 'failed', error: '构建状态超过 24h 未同步' })
+    const [after] = await listInstalls(d1)
+    expect(after).toMatchObject({ status: 'failed', error: '构建状态超过 24h 未同步' })
+  })
+
+  it('账本只保留最近 100 条', async () => {
+    reset()
+    for (let i = 0; i < 105; i++) {
+      await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: `h${i}`, status: 'ok' }, 1_000_000 + i)
+    }
+    const rows = await listInstalls(d1, 200)
+    expect(rows.length).toBe(100)
+    // 最老的被清掉，最新的都在
+    expect(rows.some((r) => r.manifestHash === 'h0')).toBe(false)
+    expect(rows.some((r) => r.manifestHash === 'h104')).toBe(true)
   })
 })

@@ -83,7 +83,7 @@ export const api = {
   saveQQMenu: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('PUT', '/qq/menu', body),
   installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
   triggerBuild: (branch?: string) => request<TriggerBuildResult>('POST', '/builds', branch ? { branch } : undefined),
-  builds: () => request<{ ok: true; builds: InstallRecord[] }>('GET', '/builds'),
+  builds: () => request<{ ok: true; builds: InstallRecord[]; syncError?: string }>('GET', '/builds'),
   /** purge 为真时连插件数据一起清；默认保留，之后会在存储页列为孤儿 */
   uninstallPlugin: (name: string, purge = false) =>
     request<UninstallResult>('DELETE', `/manifest/plugins/${encodeURIComponent(name)}${purge ? '?purge=true' : ''}`),
