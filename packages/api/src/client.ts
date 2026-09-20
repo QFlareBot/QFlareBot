@@ -195,7 +195,7 @@ export class QQBotClient implements BotApi {
         }
         body.msg_type = MsgType.Media
         body.media = { file_info: uploaded.fileInfo }
-        body.content = msg.text ?? ' '
+        if (msg.text) body.content = msg.text
       } else if (msg.markdown || msg.keyboard) {
         // 键盘只能挂在 markdown 消息上；只给文本时自动升级
         const md = msg.markdown ?? {}
