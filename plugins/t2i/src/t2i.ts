@@ -13,9 +13,9 @@ export interface T2IOptions {
   type?: 'jpeg' | 'png' | 'webp'
   /** jpeg / webp 质量 1-100，默认 85 */
   quality?: number
-  /** 视口宽度，默认 1080 */
+  /** 视口宽度，默认 1080。注意：服务端有 1280x720 的视口下限，低于下限会被抬高（2026-09 实测） */
   width?: number
-  /** 视口高度（full_page 时为首屏高度），默认 1920 */
+  /** 视口高度（full_page 时为首屏高度），默认 1920。同样受 720 的下限钳制 */
   height?: number
   /** 是否整页截图，默认 true */
   fullPage?: boolean
