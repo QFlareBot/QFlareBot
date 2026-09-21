@@ -1,10 +1,11 @@
 import { definePlugin } from '@qqbot/sdk'
 import { T2I } from './t2i.js'
 import type { T2IConfig } from './t2i.js'
+import { DEFAULT_T2I_URL } from './t2i.js'
 import { PAGE_HTML } from './page.js'
 
 // 供其他插件 `import type { T2I, ... } from 'qqbot-plugin-t2i'` 使用
-export { T2I } from './t2i.js'
+export { DEFAULT_T2I_URL, T2I } from './t2i.js'
 export type {
   T2IConfig,
   T2IOptions,
@@ -41,7 +42,7 @@ export default definePlugin<PluginConfig>({
         type: 'string',
         title: 'AstrBot T2I 服务端点',
         description: 'T2I 服务基地址，需支持 POST /text2img/generate',
-        default: 'https://clown145-astrbot-t2i-service.hf.space',
+        default: DEFAULT_T2I_URL,
       },
       t2i_timeout: {
         type: 'integer',
@@ -55,7 +56,7 @@ export default definePlugin<PluginConfig>({
   },
 
   defaultConfig: {
-    t2i_url: 'https://clown145-astrbot-t2i-service.hf.space',
+    t2i_url: DEFAULT_T2I_URL,
     t2i_timeout: 25000,
   },
 

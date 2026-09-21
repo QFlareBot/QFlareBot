@@ -65,6 +65,9 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+/** 默认 T2I 服务基地址：configSchema 默认值 / defaultConfig / 构造器兜底共用一处 */
+export const DEFAULT_T2I_URL = 'https://clown145-astrbot-t2i-service.hf.space'
+
 const DEFAULT_TIMEOUT_MS = 25000
 
 export class T2I {
@@ -72,7 +75,7 @@ export class T2I {
   private readonly defaultTimeoutMs: number
 
   constructor(config: T2IConfig) {
-    this.baseUrl = (config.url || 'https://clown145-astrbot-t2i-service.hf.space').replace(/\/+$/, '')
+    this.baseUrl = (config.url || DEFAULT_T2I_URL).replace(/\/+$/, '')
     this.defaultTimeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_TIMEOUT_MS
   }
 
