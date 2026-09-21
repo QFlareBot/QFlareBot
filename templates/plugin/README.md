@@ -14,6 +14,7 @@ npm install
 - 插件不 import 运行时，所有能力（配置、KV、D1、日志、OpenAPI）都从处理器参数的 `ctx` 上取。
 - 只能 import `@qqbot/sdk` 与普通 npm 包；`cloudflare:workers` 等 Workers 内建模块可以用，构建时会保留为外部依赖。
 - 记得补一个 `LICENSE`，模板不替你选。
+- **提示**：若独立开发插件且 `@qqbot/sdk` 与 `@qqbot/plugin-cli` 尚未发布到 npm 公共源，建议在本项目 monorepo 内以本地工作区方式开发，或通过 `npm link` 进行本地调试。
 
 ### 命名约定
 

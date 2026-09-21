@@ -106,6 +106,69 @@ describe('GET /admin/build-manifest', () => {
   })
 })
 
+describe('GET /admin/build-config', () => {
+  it('匿名拒绝；BUILD_TOKEN 与管理密钥都能访问；返回 Worker 绑定的资源配置', async () => {
+    const { call } = setup({
+      CF_KV_ID: 'kv-12345',
+      CF_D1_ID: 'd1-67890',
+      CF_R2_NAME: 'r2-bucket',
+      CF_CUSTOM_DOMAIN: 'bot.example.com',
+    })
+    expect((await call('/admin/build-config')).status).toBe(401)
+
+    const viaBuild = await call('/admin/build-config', { headers: { authorization: `Bearer ${BUILD_TOKEN}` } })
+    expect(viaBuild.status).toBe(200)
+    const data = (await viaBuild.json()) as {
+      ok: boolean
+      bindings: {
+        workerName: string | null
+        kvId: string | null
+        d1Id: string | null
+        r2Name: string | null
+        domain: string | null
+        defaultDomain: string | null
+      }
+    }
+    expect(data.ok).toBe(true)
+    expect(data.bindings).toEqual({
+      workerName: null,
+      kvId: 'kv-12345',
+      d1Id: 'd1-67890',
+      r2Name: 'r2-bucket',
+      domain: 'bot.example.com',
+      defaultDomain: null,
+    })
+
+    const viaAdmin = await call('/admin/build-config', { headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(viaAdmin.status).toBe(200)
+  })
+
+  it('未配置时字段为 null', async () => {
+    const { call } = setup()
+    const res = await call('/admin/build-config', { headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as {
+      ok: boolean
+      bindings: {
+        workerName: string | null
+        kvId: string | null
+        d1Id: string | null
+        r2Name: string | null
+        domain: string | null
+        defaultDomain: string | null
+      }
+    }
+    expect(data.bindings).toEqual({
+      workerName: null,
+      kvId: null,
+      d1Id: null,
+      r2Name: null,
+      domain: null,
+      defaultDomain: null,
+    })
+  })
+})
+
 describe('POST /admin/manifest/plugins', () => {
   it('安装：拉声明清单校验后写入 D1，账本 pending', async () => {
     const { call } = setup()

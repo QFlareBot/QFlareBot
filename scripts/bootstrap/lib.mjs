@@ -1,19 +1,17 @@
-#!/usr/bin/env node
 /**
  * 引导部署核心库（headless.mjs 与 wizard.mjs 共用）。
  *
- * 职责：校验 API token → 推导账户 → 幂等创建/复用 KV / D1 / R2 → 把资源 id 与
- * 自定义域名写回 apps/seed/wrangler.jsonc（保留注释，单行手术）→ commit 回 fork →
- * 构建 + wrangler deploy → wrangler secret bulk 写入运行时密钥 → 可选把 QQ 凭证
- * 存进 KV（与管理面板同一条 PUT /admin/bot 路径，先向 QQ 验证）。
+ * 职责：校验 API token → 推导账户 → 幂等创建/复用 KV / D1 / R2 → 构建 + 部署 Worker
+ * （环境变量动态注入基础设施绑定，零 Git 污染）→ wrangler secret bulk 写入运行时密钥 →
+ * 可选向 QQ 验证凭据存入 KV。
  *
  * 设计约束：
- * - 幂等：资源按名字查到即复用；重跑只补缺（配置文件已是目标值则不产生 commit）
+ * - 幂等：资源按名字查到即复用；重跑只补缺，零 Git 污染
  * - token 只经环境变量/内存传递，绝不打印、绝不落盘
  * - R2 创建失败（未激活/无权限）降级为去掉 R2 绑定而不是整体失败
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -158,139 +156,47 @@ export async function getWorkersSubdomain(token, accountId) {
   return result?.subdomain ?? null
 }
 
-// ── wrangler.jsonc 回写：保留注释的单行手术 ────────────────────────────────
-// 模板里 kv_namespaces / d1_databases / r2_buckets / vars 都是"一行一个值"。
-// 读值 → 比较目标值 → 相同不动（幂等）、不同整行替换、行不存在按锚点插入
-// （降级移除后重跑引导能恢复）。锚点找不到就大声失败，避免静默改错地方。
-
-function readLineValue(text, key) {
-  const re = new RegExp(`^ {2}"${key}": (.*?)(,?)$`, 'm')
-  const m = re.exec(text)
-  if (!m) return null
-  try {
-    return JSON.parse(m[1])
-  } catch {
-    throw new BootstrapError(`wrangler.jsonc 的 "${key}" 行解析失败——模板可能被改过，请对照上游模板`)
-  }
-}
-
-function writeLineValue(text, key, value, anchorRe) {
-  const serialized = JSON.stringify(value)
-  const full = `  "${key}": ${serialized},`
-  const re = new RegExp(`^ {2}"${key}": .*$`, 'm')
-  if (re.test(text)) {
-    if (JSON.stringify(readLineValue(text, key)) === serialized) return text
-    return text.replace(re, full)
-  }
-  if (!anchorRe) throw new BootstrapError(`wrangler.jsonc 找不到 "${key}" 行，也没有插入锚点——请对照上游模板`)
-  const a = anchorRe.exec(text)
-  if (!a) throw new BootstrapError(`wrangler.jsonc 找不到 "${key}" 行的插入锚点——请对照上游模板`)
-  return text.slice(0, a.index + a[0].length) + '\n' + full + text.slice(a.index + a[0].length)
-}
-
-function dropLine(text, key, comment) {
-  const re = new RegExp(`^ {2}"${key}": .*$`, 'm')
-  if (!re.test(text)) return text
-  return text.replace(re, `  // ${comment}`)
-}
-
-/**
- * 把引导结果写回 wrangler.jsonc 文本。
- * patch：{ name?, kvId?, d1?: {name, id} | null（null=移除）, r2?: {name} | null,
- *         domain?: string（配了则 routes + workers_dev=false；未配则清掉 routes 行） }
- * 返回 { text, changed }
- */
-export function patchWranglerConfig(text, patch) {
-  let out = text
-  const kvAnchor = /^ {2}"kv_namespaces": .*$/m
-
-  if (patch.name && readLineValue(out, 'name') !== patch.name) {
-    out = writeLineValue(out, 'name', patch.name)
-  }
-
-  if (patch.kvId) {
-    const kv = readLineValue(out, 'kv_namespaces')
-    if (!Array.isArray(kv) || !kv[0]) throw new BootstrapError('wrangler.jsonc 缺少 kv_namespaces 数组')
-    if (kv[0].id !== patch.kvId) {
-      kv[0].id = patch.kvId
-      out = writeLineValue(out, 'kv_namespaces', kv)
-    }
-  }
-
-  if (patch.d1 === null) {
-    out = dropLine(out, 'd1_databases', 'd1_databases 已按引导配置移除（重跑引导可恢复，或手工加回）')
-  } else if (patch.d1) {
-    const existing = readLineValue(out, 'd1_databases')
-    const entry = {
-      binding: Array.isArray(existing) && existing[0]?.binding ? existing[0].binding : 'DB',
-      database_name: patch.d1.name,
-      database_id: patch.d1.id,
-    }
-    if (JSON.stringify(existing) !== JSON.stringify([entry])) {
-      out = writeLineValue(out, 'd1_databases', [entry], kvAnchor)
-    }
-  }
-
-  if (patch.r2 === null) {
-    out = dropLine(out, 'r2_buckets', 'r2_buckets 已按引导配置移除（R2 未激活或创建失败；重跑引导可恢复）')
-  } else if (patch.r2) {
-    const existing = readLineValue(out, 'r2_buckets')
-    const entry = { binding: Array.isArray(existing) && existing[0]?.binding ? existing[0].binding : 'R2', bucket_name: patch.r2.name }
-    if (JSON.stringify(existing) !== JSON.stringify([entry])) {
-      out = writeLineValue(out, 'r2_buckets', [entry], /^ {2}"d1_databases": .*$/m.test(out) ? /^ {2}"d1_databases": .*$/m : kvAnchor)
-    }
-  }
-
-  if (patch.name) {
-    const vars = readLineValue(out, 'vars')
-    if (vars && typeof vars === 'object' && !Array.isArray(vars)) {
-      if (vars.WORKER_NAME !== patch.name) {
-        vars.WORKER_NAME = patch.name
-        out = writeLineValue(out, 'vars', vars)
-      }
-    } else {
-      out = writeLineValue(out, 'vars', { WORKER_NAME: patch.name }, /^ {2}"observability": .*$/m)
-    }
-  }
-
-  if (patch.domain) {
-    const routesValue = [{ pattern: patch.domain, custom_domain: true }]
-    if (JSON.stringify(readLineValue(out, 'routes')) !== JSON.stringify(routesValue)) {
-      out = writeLineValue(out, 'routes', routesValue, /^ {2}"workers_dev": .*$/m)
-    }
-    if (readLineValue(out, 'workers_dev') !== false) {
-      out = writeLineValue(out, 'workers_dev', false)
-    }
-  }
-  // 未传 domain = 保持现状（重跑不填域名不会丢掉已配置的域名；要删域名手工改配置）
-
-  return { text: out, changed: out !== text }
-}
-
 // ── 命令执行 ─────────────────────────────────────────────────────────────
 
-function run(cmd, args, { cwd, env = {} } = {}) {
-  const r = spawnSync(cmd, args, {
-    cwd,
-    stdio: 'inherit',
-    env: { ...process.env, ...env },
+function runAsync(cmd, args, { cwd, env = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: 'inherit',
+      env: { ...process.env, ...env },
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code !== 0) reject(new BootstrapError(`命令失败（退出码 ${code}）：${cmd} ${args.join(' ')}`))
+      else resolve()
+    })
   })
-  if (r.status !== 0) throw new BootstrapError(`命令失败（退出码 ${r.status}）：${cmd} ${args.join(' ')}`)
 }
 
-export function buildAndDeploy({ repoRoot, token, accountId }) {
-  run('pnpm', ['install', '--frozen-lockfile'], { cwd: repoRoot })
-  run('pnpm', ['build'], { cwd: repoRoot })
-  run('pnpm', ['--filter', '@qqbot/seed', 'run', 'deploy'], { cwd: repoRoot, env: { CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: accountId } })
+export async function buildAndDeploy({ repoRoot, token, accountId, workerName, bindings = {} }) {
+  const env = {
+    CLOUDFLARE_API_TOKEN: token,
+    CLOUDFLARE_ACCOUNT_ID: accountId,
+    ...(workerName ? { CF_WORKER_NAME: workerName } : {}),
+    ...(bindings.kvId ? { CF_KV_ID: bindings.kvId } : {}),
+    ...(bindings.d1Id ? { CF_D1_ID: bindings.d1Id } : {}),
+    ...(bindings.r2Name ? { CF_R2_NAME: bindings.r2Name } : {}),
+    ...(bindings.domain ? { CF_CUSTOM_DOMAIN: bindings.domain } : {}),
+    INITIAL_BOOTSTRAP: 'true',
+  }
+  await runAsync('pnpm', ['install', '--frozen-lockfile'], { cwd: repoRoot })
+  await runAsync('pnpm', ['--filter', '@qqbot/seed', 'run', 'deploy:manifest'], { cwd: repoRoot, env })
 }
 
 /** 部署后写 Worker secrets（wrangler secret bulk，stdin 传 JSON）；token 仅用于 wrangler 鉴权 */
-export function writeSecrets({ repoRoot, secrets, token, accountId }) {
+export function writeSecrets({ repoRoot, secrets, token, accountId, workerName }) {
   const entries = Object.entries(secrets).filter(([, v]) => typeof v === 'string' && v.length > 0)
   if (!entries.length) return
   const payload = JSON.stringify(Object.fromEntries(entries))
   const seedDir = path.join(repoRoot, 'apps', 'seed')
-  const r = spawnSync('npx', ['wrangler', 'secret', 'bulk'], {
+  const args = ['exec', 'wrangler', 'secret', 'bulk']
+  if (workerName) args.push('--name', workerName)
+  const r = spawnSync('pnpm', args, {
     cwd: seedDir,
     input: payload,
     stdio: ['pipe', 'inherit', 'inherit'],
@@ -320,18 +226,6 @@ export async function putBotConfig({ baseUrl, adminToken, appId, secret }) {
   return true
 }
 
-/** 把回写的配置 commit 进 fork；无变更返回 false。默认只在 Actions 里 push，本地试跑不推 */
-export function commitBack({ repoRoot, message, push = process.env.GITHUB_ACTIONS === 'true' }) {
-  run('git', ['config', 'user.name', 'github-actions[bot]'], { cwd: repoRoot })
-  run('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], { cwd: repoRoot })
-  run('git', ['add', 'apps/seed/wrangler.jsonc'], { cwd: repoRoot })
-  const diff = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: repoRoot })
-  if (diff.status === 0) return false
-  run('git', ['commit', '-m', message], { cwd: repoRoot })
-  if (push) run('git', ['push', 'origin', 'HEAD'], { cwd: repoRoot })
-  return true
-}
-
 // ── 汇总输出 ─────────────────────────────────────────────────────────────
 
 /** 主 token 的预填创建链接（权限组 key 已实测有效） */
@@ -343,9 +237,28 @@ export function buildsConnectUrl(accountId, workerName) {
   return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/builds`
 }
 
+/** Worker 的 Domains & Routes / Triggers 设置页 */
+export function workerDomainsUrl(accountId, workerName) {
+  return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/settings/triggers`
+}
+
 /** 把引导结果渲染成 Markdown 汇总（GITHUB_STEP_SUMMARY / 向导完成页共用） */
-export function renderSummary(result) {
-  const { baseUrl, panelUrl, webhookUrl, manifestUrl, adminToken, resources, buildsTokenWritten, qqSaved, warnings, accountId, workerName } = result
+export function renderSummary(result, { redactSecrets = false } = {}) {
+  const {
+    baseUrl,
+    defaultDomain,
+    domain,
+    panelUrl,
+    webhookUrl,
+    manifestUrl,
+    adminToken,
+    resources,
+    buildsTokenWritten,
+    qqSaved,
+    warnings,
+    accountId,
+    workerName,
+  } = result
   const lines = []
   lines.push('## ✅ 引导部署完成')
   lines.push('')
@@ -353,16 +266,27 @@ export function renderSummary(result) {
   lines.push('| --- | --- |')
   lines.push(`| 管理面板 | ${panelUrl} |`)
   lines.push(`| 回调地址（填到 QQ 开放平台） | \`${webhookUrl}\` |`)
-  lines.push(`| 构建机拉清单地址 | \`${manifestUrl}\` |`)
+  lines.push(`| 构建机拉清单地址（MANIFEST_URL） | \`${manifestUrl}\` |`)
+  if (defaultDomain && defaultDomain !== domain) {
+    lines.push(`| 默认域名（构建直连） | \`${defaultDomain}\` |`)
+  }
   if (resources.kv) lines.push(`| KV | ${resources.kv.name}${resources.kv.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.d1) lines.push(`| D1 | ${resources.d1.name}${resources.d1.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.r2) lines.push(`| R2 | ${resources.r2.name}${resources.r2.created ? '（新建）' : '（复用已有）'} |`)
   lines.push('')
-  lines.push('<details><summary><b>ADMIN_TOKEN</b>（面板登录密钥，只在这里显示一次）</summary>')
+  lines.push('<details><summary><b>ADMIN_TOKEN</b>（面板登录密钥）</summary>')
   lines.push('')
-  lines.push('```')
-  lines.push(adminToken)
-  lines.push('```')
+  if (redactSecrets) {
+    lines.push('⚠️ **为防止公开仓库泄露密钥，ADMIN_TOKEN 未明文写入本页公共 Step Summary。**')
+    lines.push('')
+    lines.push('- **无 UI 部署**：已应用您在 GitHub Secrets 中指定的 `ADMIN_TOKEN`；')
+    lines.push('- **网页向导部署**：已在向导网页中设置/展示；')
+    lines.push('- 若后续遗忘，可在 Cloudflare 控制台（Worker -> Settings -> Variables and Secrets）中重置，或使用 `wrangler secret put ADMIN_TOKEN` 重新设置。')
+  } else {
+    lines.push('```')
+    lines.push(adminToken)
+    lines.push('```')
+  }
   lines.push('')
   lines.push('</details>')
   lines.push('')
@@ -377,7 +301,7 @@ export function renderSummary(result) {
   lines.push('   pnpm --filter @qqbot/seed run manifest:deploy')
   lines.push('   # 环境变量（Settings → Builds → Environment variables）')
   lines.push(`   MANIFEST_URL=${manifestUrl}`)
-  lines.push(`   MANIFEST_TOKEN=${adminToken}`)
+  lines.push(`   MANIFEST_TOKEN=${redactSecrets ? '<你在部署时填写的 ADMIN_TOKEN>' : adminToken}`)
   lines.push('   ```')
   if (buildsTokenWritten) {
     lines.push('')
@@ -387,7 +311,15 @@ export function renderSummary(result) {
     lines.push('   **尚未配置 `CF_BUILDS_TOKEN`**（Worker 触发重建用）：创建一个 user token（权限：Workers Builds Configuration Edit + Workers Scripts Read，账户范围限本账户），`wrangler secret put CF_BUILDS_TOKEN` 写入，或重跑引导时带上。配置后到面板装一个插件即可验证重建链路。')
   }
   lines.push('')
-  lines.push(`2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 \`${webhookUrl}\`${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
+  if (!domain) {
+    lines.push(`2. **绑定自定义域名**（国内 QQ 开放平台 Webhook 刚需）：`)
+    lines.push(`   由于国内网络无法稳定直连 \`*.workers.dev\`，请打开 [Cloudflare 域名设置页](${workerDomainsUrl(accountId, workerName)})，在 **Custom Domains** 中添加你的二级域名（如 \`bot.yourdomain.com\`）。`)
+    lines.push(`   绑定后，QQ 开放平台的回调地址即为：\`https://你的域名/webhook\`。`)
+    lines.push('')
+    lines.push(`3. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填好${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
+  } else {
+    lines.push(`2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 \`${webhookUrl}\`${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
+  }
   lines.push('')
   if (warnings.length) {
     lines.push('### ⚠️ 提醒')
@@ -395,7 +327,7 @@ export function renderSummary(result) {
     for (const w of warnings) lines.push(`- ${w}`)
     lines.push('')
   }
-  lines.push('> 幂等：本工作流可随时重跑。重跑会复用同名资源、保持已回写的配置；重跑时填了新的自定义域名会切换域名。')
+  lines.push('> 幂等：本工作流可随时重跑。重跑会复用同名资源；重跑时填了新的自定义域名会切换域名。')
   lines.push('')
   return lines.join('\n')
 }
@@ -431,6 +363,7 @@ export async function runBootstrap(opts) {
     domain,
     qq,
     buildsToken,
+    adminToken: customAdminToken,
     repoRoot,
     onStep = () => {},
   } = opts
@@ -471,7 +404,7 @@ export async function runBootstrap(opts) {
     }
   })
 
-  // 资源名：未填 = 用默认名；'none' = 显式跳过该资源（不绑定）
+  // 资源名：未填 = 用默认名；'none' = 显式跳过该资源（D1/R2 可选跳过；KV 为核心依赖必须绑定）
   const kvTarget = kvName && kvName !== 'none' ? kvName : workerName
   const d1Target = d1Name === 'none' ? '' : (d1Name || workerName)
   const r2Target = r2Name === 'none' ? '' : (r2Name || `${workerName}-artifacts`)
@@ -492,42 +425,40 @@ export async function runBootstrap(opts) {
     }
   }
 
-  const configPath = path.join(repoRoot, 'apps', 'seed', 'wrangler.jsonc')
-  await step('回写 wrangler.jsonc', async () => {
-    const text = await readFile(configPath, 'utf8')
-    const { text: next, changed } = patchWranglerConfig(text, {
-      name: workerName !== 'qqbot' ? workerName : undefined,
-      kvId: kv.id,
-      // d1/r2 为 null = 从配置里移除（显式跳过，或 R2 创建失败降级）
-      d1: d1 ? { name: d1Target, id: d1.id } : null,
-      r2: r2 ? { name: r2.name } : null,
-      domain,
-    })
-    if (changed) await writeFile(configPath, next)
-    return changed
-  })
+  const bindings = {
+    kvId: kv.id,
+    d1Id: d1?.id,
+    r2Name: r2?.name,
+    domain,
+  }
 
-  await step('提交回写配置', () => {
-    const committed = commitBack({ repoRoot, message: 'chore(bootstrap): 写入资源 id 与部署配置 [skip ci]' })
-    if (!committed) warnings.push('配置无变化，未产生新提交（幂等重跑）')
-    return committed
-  })
-
-  await step('构建并部署 Worker', () => buildAndDeploy({ repoRoot, token, accountId }))
+  await step('构建并部署 Worker', () => buildAndDeploy({ repoRoot, token, accountId, workerName, bindings }))
 
   const subdomain = await step('查询 workers.dev 子域', () => getWorkersSubdomain(token, accountId))
-  const baseUrl = domain ? `https://${domain}` : `https://${workerName}.${subdomain}.workers.dev`
-  if (!domain && !subdomain) throw new BootstrapError('拿不到 workers.dev 子域，且未配置自定义域名')
+  const defaultDomain = subdomain ? `${workerName}.${subdomain}.workers.dev` : ''
+  const defaultBaseUrl = defaultDomain ? `https://${defaultDomain}` : ''
+  const baseUrl = domain ? `https://${domain}` : defaultBaseUrl
+  if (!baseUrl) throw new BootstrapError('拿不到 workers.dev 子域，且未配置自定义域名')
 
-  const adminToken = randomBytes(32).toString('base64url')
-  await step('写入 Worker 密钥', () => {
+  // 构建机拉清单地址：优先采用稳定默认域名（直连 Cloudflare 内部边缘网络，零外部 DNS 依赖）
+  const manifestUrl = `${defaultBaseUrl || baseUrl}/admin/build-manifest`
+
+  const adminToken = customAdminToken || randomBytes(32).toString('base64url')
+  await step('写入 Worker 密钥与资源配置', () => {
     writeSecrets({
       repoRoot,
       token,
       accountId,
+      workerName,
       secrets: {
         ADMIN_TOKEN: adminToken,
         CF_ACCOUNT_ID: accountId,
+        CF_WORKER_NAME: workerName,
+        CF_DEFAULT_DOMAIN: defaultDomain,
+        CF_KV_ID: kv.id,
+        CF_D1_ID: d1?.id || '',
+        CF_R2_NAME: r2?.name || '',
+        CF_CUSTOM_DOMAIN: domain || '',
         ...(buildsToken ? { CF_BUILDS_TOKEN: buildsToken } : {}),
       },
     })
@@ -541,9 +472,11 @@ export async function runBootstrap(opts) {
     accountId,
     workerName,
     baseUrl,
+    defaultDomain,
+    domain: domain || null,
     panelUrl: `${baseUrl}/`,
     webhookUrl: `${baseUrl}/webhook`,
-    manifestUrl: `${baseUrl}/admin/build-manifest`,
+    manifestUrl,
     adminToken,
     resources: {
       kv: kv ? { name: kvTarget, id: kv.id, created: kv.created } : null,
@@ -552,6 +485,7 @@ export async function runBootstrap(opts) {
     },
     buildsTokenWritten: !!buildsToken,
     qqSaved: !!(qq?.appId && qq?.secret),
+    isCustomAdminToken: Boolean(customAdminToken),
     warnings,
   }
 }

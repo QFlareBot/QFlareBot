@@ -47,6 +47,33 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
   return json({ ok: true, hash: await manifestHash(plugins), plugins, generatedAt: new Date().toISOString() })
 }
 
+/** 构建机拉配置：拉取当前 Worker 的基础设施绑定标识（KV ID, D1 ID 等） */
+export async function handleBuildConfig(request: Request, scope: RequestScope): Promise<Response> {
+  const buildToken = scope.env.BUILD_TOKEN
+  const bearer = bearerOf(request)
+  const viaBuildToken = !!buildToken && bearer === buildToken
+  if (!viaBuildToken && !(await authenticate(request, scope.env.ADMIN_TOKEN)).admin) return error('未授权', 401)
+
+  return json({
+    ok: true,
+    bindings: {
+      workerName:
+        typeof scope.env.CF_WORKER_NAME === 'string' && scope.env.CF_WORKER_NAME.length > 0
+          ? scope.env.CF_WORKER_NAME
+          : (typeof scope.env.WORKER_NAME === 'string' && scope.env.WORKER_NAME.length > 0 ? scope.env.WORKER_NAME : null),
+      kvId: typeof scope.env.CF_KV_ID === 'string' && scope.env.CF_KV_ID.length > 0 ? scope.env.CF_KV_ID : null,
+      d1Id: typeof scope.env.CF_D1_ID === 'string' && scope.env.CF_D1_ID.length > 0 ? scope.env.CF_D1_ID : null,
+      r2Name: typeof scope.env.CF_R2_NAME === 'string' && scope.env.CF_R2_NAME.length > 0 ? scope.env.CF_R2_NAME : null,
+      domain: typeof scope.env.CF_CUSTOM_DOMAIN === 'string' && scope.env.CF_CUSTOM_DOMAIN.length > 0 ? scope.env.CF_CUSTOM_DOMAIN : null,
+      defaultDomain:
+        typeof scope.env.CF_DEFAULT_DOMAIN === 'string' && scope.env.CF_DEFAULT_DOMAIN.length > 0
+          ? scope.env.CF_DEFAULT_DOMAIN
+          : null,
+    },
+    generatedAt: new Date().toISOString(),
+  })
+}
+
 /** 声明清单：root 的 manifest.json 优先，dist/manifest.json 兜底（旧仓库布局） */
 async function fetchDeclaredManifest(
   git: NonNullable<ReturnType<typeof parseGitSource>>,

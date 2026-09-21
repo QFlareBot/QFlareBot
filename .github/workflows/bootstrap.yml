@@ -1,13 +1,12 @@
 # 引导部署：Fork 后运行本工作流即可完成首次部署。
 #
 # 两种模式（自动选择）：
-# - 已配置 GitHub secret CLOUDFLARE_API_TOKEN → 无 UI 引导：直接建资源、部署、回写配置，
+# - 已配置 GitHub secret CLOUDFLARE_API_TOKEN → 无 UI 引导：直接建资源、部署，
 #   汇总（面板地址、回调地址、ADMIN_TOKEN、后续步骤）写进本页 Summary。
 # - 未配置 → 网页引导：工作流起一个 Cloudflare Quick Tunnel 暴露向导网页，
 #   点开 run 页 Summary 里的链接，跟着网页一步步做（创建 token、填表、看进度）。
 #
-# 幂等可重跑：资源按名字复用、配置已是目标值则不产生提交。
-# 权限需求：contents: write 用于把回写的 wrangler.jsonc 提交进你的 fork。
+# 幂等可重跑：资源按名字复用，零 Git 污染（不产生任何提交，上游同步保持零冲突）。
 
 name: Bootstrap
 
@@ -23,7 +22,7 @@ on:
         required: false
         default: 'qqbot'
       kv_name:
-        description: 'KV 名称（留空=同 Worker 名；none=跳过 KV）'
+        description: 'KV 名称（留空=同 Worker 名）'
         required: false
         default: ''
       d1_name:
@@ -35,16 +34,16 @@ on:
         required: false
         default: ''
       custom_domain:
-        description: '自定义域名（可选；大陆访问 *.workers.dev 不稳定时建议填）'
+        description: '自定义域名（可选；留空走默认域名部署，部署后可在 CF 控制台随时绑定）'
         required: false
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: bootstrap
-  cancel-in-progress: false
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bootstrap:
@@ -70,25 +69,26 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_BUILDS_TOKEN: ${{ secrets.CLOUDFLARE_BUILDS_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ github.event.inputs.account_id }}
-          BOOT_WORKER_NAME: ${{ github.event.inputs.worker_name }}
-          BOOT_KV_NAME: ${{ github.event.inputs.kv_name }}
-          BOOT_D1_NAME: ${{ github.event.inputs.d1_name }}
-          BOOT_R2_NAME: ${{ github.event.inputs.r2_name }}
-          BOOT_DOMAIN: ${{ github.event.inputs.custom_domain }}
-          # QQ 凭证只能走 secret：dispatch 输入会显示在 run 页面
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+          BOOT_WORKER_NAME: ${{ inputs.worker_name }}
+          BOOT_KV_NAME: ${{ inputs.kv_name }}
+          BOOT_D1_NAME: ${{ inputs.d1_name }}
+          BOOT_R2_NAME: ${{ inputs.r2_name }}
+          BOOT_DOMAIN: ${{ inputs.custom_domain }}
+          # 敏感凭证只能走 secret：dispatch 输入会直接公开显示在 run 页面
           QQ_APPID: ${{ secrets.QQ_APPID }}
           QQ_APP_SECRET: ${{ secrets.QQ_APP_SECRET }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: node scripts/bootstrap/headless.mjs
 
       - name: 网页引导（Quick Tunnel 向导）
         if: env.HAS_TOKEN != 'true'
         env:
-          BOOT_ACCOUNT_ID: ${{ github.event.inputs.account_id }}
-          BOOT_WORKER_NAME: ${{ github.event.inputs.worker_name }}
-          BOOT_KV_NAME: ${{ github.event.inputs.kv_name }}
-          BOOT_D1_NAME: ${{ github.event.inputs.d1_name }}
-          BOOT_R2_NAME: ${{ github.event.inputs.r2_name }}
-          BOOT_DOMAIN: ${{ github.event.inputs.custom_domain }}
+          BOOT_ACCOUNT_ID: ${{ inputs.account_id }}
+          BOOT_WORKER_NAME: ${{ inputs.worker_name }}
+          BOOT_KV_NAME: ${{ inputs.kv_name }}
+          BOOT_D1_NAME: ${{ inputs.d1_name }}
+          BOOT_R2_NAME: ${{ inputs.r2_name }}
+          BOOT_DOMAIN: ${{ inputs.custom_domain }}
           REPO: ${{ github.repository }}
         run: node scripts/bootstrap/wizard.mjs

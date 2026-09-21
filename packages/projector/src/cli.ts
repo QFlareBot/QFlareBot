@@ -99,6 +99,7 @@ async function build(args: { manifest: string; wrangler: string; out: string }):
     base: wranglerConfig,
     projection,
     mainPath: toPosix(path.relative(wranglerDir, path.join(outDir, 'index.js'))),
+    bindings,
   })
   const generatedPath = path.join(wranglerDir, 'wrangler.generated.jsonc')
   await writeFile(generatedPath, `// 由 @qqbot/projector 生成，勿手改\n${JSON.stringify(generated, null, 2)}\n`, 'utf8')

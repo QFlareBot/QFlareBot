@@ -28,6 +28,19 @@ if (!env.CLOUDFLARE_API_TOKEN) {
 
 const opt = (name) => (env[name] && env[name].trim()) || undefined
 
+const adminToken = opt('ADMIN_TOKEN')
+if (!adminToken) {
+  console.error('❌ 缺少 ADMIN_TOKEN！')
+  console.error('无 UI 引导模式必须显式提供管理密钥（ADMIN_TOKEN）。')
+  console.error('为防止敏感信息泄露，GitHub Actions 会对公共日志与 Step Summary 进行安全脱敏。若由系统随机生成您将无法获知登录密码。')
+  console.error('请在仓库设置（Settings → Secrets and variables → Actions）中配置 Secret `ADMIN_TOKEN` 后重试；或者清空 CLOUDFLARE_API_TOKEN 使用网页向导模式（可在向导中直接输入或查看密码）。')
+  process.exit(1)
+}
+
+if (adminToken) console.log(`::add-mask::${adminToken}`)
+if (env.QQ_APP_SECRET) console.log(`::add-mask::${env.QQ_APP_SECRET}`)
+if (env.CLOUDFLARE_BUILDS_TOKEN) console.log(`::add-mask::${env.CLOUDFLARE_BUILDS_TOKEN}`)
+
 try {
   const result = await runBootstrap({
     token: env.CLOUDFLARE_API_TOKEN,
@@ -39,6 +52,7 @@ try {
     domain: opt('BOOT_DOMAIN'),
     qq: env.QQ_APPID && env.QQ_APP_SECRET ? { appId: env.QQ_APPID, secret: env.QQ_APP_SECRET } : undefined,
     buildsToken: opt('CLOUDFLARE_BUILDS_TOKEN'),
+    adminToken,
     repoRoot,
     onStep: (name, state, detail) => {
       const mark = state === 'ok' ? '✅' : state === 'run' ? '⏳' : state === 'warn' ? '⚠️ ' : '❌'
@@ -46,9 +60,16 @@ try {
     },
   })
 
-  const summary = renderSummary(result)
+  const isCi = !!process.env.GITHUB_STEP_SUMMARY
+  const summary = renderSummary(result, { redactSecrets: isCi })
   appendStepSummary(summary)
-  console.log('\n' + summary)
+
+  if (isCi) {
+    console.log('\n✅ 引导部署完成！完整面板地址与配置参数已写入本页 GitHub Step Summary。')
+    console.log('管理密钥 ADMIN_TOKEN：已使用您预设的 Secret 配置，请使用该密钥登录管理后台。')
+  } else {
+    console.log('\n' + renderSummary(result, { redactSecrets: false }))
+  }
   console.log(`\n主 Token 预填创建链接（供未建 token 的后来者参考）：\n${SETUP_TOKEN_URL}`)
 } catch (err) {
   const message = err instanceof BootstrapError ? err.message : (err?.message ?? String(err))

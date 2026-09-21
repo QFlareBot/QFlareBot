@@ -19,6 +19,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { readFile, writeFile, chmod } from 'node:fs/promises'
 import os from 'node:os'
@@ -39,6 +40,11 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const PORT = Number(process.env.PORT || 8787)
 const IDLE_TIMEOUT_MS = 40 * 60 * 1000
+const CLAIM_TIMEOUT_MS = 15 * 60 * 1000
+
+const sessionId = randomBytes(16).toString('hex')
+let claimedCookie = null
+let claimTimer = null
 
 const env = process.env
 const state = {
@@ -48,7 +54,22 @@ const state = {
   workerName: env.BOOT_WORKER_NAME?.trim() || 'qqbot',
   provision: null, // { lines: [], done, ok, error, result }
   completed: false,
+  completeTimer: null,
   lastActivity: Date.now(),
+}
+
+function parseCookies(req) {
+  const list = {}
+  const rc = req.headers.cookie
+  if (rc) {
+    for (const cookie of rc.split(';')) {
+      const parts = cookie.split('=')
+      if (parts.length >= 2) {
+        list[parts[0].trim()] = decodeURIComponent(parts.slice(1).join('=').trim())
+      }
+    }
+  }
+  return list
 }
 
 function log(line) {
@@ -127,24 +148,34 @@ async function startTunnel() {
     const child = spawn(binary, ['tunnel', '--url', `http://127.0.0.1:${PORT}`, '--no-autoupdate'], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    const deadline = Date.now() + 90 * 1000
+    const timer = setTimeout(() => {
+      cleanup()
+      rejectTunnel(new Error('等待 trycloudflare 地址超时（90秒）'))
+    }, 90 * 1000)
+
+    const cleanup = () => {
+      clearTimeout(timer)
+      child.stdout.off('data', onData)
+      child.stderr.off('data', onData)
+    }
+
     const onData = (chunk) => {
       const text = String(chunk)
       const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(text)
       if (match) {
-        child.stdout.off('data', onData)
-        child.stderr.off('data', onData)
+        cleanup()
         child.stdout.resume()
         child.stderr.resume()
         log(`Quick Tunnel 就绪：${match[0]}`)
         resolveTunnel(match[0])
-      } else if (Date.now() > deadline) {
-        rejectTunnel(new Error('等待 trycloudflare 地址超时'))
       }
     }
     child.stdout.on('data', onData)
     child.stderr.on('data', onData)
-    child.on('exit', (code) => rejectTunnel(new Error(`cloudflared 提前退出（${code}）`)))
+    child.on('exit', (code) => {
+      cleanup()
+      rejectTunnel(new Error(`cloudflared 提前退出（${code}）`))
+    })
   })
 }
 
@@ -155,11 +186,50 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`)
 
   try {
+    const cookies = parseCookies(req)
+    const clientCookie = cookies.wizard_session
+    const sidParam = url.searchParams.get('sid')
+
+    // 页面路由（/ 与 /index.html）
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-      const html = await readFile(path.join(repoRoot, 'scripts', 'bootstrap', 'page.html'), 'utf8')
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      res.end(html)
+      if (!claimedCookie) {
+        // 尚未认领：校验 sid
+        if (sidParam && sidParam === sessionId) {
+          claimedCookie = randomBytes(32).toString('hex')
+          if (claimTimer) {
+            clearTimeout(claimTimer)
+            claimTimer = null
+          }
+          log('向导已被首个浏览器会话成功认领并锁定，已屏蔽其他外部访问')
+          const html = await readFile(path.join(repoRoot, 'scripts', 'bootstrap', 'page.html'), 'utf8')
+          res.writeHead(200, {
+            'content-type': 'text/html; charset=utf-8',
+            'set-cookie': `wizard_session=${claimedCookie}; Path=/; HttpOnly; SameSite=Lax`,
+          })
+          res.end(html)
+          return
+        }
+        res.writeHead(403, { 'content-type': 'text/html; charset=utf-8' })
+        res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>访问受限</title><style>body{font-family:sans-serif;background:#202124;color:#e8eaed;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center}div{max-width:520px;line-height:1.6}h1{font-size:22px;color:#f28b82}</style></head><body><div><h1>🚫 访问受限</h1><p>缺少有效向导凭证（sid）。请通过 GitHub Actions 运行页面的 Step Summary 打开完整向导链接。</p></div></body></html>`)
+        return
+      }
+
+      // 已经认领：只允许持有专属 Cookie 的浏览器访问
+      if (clientCookie === claimedCookie) {
+        const html = await readFile(path.join(repoRoot, 'scripts', 'bootstrap', 'page.html'), 'utf8')
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.end(html)
+        return
+      }
+
+      res.writeHead(403, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>向导已被锁定</title><style>body{font-family:sans-serif;background:#202124;color:#e8eaed;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center}div{max-width:520px;line-height:1.6}h1{font-size:22px;color:#f28b82}</style></head><body><div><h1>🔒 向导已被接管并锁定</h1><p>本部署向导已被认领并在其他浏览器会话中进行中。为保护您的账户资产与密钥安全，已屏蔽其他客户端访问。</p></div></body></html>`)
       return
+    }
+
+    // 所有 API 接口一律要求已认领且 Cookie 匹配
+    if (!claimedCookie || clientCookie !== claimedCookie) {
+      return json(res, 403, { error: '未授权：向导已被其他会话接管或会话已失效' })
     }
 
     if (req.method === 'GET' && url.pathname === '/api/init') {
@@ -214,6 +284,9 @@ const server = createServer(async (req, res) => {
       state.provision = provision
       const workerName = (body.workerName || state.workerName).trim() || 'qqbot'
       state.workerName = workerName
+      const adminToken = (typeof body.adminToken === 'string' && body.adminToken.trim()) || undefined
+      if (adminToken) mask(adminToken)
+      if (body.qqSecret) mask(body.qqSecret)
       runBootstrap({
         token: state.token,
         accountId: body.accountId?.trim() || state.accountId,
@@ -224,6 +297,7 @@ const server = createServer(async (req, res) => {
         domain: body.domain?.trim() || undefined,
         qq: body.qqAppId && body.qqSecret ? { appId: body.qqAppId.trim(), secret: body.qqSecret.trim() } : undefined,
         buildsToken: null, // 构建 token 在连接仓库后的收尾步骤写入
+        adminToken: adminToken || undefined,
         repoRoot,
         onStep: (name, st, detail) => {
           const mark = st === 'ok' ? '✅' : st === 'run' ? '⏳' : st === 'warn' ? '⚠️ ' : '❌'
@@ -248,7 +322,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/progress') {
       const p = state.provision
-      json(res, 200, p ? { lines: p.lines, done: p.done, ok: p.ok, error: p.error, hint: p.hint ?? null } : { lines: [], done: false, ok: false })
+      json(res, 200, p ? { lines: p.lines, done: p.done, ok: p.ok, error: p.error, hint: p.hint ?? null, result: p.result ?? null } : { lines: [], done: false, ok: false })
       return
     }
 
@@ -306,19 +380,31 @@ const server = createServer(async (req, res) => {
           if (!items.length) throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——先完成连接仓库一步')
         }
         await verify()
-        writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, secrets: { CF_BUILDS_TOKEN: buildsToken } })
+        writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, workerName: state.workerName, secrets: { CF_BUILDS_TOKEN: buildsToken } })
         buildsTokenWritten = true
       }
       const summary = renderSummary({
         ...state.provision.result,
         buildsTokenWritten,
-      })
+      }, { redactSecrets: true })
       if (env.GITHUB_STEP_SUMMARY) {
         await writeFile(env.GITHUB_STEP_SUMMARY, summary + '\n').catch(() => {})
       }
       state.completed = true
       json(res, 200, { ok: true, summary })
-      setTimeout(() => process.exit(0), 3000) // 给页面留出收到响应的时间
+      // 不再 3 秒强杀 Runner，留出 10 分钟窗口供用户查看/复制配置，用户也可在页面点击“完成并退出”立即释放 Runner
+      if (state.completeTimer) clearTimeout(state.completeTimer)
+      state.completeTimer = setTimeout(() => {
+        log('向导完成后超时退出')
+        process.exit(0)
+      }, 10 * 60 * 1000).unref()
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/exit') {
+      log('收到网页端退出确认，安全关闭工作流服务...')
+      json(res, 200, { ok: true, message: '向导已关闭' })
+      setTimeout(() => process.exit(0), 1000)
       return
     }
 
@@ -348,7 +434,8 @@ server.listen(PORT, '127.0.0.1', async () => {
   log(`向导服务已启动：http://127.0.0.1:${PORT}`)
   try {
     const tunnelUrl = await startTunnel()
-    const notice = `::notice::🚀 引导向导已就绪：${tunnelUrl} （请在 run 页 Summary 里点开，跟着网页完成部署）`
+    const fullUrl = `${tunnelUrl}/?sid=${sessionId}`
+    const notice = `::notice::🚀 引导向导已就绪：${fullUrl} （请在 run 页 Summary 里点开，跟着网页完成部署）`
     console.log(notice)
     if (env.GITHUB_STEP_SUMMARY) {
       await writeFile(
@@ -356,14 +443,29 @@ server.listen(PORT, '127.0.0.1', async () => {
         [
           '## 🚀 网页引导已就绪',
           '',
-          `**👉 点这里打开向导：${tunnelUrl}**`,
+          `**👉 点这里打开向导：${fullUrl}**`,
           '',
-          '在网页上：创建并粘贴 API token → 填名称与可选项 → 看进度 → 连接仓库 → 创建构建 token。',
-          '完成后本工作流自动结束；链接 40 分钟内有效。也可以在 secret 里配置 `CLOUDFLARE_API_TOKEN` 后重跑本工作流走无 UI 模式。',
+          '> 🔒 **安全保护**：本向导链接包含专属认证凭据，首个打开链接的浏览器将独占控制权并锁定，防止未授权访问。',
+          '',
+          '在网页上：创建并粘贴 API token → 自定义管理密码与可选项 → 部署 Worker → 连接仓库。',
+          '完成后本工作流将保持 10 分钟供查阅配置（也可在页面点击立即安全退出）。也可以在 Secret 里配置 `CLOUDFLARE_API_TOKEN` 后重跑走无 UI 模式。',
           '',
         ].join('\n'),
       )
     }
+
+    claimTimer = setTimeout(() => {
+      if (!claimedCookie) {
+        log('15 分钟内未被任何浏览器客户端认领，自动超时退出以节约 Actions 配额')
+        if (env.GITHUB_STEP_SUMMARY) {
+          writeFile(
+            env.GITHUB_STEP_SUMMARY,
+            ['## ⏱️ 向导已超时关闭', '', '在 15 分钟内未检测到用户打开向导网页，工作流已自动结束并释放 runner 资源。', ''].join('\n'),
+          ).catch(() => {})
+        }
+        process.exit(1)
+      }
+    }, CLAIM_TIMEOUT_MS)
   } catch (err) {
     log(`隧道启动失败：${err.message}——改用无 UI 模式重跑（配置 CLOUDFLARE_API_TOKEN secret）`)
     process.exit(1)

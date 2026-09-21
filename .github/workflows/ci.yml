@@ -2,8 +2,15 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -33,3 +40,8 @@ jobs:
       # 真跑一次投影才覆盖得到：它会构建全部包，再用构建产物执行 CLI。
       - name: 投影种子应用（覆盖构建产物与 CLI 执行路径）
         run: pnpm --filter @qqbot/seed run project
+
+      # 验证自部署准备脚本（拉取/合并清单、就地构建、生成 wrangler.generated.jsonc）
+      - name: 验证种子应用清单解析与自部署预构建
+        run: pnpm --filter @qqbot/seed run manifest:prepare
+

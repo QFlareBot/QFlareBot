@@ -3,6 +3,7 @@ import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } fro
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
   checkPluginUpdate,
+  handleBuildConfig,
   handleBuildManifest,
   installManifestPlugin,
   listBuildsStatus,
@@ -146,9 +147,10 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   const sub = url.pathname.slice(deps.options.adminPath.length) || '/'
   const method = request.method
 
-  // 构建机拉清单：BUILD_TOKEN 优先，未配置时与面板同一鉴权（ADMIN_TOKEN 本身可未配置）；
-  // 放在 ADMIN_TOKEN 存在性检查之前，构建清单不随管理 API 一起关闭
+  // 构建机拉清单与基础设施配置：BUILD_TOKEN 优先，未配置时与面板同一鉴权（ADMIN_TOKEN 本身可未配置）；
+  // 放在 ADMIN_TOKEN 存在性检查之前，构建端点不随管理 API 一起关闭
   if (method === 'GET' && sub === '/build-manifest') return handleBuildManifest(request, scope)
+  if (method === 'GET' && sub === '/build-config') return handleBuildConfig(request, scope)
 
   const token = scope.env.ADMIN_TOKEN
   if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)

@@ -1,5 +1,6 @@
 import { collectDurableObjects } from './glue.js'
 import { KEPT_BINDING_TYPES, type BaseBindings, type DeployManifest, type VersionMetadata, type WorkerBinding } from './types.js'
+import { PROVISIONED_PLACEHOLDER } from './wrangler.js'
 
 /** `workers/tag` 取投影哈希前缀（平台上限 100 字符） */
 export const TAG_LENGTH = 20
@@ -11,9 +12,13 @@ export function defaultMessage(manifest: DeployManifest, hash: string): string {
 export function buildBindings(bindings: BaseBindings, manifest: DeployManifest): WorkerBinding[] {
   const out: WorkerBinding[] = [
     { type: 'kv_namespace', name: bindings.kv.binding, namespace_id: bindings.kv.namespaceId },
-    { type: 'd1', name: bindings.d1.binding, database_id: bindings.d1.databaseId },
   ]
-  if (bindings.r2) out.push({ type: 'r2_bucket', name: bindings.r2.binding, bucket_name: bindings.r2.bucketName })
+  if (bindings.d1?.databaseId && bindings.d1.databaseId !== PROVISIONED_PLACEHOLDER) {
+    out.push({ type: 'd1', name: bindings.d1.binding, database_id: bindings.d1.databaseId })
+  }
+  if (bindings.r2?.bucketName && bindings.r2.bucketName !== PROVISIONED_PLACEHOLDER) {
+    out.push({ type: 'r2_bucket', name: bindings.r2.binding, bucket_name: bindings.r2.bucketName })
+  }
   for (const [name, text] of Object.entries(bindings.vars ?? {})) {
     out.push({ type: 'plain_text', name, text })
   }

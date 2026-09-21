@@ -59,4 +59,22 @@ describe('buildVersionMetadata', () => {
     expect(m.bindings.map((b) => b.type)).toEqual(['kv_namespace', 'd1'])
     expect(m.annotations['workers/message']).toBe('自定义')
   })
+
+  it('D1 或 R2 为占位符时不在 VersionMetadata 中注入绑定', () => {
+    const manifest = makeDeployManifest()
+    const m = buildVersionMetadata({
+      manifest,
+      bindings: {
+        kv: { binding: 'KV', namespaceId: 'real-kv' },
+        d1: { binding: 'DB', databaseId: '<provisioned>' },
+        r2: { binding: 'R2', bucketName: '<provisioned>' },
+      },
+      compatibilityDate: '2025-09-01',
+      hash: HASH,
+    })
+    const types = m.bindings.map((b) => b.type)
+    expect(types).toContain('kv_namespace')
+    expect(types).not.toContain('d1')
+    expect(types).not.toContain('r2_bucket')
+  })
 })

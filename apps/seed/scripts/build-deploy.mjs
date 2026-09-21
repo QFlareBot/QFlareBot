@@ -21,7 +21,7 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { buildPlugin } from '@qqbot/plugin-cli'
-import { CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
+import { CloudflareApiError, CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
@@ -51,6 +51,25 @@ async function fetchRemotePlugins() {
     return data.plugins
   } catch (err) {
     console.warn(`拉取构建清单失败（${err.message}），回退到仓库内置清单 qqbot.manifest.json`)
+    return null
+  }
+}
+
+/** 拉取线上 Worker 的基础设施绑定（KV/D1/R2 ID 及自定义域名）；失败则保持环境现状 */
+async function fetchRemoteConfig() {
+  const url = process.env.MANIFEST_URL
+  if (!url) return null
+  try {
+    const configUrl = url.replace(/\/build-manifest(\?.*)?$/, '/build-config$1')
+    const headers = process.env.MANIFEST_TOKEN ? { authorization: `Bearer ${process.env.MANIFEST_TOKEN}` } : {}
+    const res = await fetch(configUrl, { headers })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    if (!data.bindings || typeof data.bindings !== 'object') throw new Error('响应缺少 bindings 对象')
+    console.log('已从构建配置接口取得基础设施绑定标识：', data.bindings)
+    return data.bindings
+  } catch (err) {
+    console.warn(`拉取基础设施配置未完成（${err.message}），使用本地/环境变量配置`)
     return null
   }
 }
@@ -124,6 +143,16 @@ async function buildGitPlugin(entry) {
 }
 
 async function prepare() {
+  const remoteConfig = await fetchRemoteConfig()
+  if (remoteConfig) {
+    if (remoteConfig.workerName && !process.env.CF_WORKER_NAME) process.env.CF_WORKER_NAME = remoteConfig.workerName
+    if (remoteConfig.kvId && !process.env.CF_KV_ID) process.env.CF_KV_ID = remoteConfig.kvId
+    if (remoteConfig.d1Id && !process.env.CF_D1_ID) process.env.CF_D1_ID = remoteConfig.d1Id
+    if (remoteConfig.r2Name && !process.env.CF_R2_NAME) process.env.CF_R2_NAME = remoteConfig.r2Name
+    if (remoteConfig.domain && !process.env.CF_CUSTOM_DOMAIN) process.env.CF_CUSTOM_DOMAIN = remoteConfig.domain
+    if (remoteConfig.defaultDomain && !process.env.CF_DEFAULT_DOMAIN) process.env.CF_DEFAULT_DOMAIN = remoteConfig.defaultDomain
+  }
+
   const base = JSON.parse(await readFile(path.join(appDir, 'qqbot.manifest.json'), 'utf8'))
   const remote = (await fetchRemotePlugins()) ?? []
   const overrides = new Map(remote.map((p) => [p.name, p]))
@@ -156,6 +185,7 @@ async function prepare() {
   execFileSync(process.execPath, [cliJs, 'build', '--manifest', path.basename(RESOLVED_MANIFEST), '--wrangler', 'wrangler.jsonc', '--out', 'dist'], {
     cwd: appDir,
     stdio: 'inherit',
+    env: process.env,
   })
 
   const { hash } = JSON.parse(await readFile(path.join(appDir, 'dist', 'projection.json'), 'utf8'))
@@ -175,8 +205,8 @@ async function collectModules(dir, prefix = '') {
 async function deployPhase() {
   const projection = JSON.parse(await readFile(path.join(appDir, 'dist', 'projection.json'), 'utf8'))
   const wrangler = parseJsonc(await readFile(path.join(appDir, 'wrangler.jsonc'), 'utf8'))
-  const scriptName = wrangler.name
-  if (!scriptName) throw new Error('wrangler.jsonc 缺少 name')
+  const scriptName = process.env.CF_WORKER_NAME?.trim() || wrangler.name
+  if (!scriptName) throw new Error('缺少 Worker 名称（环境变量 CF_WORKER_NAME 或 wrangler.jsonc 的 name）')
 
   const { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID } = process.env
   let accountId = CLOUDFLARE_ACCOUNT_ID
@@ -194,21 +224,50 @@ async function deployPhase() {
     } catch {}
   }
 
+  const isInitialBootstrap = process.env.INITIAL_BOOTSTRAP === 'true'
+  if (isInitialBootstrap) {
+    console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 进行资源初始化与域名/触发器绑定…')
+    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+      cwd: appDir,
+      stdio: 'inherit',
+      env: process.env,
+    })
+    return
+  }
+
   if (!CLOUDFLARE_API_TOKEN || !accountId) {
     console.log('未检测到 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，退回 wrangler deploy（无预览健康检查）')
-    execFileSync('npx', ['wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], { cwd: appDir, stdio: 'inherit' })
+    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+      cwd: appDir,
+      stdio: 'inherit',
+      env: process.env,
+    })
     return
   }
 
   // 直接用构建产物走 Versions API：上传 → 预览地址健康检查 → 切流量，健康检查失败不切
   const modules = await collectModules(path.join(appDir, 'dist'))
   const api = new CloudflareWorkersApi({ accountId, apiToken: CLOUDFLARE_API_TOKEN })
-  await deploy({
-    api,
-    scriptName,
-    projection: { mainModule: 'index.js', modules, hash: projection.hash, metadata: projection.metadata },
-    onProgress: (step) => console.log(`[${step.stage}] ${step.message}`),
-  })
+  try {
+    await deploy({
+      api,
+      scriptName,
+      projection: { mainModule: 'index.js', modules, hash: projection.hash, metadata: projection.metadata },
+      onProgress: (step) => console.log(`[${step.stage}] ${step.message}`),
+    })
+  } catch (err) {
+    const isScriptNotFound = err instanceof CloudflareApiError && err.errors?.some((e) => e.code === 10007)
+    if (isScriptNotFound) {
+      console.warn(`Worker ${scriptName} 尚未在 Cloudflare 创建，自动降级为 wrangler deploy 完成首次创建与配置绑定…`)
+      execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+        cwd: appDir,
+        stdio: 'inherit',
+        env: process.env,
+      })
+      return
+    }
+    throw err
+  }
 }
 
 const phase = process.argv[2]

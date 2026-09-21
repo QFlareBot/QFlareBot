@@ -4,11 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
 
-  // 绑定以本文件为准，不要在后台手工加，否则下次部署会丢。
-  // 资源 id 与自定义域名不写死在仓库：首次运行 .github/workflows/bootstrap.yml 引导工作流，
-  // 它会按名字创建/复用资源，把 id、域名写回本文件并提交到你的 fork。
-  // 引导工作流同时同步 name 与 vars.WORKER_NAME（后者供运行时自发现构建目标）。
-  // R2 只写桶名；KV 与 D1 必须有 id——自部署走的 Versions API 不认名字，缺 id 报 10021。
+  // 模板声明：本文件只声明绑定名字与结构，不硬编码具体资源 ID 或个人域名。
+  // 首次运行引导工作流，资源 ID 将写入 Worker Secrets 并由构建端点动态下发；
+  // 自部署与构建时自动注入 wrangler.generated.jsonc，无需向 Git 仓库回写任何私有配置。
   "kv_namespaces": [{ "binding": "KV" }],
   // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时整行删掉
   "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],

@@ -86,8 +86,10 @@
     <input id="f-worker" placeholder="qqbot">
     <label>R2 桶名（留空 = &lt;Worker名&gt;-artifacts）</label>
     <input id="f-r2" placeholder="qqbot-artifacts">
-    <label>自定义域名（可选；大陆访问 *.workers.dev 不稳定时建议填，域名需已托管在该账户）</label>
+    <label>自定义域名（可选；留空走默认域名部署，部署后可在 CF 控制台随时一键绑定）</label>
     <input id="f-domain" placeholder="bot.example.com">
+    <label>管理面板密码 ADMIN_TOKEN（可选；留空将自动生成随机密钥）</label>
+    <input id="f-admin-token" placeholder="留空自动生成（建议自己设置以便记忆）" type="password">
     <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）</label>
     <input id="f-qq-appid" placeholder="AppID">
     <input id="f-qq-secret" placeholder="AppSecret" type="password">
@@ -127,8 +129,13 @@
   <section id="step-done" class="hidden">
     <h2>🎉 完成</h2>
     <table id="result-table"></table>
-    <details><summary>ADMIN_TOKEN（面板登录密钥）</summary><code id="admin-token"></code></details>
-    <div class="msg">本工作流将在几秒后自动结束，向导链接随即失效。</div>
+    <div id="domains-guide" class="msg" style="margin-top: 12px; line-height: 1.6;"></div>
+    <details id="admin-token-wrap"><summary>ADMIN_TOKEN（面板登录密钥）</summary><code id="admin-token"></code></details>
+    <div id="admin-token-custom-hint" class="msg hidden" style="margin-top: 8px;">🔑 <b>面板登录密钥</b>：已设为您在表单中填写的自定义密码。</div>
+    <div style="margin-top: 24px;">
+      <button id="exit-btn" class="btn">完成并安全关闭向导</button>
+      <div id="exit-hint" class="hint" style="margin-top: 8px;">为方便您查阅与复制配置，本页面将保持开启 10 分钟。点击上方按钮可立即结束工作流并释放 GitHub Actions Runner。</div>
+    </div>
   </section>
 </main>
 
@@ -206,6 +213,7 @@ $('start-btn').onclick = async () => {
       kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2 和域名
       r2Name: $('f-r2').value.trim(),
       domain: $('f-domain').value.trim(),
+      adminToken: $('f-admin-token').value.trim() || undefined,
       qqAppId: $('f-qq-appid').value.trim(),
       qqSecret: $('f-qq-secret').value.trim(),
     })
@@ -235,11 +243,35 @@ function pollProgress() {
         show('step-builds')
         $('step-builds').scrollIntoView({ behavior: 'smooth' })
         const r = p.result
+        const isCustom = !!r.isCustomAdminToken
+        if (isCustom) {
+          $('admin-token-wrap').classList.add('hidden')
+          $('admin-token-custom-hint').classList.remove('hidden')
+        } else {
+          $('admin-token-wrap').classList.remove('hidden')
+          $('admin-token-custom-hint').classList.add('hidden')
+          $('admin-token').textContent = r.adminToken
+        }
         $('connect-link').href = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/builds`
-        $('result-table').innerHTML = [
-          ['管理面板', r.panelUrl], ['回调地址', r.webhookUrl], ['构建清单地址', r.manifestUrl], ['ADMIN_TOKEN', r.adminToken],
-        ].map(([k, v]) => `<tr><td>${k}</td><td><code>${v}</code></td></tr>`).join('')
-        $('admin-token').textContent = r.adminToken
+        const rows = [
+          ['管理面板', r.panelUrl],
+          ['回调地址（QQ 开放平台）', r.webhookUrl],
+          ['构建清单地址（MANIFEST_URL）', r.manifestUrl],
+        ]
+        if (r.defaultDomain && r.defaultDomain !== r.domain) {
+          rows.push(['默认域名（构建直连）', r.defaultDomain])
+        }
+        rows.push(['ADMIN_TOKEN', isCustom ? '已设为您自定义的密码' : r.adminToken])
+        $('result-table').innerHTML = rows
+          .map(([k, v]) => `<tr><td>${k}</td><td><code>${v}</code></td></tr>`)
+          .join('')
+
+        if (!r.domain) {
+          const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
+          $('domains-guide').innerHTML = `💡 <b>国内 QQ Webhook 提示</b>：国内网络访问 <code>*.workers.dev</code> 易受阻断。建议前往 <a href="${domainsUrl}" target="_blank" rel="noopener" style="color: #8ab4f8; text-decoration: underline;">Cloudflare 域名设置页 ↗</a> 添加自定义域名（如 <code>bot.yourdomain.com</code>）。绑定后回调地址填 <code>https://你的域名/webhook</code>。`
+        } else {
+          $('domains-guide').classList.add('hidden')
+        }
 
         // 立即尝试获取预填的构建 Token 链接
         api('/api/builds-token-url', {})
@@ -304,6 +336,22 @@ $('skip-btn').onclick = async () => {
   show('step-done')
   say('builds-msg', '已跳过构建 token——装插件触发重建前需要补配（见完成页提示）。', '')
   $('step-done').scrollIntoView({ behavior: 'smooth' })
+}
+
+$('exit-btn').onclick = async () => {
+  $('exit-btn').disabled = true
+  try {
+    await api('/api/exit', {})
+    document.querySelector('main').innerHTML = `
+      <div style="text-align: center; padding: 60px 20px;">
+        <h1 style="font-size: 26px; margin-bottom: 12px;">✅ 部署向导已安全关闭</h1>
+        <p style="color: #9aa0a6; font-size: 14px;">工作流已正常结束并释放 GitHub Actions Runner，您可以安全关闭此标签页。</p>
+      </div>
+    `
+  } catch (err) {
+    alert('关闭失败：' + err.message)
+    $('exit-btn').disabled = false
+  }
 }
 
 $('cancel-btn').onclick = async () => {

@@ -28,6 +28,13 @@ export interface RuntimeEnv {
   CF_BUILD_BRANCH?: string
   /** 本 Worker 的脚本名（= wrangler.jsonc 的 name，引导工作流同步写入 vars）。自发现构建目标用 */
   WORKER_NAME?: string
+  /** —— 基础设施绑定：由引导工作流写入 secrets，供构建机拉取动态注入 wrangler.generated.jsonc —— */
+  CF_WORKER_NAME?: string
+  CF_KV_ID?: string
+  CF_D1_ID?: string
+  CF_R2_NAME?: string
+  CF_CUSTOM_DOMAIN?: string
+  CF_DEFAULT_DOMAIN?: string
   [binding: string]: unknown
 }
 

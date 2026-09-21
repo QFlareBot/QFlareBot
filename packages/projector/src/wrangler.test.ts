@@ -64,6 +64,27 @@ describe('deriveBindings', () => {
     expect(bindings.d1.binding).toBe('DB')
     expect(warnings.length).toBeGreaterThan(0)
   })
+
+  it('配置缺失 id 但环境变量有 CF_* 时自动补齐，不产生 warnings', () => {
+    process.env.CF_KV_ID = 'env-kv-id'
+    process.env.CF_D1_ID = 'env-d1-id'
+    process.env.CF_R2_NAME = 'env-r2-name'
+    try {
+      const { bindings, warnings } = deriveBindings({
+        kv_namespaces: [{ binding: 'KV' }],
+        d1_databases: [{ binding: 'DB' }],
+        r2_buckets: [{ binding: 'R2' }],
+      })
+      expect(bindings.kv.namespaceId).toBe('env-kv-id')
+      expect(bindings.d1.databaseId).toBe('env-d1-id')
+      expect(bindings.r2?.bucketName).toBe('env-r2-name')
+      expect(warnings).toEqual([])
+    } finally {
+      delete process.env.CF_KV_ID
+      delete process.env.CF_D1_ID
+      delete process.env.CF_R2_NAME
+    }
+  })
 })
 
 describe('generateWranglerConfig', () => {
@@ -121,5 +142,72 @@ describe('generateWranglerConfig', () => {
     const twice = generateWranglerConfig({ base: once, projection, mainPath: 'o/index.js' })
     expect(twice.durable_objects).toEqual(once.durable_objects)
     expect(twice.migrations).toEqual(once.migrations)
+  })
+
+  it('自动注入推导得到的资源 ID 与自定义域名 routes', () => {
+    process.env.CF_CUSTOM_DOMAIN = 'bot.test.com'
+    try {
+      const templateBase = {
+        name: 'bot',
+        kv_namespaces: [{ binding: 'KV' }],
+        d1_databases: [{ binding: 'DB', database_name: 'qqbot' }],
+        r2_buckets: [{ binding: 'R2' }],
+        workers_dev: true,
+      }
+      const out = generateWranglerConfig({
+        base: templateBase,
+        projection: makeProjection(),
+        mainPath: 'out/index.js',
+        bindings: {
+          kv: { binding: 'KV', namespaceId: 'injected-kv-id' },
+          d1: { binding: 'DB', databaseId: 'injected-d1-id' },
+          r2: { binding: 'R2', bucketName: 'injected-r2-bucket' },
+        },
+      })
+      expect(out.kv_namespaces?.[0]?.id).toBe('injected-kv-id')
+      expect(out.d1_databases?.[0]?.database_id).toBe('injected-d1-id')
+      expect(out.r2_buckets?.[0]?.bucket_name).toBe('injected-r2-bucket')
+      expect(out.routes).toEqual([{ pattern: 'bot.test.com', custom_domain: true }])
+      expect(out.workers_dev).toBe(true)
+    } finally {
+      delete process.env.CF_CUSTOM_DOMAIN
+    }
+  })
+
+  it('CF_WORKER_NAME 动态重写 Worker 脚本名与 vars.WORKER_NAME', () => {
+    process.env.CF_WORKER_NAME = 'my-custom-bot'
+    try {
+      const out = generateWranglerConfig({
+        base: { name: 'qqbot', vars: { WORKER_NAME: 'qqbot' } },
+        projection: makeProjection(),
+        mainPath: 'out/index.js',
+      })
+      expect(out.name).toBe('my-custom-bot')
+      expect(out.vars?.WORKER_NAME).toBe('my-custom-bot')
+    } finally {
+      delete process.env.CF_WORKER_NAME
+    }
+  })
+
+  it('未配置或跳过 D1 与 R2 时，从配置中安全剥离对应字段', () => {
+    const templateBase = {
+      name: 'bot',
+      kv_namespaces: [{ binding: 'KV', id: 'kv-id' }],
+      d1_databases: [{ binding: 'DB', database_name: 'qqbot' }],
+      r2_buckets: [{ binding: 'R2', bucket_name: 'qqbot-artifacts' }],
+    }
+    const out = generateWranglerConfig({
+      base: templateBase,
+      projection: makeProjection(),
+      mainPath: 'out/index.js',
+      bindings: {
+        kv: { binding: 'KV', namespaceId: 'kv-id' },
+        d1: { binding: 'DB', databaseId: PROVISIONED_PLACEHOLDER },
+        r2: { binding: 'R2', bucketName: PROVISIONED_PLACEHOLDER },
+      },
+    })
+    expect(out.kv_namespaces?.[0]?.id).toBe('kv-id')
+    expect(out.d1_databases).toBeUndefined()
+    expect(out.r2_buckets).toBeUndefined()
   })
 })

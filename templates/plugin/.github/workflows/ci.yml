@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
     tags: ['v*']
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -27,16 +34,29 @@ jobs:
             exit 1
           fi
 
-      - run: npm ci
+      - name: 安装依赖
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - run: npm run typecheck
 
       - name: 构建并校验声明清单与源码一致
         run: |
           npm run build
           node -e "
             const fs = require('node:fs');
-            const built = fs.readFileSync('dist/manifest.json', 'utf8').trim();
-            const declared = fs.readFileSync('manifest.json', 'utf8').trim();
-            if (built !== declared) {
+            const built = JSON.parse(fs.readFileSync('dist/manifest.json', 'utf8'));
+            const declared = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            const stable = (v) => {
+              if (v === null || typeof v !== 'object') return JSON.stringify(v);
+              if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+              return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+            };
+            if (stable(built) !== stable(declared)) {
               console.error('manifest.json（声明清单）与 dist/manifest.json 不一致：');
               console.error('请运行 npm run sync 后提交新的 manifest.json');
               process.exit(1);
