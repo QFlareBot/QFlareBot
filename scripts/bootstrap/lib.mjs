@@ -285,7 +285,7 @@ export function buildAndDeploy({ repoRoot, token, accountId }) {
 }
 
 /** 部署后写 Worker secrets（wrangler secret bulk，stdin 传 JSON）；token 仅用于 wrangler 鉴权 */
-export function writeSecrets({ repoRoot, secrets, token }) {
+export function writeSecrets({ repoRoot, secrets, token, accountId }) {
   const entries = Object.entries(secrets).filter(([, v]) => typeof v === 'string' && v.length > 0)
   if (!entries.length) return
   const payload = JSON.stringify(Object.fromEntries(entries))
@@ -294,7 +294,11 @@ export function writeSecrets({ repoRoot, secrets, token }) {
     cwd: seedDir,
     input: payload,
     stdio: ['pipe', 'inherit', 'inherit'],
-    env: { ...process.env, CLOUDFLARE_API_TOKEN: token },
+    env: {
+      ...process.env,
+      CLOUDFLARE_API_TOKEN: token,
+      ...(accountId ? { CLOUDFLARE_ACCOUNT_ID: accountId } : {}),
+    },
   })
   if (r.status !== 0) throw new BootstrapError('wrangler secret bulk 失败')
 }
@@ -324,7 +328,7 @@ export function commitBack({ repoRoot, message, push = process.env.GITHUB_ACTION
   const diff = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: repoRoot })
   if (diff.status === 0) return false
   run('git', ['commit', '-m', message], { cwd: repoRoot })
-  if (push) run('git', ['push'], { cwd: repoRoot })
+  if (push) run('git', ['push', 'origin', 'HEAD'], { cwd: repoRoot })
   return true
 }
 
@@ -520,6 +524,7 @@ export async function runBootstrap(opts) {
     writeSecrets({
       repoRoot,
       token,
+      accountId,
       secrets: {
         ADMIN_TOKEN: adminToken,
         CF_ACCOUNT_ID: accountId,

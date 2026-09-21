@@ -134,6 +134,8 @@ async function startTunnel() {
       if (match) {
         child.stdout.off('data', onData)
         child.stderr.off('data', onData)
+        child.stdout.resume()
+        child.stderr.resume()
         log(`Quick Tunnel 就绪：${match[0]}`)
         resolveTunnel(match[0])
       } else if (Date.now() > deadline) {
@@ -250,17 +252,28 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/builds-status') {
-      if (!state.token || !state.accountId) return json(res, 400, { error: '先完成引导' })
+    if ((req.method === 'POST' || req.method === 'GET') && url.pathname === '/api/builds-status') {
+      if (!state.accountId) return json(res, 400, { error: '先完成引导' })
+      let buildsToken = ''
+      if (req.method === 'POST') {
+        const body = await readBody(req)
+        if (typeof body.buildsToken === 'string') buildsToken = body.buildsToken.trim()
+      } else {
+        buildsToken = url.searchParams.get('buildsToken')?.trim() || ''
+      }
+      if (!buildsToken) {
+        return json(res, 200, { ok: false, connected: false, error: '请先粘贴构建 Token' })
+      }
+      mask(buildsToken)
       try {
-        const scripts = await cfFetch(state.token, `/accounts/${state.accountId}/workers/scripts`)
+        const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
         const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
-        if (!me?.tag) return json(res, 200, { connected: false })
-        const triggers = await cfFetch(state.token, `/accounts/${state.accountId}/builds/workers/${me.tag}/triggers`)
+        if (!me?.tag) return json(res, 200, { ok: false, connected: false, error: `找不到脚本 ${state.workerName}` })
+        const triggers = await cfFetch(buildsToken, `/accounts/${state.accountId}/builds/workers/${me.tag}/triggers`)
         const items = Array.isArray(triggers) ? triggers : triggers?.items ?? []
-        json(res, 200, { connected: items.length > 0 })
+        json(res, 200, { ok: true, connected: items.length > 0, count: items.length })
       } catch (err) {
-        json(res, 200, { connected: false, error: err.message })
+        json(res, 200, { ok: false, connected: false, error: err.message })
       }
       return
     }
@@ -293,7 +306,7 @@ const server = createServer(async (req, res) => {
           if (!items.length) throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——先完成连接仓库一步')
         }
         await verify()
-        writeSecrets({ repoRoot, token: state.token, secrets: { CF_BUILDS_TOKEN: buildsToken } })
+        writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, secrets: { CF_BUILDS_TOKEN: buildsToken } })
         buildsTokenWritten = true
       }
       const summary = renderSummary({
@@ -306,6 +319,19 @@ const server = createServer(async (req, res) => {
       state.completed = true
       json(res, 200, { ok: true, summary })
       setTimeout(() => process.exit(0), 3000) // 给页面留出收到响应的时间
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/cancel') {
+      log('收到网页端终止请求，准备停止工作流...')
+      if (env.GITHUB_STEP_SUMMARY) {
+        await writeFile(
+          env.GITHUB_STEP_SUMMARY,
+          ['## ⏹️ 引导已主动终止', '', '用户在网页向导中主动取消了部署工作流。', ''].join('\n'),
+        ).catch(() => {})
+      }
+      json(res, 200, { ok: true, message: '工作流已终止' })
+      setTimeout(() => process.exit(0), 1000)
       return
     }
 

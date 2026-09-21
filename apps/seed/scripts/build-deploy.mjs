@@ -179,7 +179,22 @@ async function deployPhase() {
   if (!scriptName) throw new Error('wrangler.jsonc 缺少 name')
 
   const { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID } = process.env
-  if (!CLOUDFLARE_API_TOKEN || !CLOUDFLARE_ACCOUNT_ID) {
+  let accountId = CLOUDFLARE_ACCOUNT_ID
+  if (CLOUDFLARE_API_TOKEN && !accountId) {
+    try {
+      const res = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=10', {
+        headers: { authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
+      })
+      const data = await res.json()
+      const accounts = data?.result ?? []
+      if (accounts.length === 1) {
+        accountId = accounts[0].id
+        console.log(`已自动推导单账户 ID：${accountId}`)
+      }
+    } catch {}
+  }
+
+  if (!CLOUDFLARE_API_TOKEN || !accountId) {
     console.log('未检测到 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，退回 wrangler deploy（无预览健康检查）')
     execFileSync('npx', ['wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], { cwd: appDir, stdio: 'inherit' })
     return
@@ -187,7 +202,7 @@ async function deployPhase() {
 
   // 直接用构建产物走 Versions API：上传 → 预览地址健康检查 → 切流量，健康检查失败不切
   const modules = await collectModules(path.join(appDir, 'dist'))
-  const api = new CloudflareWorkersApi({ accountId: CLOUDFLARE_ACCOUNT_ID, apiToken: CLOUDFLARE_API_TOKEN })
+  const api = new CloudflareWorkersApi({ accountId, apiToken: CLOUDFLARE_API_TOKEN })
   await deploy({
     api,
     scriptName,
