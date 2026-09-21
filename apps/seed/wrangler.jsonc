@@ -20,14 +20,13 @@
 
   "observability": { "enabled": true },
 
-  // workers.dev 地址默认开启：首次部署即可访问面板与 /webhook，
-  // 引导工作流也用它拼构建机拉清单的 /admin/build-manifest 地址。
-  // 大陆网络访问 *.workers.dev 不稳定——在引导里填了自定义域名的话，这里会被改回 false：
+  // workers.dev 地址保持开启：构建机拉清单 /admin/build-manifest 走的就是默认域名
+  // （MANIFEST_URL 优先 defaultBaseUrl），配了自定义域名也不关它，预览健康检查同样依赖。
   "workers_dev": true,
   // 自定义域名示例（引导工作流会写入；生产建议配置）：
   // "routes": [{ "pattern": "bot.example.com", "custom_domain": true }],
   // 自部署要靠 <版本号>-<name>.<子域>.workers.dev/healthz 做切流量前的健康检查，
   // 这个开关默认 true，不打开预览地址就是 404，健康检查必然失败、永远切不了流量。
-  // 只影响预览地址，生产流量仍走自定义域名（配了的话 workers_dev 会被改回 false）。
+  // 预览地址只影响构建期健康检查，生产流量走自定义域名，两者互不干扰。
   "preview_urls": true
 }
