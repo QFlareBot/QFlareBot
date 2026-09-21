@@ -29,6 +29,8 @@ export interface PurgeReport {
   kvKeys: number
   tables: string[]
   r2Objects: number
+  /** 因表前缀与别的插件重合而**没有**删的表——留给人工确认，宁可留孤儿也不能误删邻居 */
+  skippedTables: string[]
 }
 
 /** 插件自己的 onUninstall 结果：没定义是 none，抛错是 failed（不影响后续兜底清理） */
@@ -171,18 +173,33 @@ export async function runUninstallHook(
   }
 }
 
-/** 按前缀删掉某插件的全部 KV / D1 / R2 数据。不碰安装清单，那是 manifestStore 的事 */
-export async function purgePluginData(plugin: string, env: RuntimeEnv): Promise<PurgeReport> {
+/**
+ * 按前缀删掉某插件的全部 KV / D1 / R2 数据。不碰安装清单，那是 manifestStore 的事。
+ *
+ * D1 表名前缀不是单射（`my-plugin` 与 `my_plugin` 都得到 `p_my_plugin_`），所以传进来的
+ * `otherPlugins` 里任何一个也匹配某张表时，这张表就不删——`DROP TABLE` 不可逆，
+ * 误删邻居比留一条孤儿严重得多。
+ */
+export async function purgePluginData(
+  plugin: string,
+  env: RuntimeEnv,
+  /** 其余已知插件名（已装 + 账本里出现过的）；用来判断某张表到底是不是本插件的 */
+  otherPlugins: readonly string[] = [],
+): Promise<PurgeReport> {
   const [kvKeys, tables, objects] = await Promise.all([
     listKvKeys(env, kvPrefix(plugin)),
     listPluginTables(env.DB, plugin),
     listR2Objects(env, r2Prefix(plugin)),
   ])
 
+  const others = otherPlugins.filter((p) => p !== plugin)
+  const ambiguous = tables.filter((t) => others.some((o) => t.startsWith(tablePrefix(o))))
+  const mine = tables.filter((t) => !ambiguous.includes(t))
+
   await Promise.all(kvKeys.map((k) => env.KV.delete(k)))
 
   // 表名已按前缀过滤，只含 [A-Za-z0-9_]；DROP TABLE 会连带删掉它的索引和触发器
-  for (const name of tables) await env.DB!.exec(`DROP TABLE IF EXISTS ${name}`)
+  for (const name of mine) await env.DB!.exec(`DROP TABLE IF EXISTS ${name}`)
 
   if (env.R2) {
     for (let i = 0; i < objects.length; i += R2_DELETE_BATCH) {
@@ -190,7 +207,7 @@ export async function purgePluginData(plugin: string, env: RuntimeEnv): Promise<
     }
   }
 
-  return { kvKeys: kvKeys.length, tables, r2Objects: objects.length }
+  return { kvKeys: kvKeys.length, tables: mine, r2Objects: objects.length, skippedTables: ambiguous }
 }
 
 /**

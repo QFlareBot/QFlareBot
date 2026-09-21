@@ -49,13 +49,6 @@
       "source": "file:../../plugins/t2i/dist/plugin.js",
       "enabled": true,
       "manifest": "file:../../plugins/t2i/dist/manifest.json"
-    },
-    {
-      "name": "hello",
-      "version": "0.1.0",
-      "source": "url:https://raw.githubusercontent.com/clown145/qqbot-plugin-hello/0756aee74cf4987586fdefb60e2228df2bc4b7cb/dist/plugin.js",
-      "integrity": "sha256-tonHx+8eAyIv04RF6ntzHuOW1lXOT/LalxHnGD/ND4g=",
-      "enabled": true
     }
   ]
 }

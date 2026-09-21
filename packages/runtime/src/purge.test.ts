@@ -82,11 +82,33 @@ describe('purgePluginData', () => {
 
     const report = await purgePluginData('hello', env)
 
-    expect(report).toEqual({ kvKeys: 2, tables: ['p_hello_notes', 'p_hello_tags'], r2Objects: 1 })
+    expect(report).toEqual({ kvKeys: 2, tables: ['p_hello_notes', 'p_hello_tags'], r2Objects: 1, skippedTables: [] })
     expect(await env.KV.get('p:hello:a')).toBeNull()
     expect(await env.KV.get('p:hello2:a')).toBe('neighbour')
     expect([...(env.R2 as unknown as { store: Map<string, string> }).store.keys()]).toEqual(['p/hello2/img.png'])
     expect(await listPluginTables(env.DB)).toEqual(['p_hello2_notes'])
+  })
+
+  it('表前缀碰撞时不删邻居的表：my-plugin 与 my_plugin 都落到 p_my_plugin_', async () => {
+    const { env } = setup()
+    const db = env.DB as unknown as { tables: Map<string, number> }
+    db.tables.set('p_my_plugin_notes', 5)
+    await env.KV.put('p:my-plugin:a', '1')
+
+    // 不认识邻居时无从判断归属：表名归谁看不出来，所以必须留着（宁可留孤儿，DROP 不可逆）
+    const guarded = await purgePluginData('my-plugin', env, ['my_plugin'])
+    expect(guarded.tables).toEqual([])
+    expect(guarded.skippedTables).toEqual(['p_my_plugin_notes'])
+    expect(await listPluginTables(env.DB)).toEqual(['p_my_plugin_notes'])
+    // KV 前缀用的是原始插件名（p:my-plugin:），不存在碰撞，照常清掉
+    expect(guarded.kvKeys).toBe(1)
+    expect(await env.KV.get('p:my-plugin:a')).toBeNull()
+
+    // 没有同名前缀的邻居时，正常删掉
+    const clean = await purgePluginData('my-plugin', env, ['other'])
+    expect(clean.tables).toEqual(['p_my_plugin_notes'])
+    expect(clean.skippedTables).toEqual([])
+    expect(await listPluginTables(env.DB)).toEqual([])
   })
 })
 

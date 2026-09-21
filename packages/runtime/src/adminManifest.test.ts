@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { definePlugin } from '@qqbot/sdk'
 import { createRuntime } from './runtime.js'
 import { resetManifestSchema } from './manifestStore.js'
 import { resetSnapshotCache } from './store.js'
@@ -58,6 +59,9 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       'raw.githubusercontent.com/me/qqbot-plugin-clash/b2c3d4e5f6/manifest.json': declaredManifest({ name: 'clash', conflicts: ['echo'] }),
       'raw.githubusercontent.com/me/qqbot-plugin-needy/c3d4e5f6a7/manifest.json': declaredManifest({ name: 'needy', depends: { greet: '*' } }),
       'raw.githubusercontent.com/me/qqbot-plugin-hello/f6a7b8c9d0/manifest.json': declaredManifest({ version: '2.0.0' }),
+      // 一对表前缀相同的插件名：- 与 _ 都会被 tablePrefix 归一成 _（见 sqlScope.ts）
+      'raw.githubusercontent.com/me/qqbot-plugin-dashed/d1e2f3a4b5/manifest.json': declaredManifest({ name: 'my-plugin' }),
+      'raw.githubusercontent.com/me/qqbot-plugin-scored/d1e2f3a4b6/manifest.json': declaredManifest({ name: 'my_plugin' }),
     },
     [{ build_uuid: 'build-9', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
   )
@@ -103,6 +107,30 @@ describe('GET /admin/build-manifest', () => {
     const { call } = setup({ DB: undefined })
     const res = await call('/admin/build-manifest', { headers: { authorization: `Bearer ${ADMIN}` } })
     expect(res.status).toBe(503)
+  })
+
+  it('带上 pendingBuild，构建机据此对照「触发时」与「实际构建」的清单哈希', async () => {
+    const { call } = setup()
+    const jsonHeaders = { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' }
+    const manifest = async () =>
+      (await (await call('/admin/build-manifest', { headers: { authorization: `Bearer ${ADMIN}` } })).json()) as {
+        hash: string
+        pendingBuild: { buildUuid: string | null; hash: string } | null
+      }
+
+    expect((await manifest()).pendingBuild).toBeNull()
+
+    await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+    // 装完还没触发构建：账本里是一条 pending，buildUuid 为空，哈希与当前清单一致
+    const installed = await manifest()
+    expect(installed.pendingBuild).toMatchObject({ buildUuid: null, hash: installed.hash })
+
+    await call('/admin/builds', { method: 'POST', headers: jsonHeaders })
+    expect((await manifest()).pendingBuild).toMatchObject({ buildUuid: 'build-9' })
   })
 })
 
@@ -202,6 +230,21 @@ describe('POST /admin/manifest/plugins', () => {
     expect(data.previous).toMatchObject({ version: '1.0.0' })
   })
 
+  it('拒绝与已装插件 D1 表前缀相同的插件（my-plugin 与 my_plugin 同前缀，卸载会误删邻居）', async () => {
+    const { call } = setup()
+    const install = (repo: string, sha: string) =>
+      call('/admin/manifest/plugins', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ source: `git:me/${repo}@${sha}` }),
+      })
+
+    expect((await install('qqbot-plugin-dashed', 'd1e2f3a4b5')).status).toBe(200)
+    const clash = await install('qqbot-plugin-scored', 'd1e2f3a4b6')
+    expect(clash.status).toBe(409)
+    expect(((await clash.json()) as { error: string }).error).toContain('表前缀相同')
+  })
+
   it('非法 source 与缺声明清单返回 400', async () => {
     const { call } = setup()
     const bad = await call('/admin/manifest/plugins', {
@@ -259,6 +302,56 @@ describe('DELETE /admin/manifest/plugins/:name', () => {
     const again = await call('/admin/manifest/plugins/echo', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
     expect(again.status).toBe(404)
     expect(((await again.json()) as { error: string }).error).toContain('仓库清单内置')
+  })
+
+  it('status 里标记哪些插件来自 D1 清单（面板据此决定是否显示卸载入口）', async () => {
+    // 同一个名字：先以「仓库内置」出现在注册表里，再往 D1 里装一份同名的
+    const { call } = setup({}, [definePlugin({ name: 'hello' })])
+    const statusOf = async () => {
+      const res = await call('/admin/status', { headers: { authorization: `Bearer ${ADMIN}` } })
+      return ((await res.json()) as { plugins: Array<{ name: string; installed: boolean }> }).plugins
+    }
+
+    expect(await statusOf()).toEqual([expect.objectContaining({ name: 'hello', installed: false })])
+
+    await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+    expect(await statusOf()).toEqual([expect.objectContaining({ name: 'hello', installed: true })])
+  })
+
+  it('卸载后就地触发重建并把 buildUuid 回给面板——只改 D1 清单的话插件还在跑', async () => {
+    const { call } = setup()
+    await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+
+    const remove = await call('/admin/manifest/plugins/hello', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+    const body = (await remove.json()) as { build: { buildUuid?: string; error?: string } }
+    expect(body.build).toEqual({ buildUuid: 'build-9' })
+  })
+
+  it('触发构建失败不回滚卸载：清单已改，如实报错让用户手动重试', async () => {
+    const { call } = setup({ CF_ACCOUNT_ID: undefined, CF_BUILDS_TOKEN: undefined })
+    await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+
+    const remove = await call('/admin/manifest/plugins/hello', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+    const body = (await remove.json()) as { build: { buildUuid?: string; error?: string } }
+    expect(body.build.error).toContain('CF_ACCOUNT_ID')
+
+    // 卸载本身仍然生效
+    const manifest = await call('/admin/build-manifest', { headers: { authorization: `Bearer ${BUILD_TOKEN}` } })
+    expect(((await manifest.json()) as { plugins: unknown[] }).plugins).toEqual([])
   })
 })
 

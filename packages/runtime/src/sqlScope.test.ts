@@ -3,7 +3,7 @@
  * 框架就枚举不出一个插件建过哪些表。
  */
 import { describe, expect, it } from 'vitest'
-import { scopeSql, tablePrefix } from './sqlScope.js'
+import { prefixesCollide, scopeSql, tablePrefix } from './sqlScope.js'
 
 const P = tablePrefix('hello')
 const scope = (sql: string) => scopeSql(sql, P)
@@ -12,6 +12,14 @@ describe('tablePrefix', () => {
   it('把插件名里的非法字符换成下划线，结果是合法裸标识符', () => {
     expect(tablePrefix('hello')).toBe('p_hello_')
     expect(tablePrefix('@scope/my-plugin')).toBe('p__scope_my_plugin_')
+  })
+
+  it('前缀不是单射：- 与 _ 混用会落到同一个前缀（安装时要拦、清理时要避）', () => {
+    expect(tablePrefix('my-plugin')).toBe(tablePrefix('my_plugin'))
+    expect(prefixesCollide('my-plugin', 'my_plugin')).toBe(true)
+    expect(prefixesCollide('hello', 'hello2')).toBe(false)
+    // 同名不算碰撞，否则重装/升级会被自己挡住
+    expect(prefixesCollide('hello', 'hello')).toBe(false)
   })
 })
 

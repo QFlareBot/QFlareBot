@@ -50,7 +50,9 @@ concurrency:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 必须大于向导自己的超时组合（15min 等待认领 + 40min 空闲 + 完成后 10min 查看窗口 = 65min），
+    # 否则慢一点的操作会被 runner 硬杀在半配置状态
+    timeout-minutes: 75
     env:
       HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     steps:
@@ -71,6 +73,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_BUILDS_TOKEN: ${{ secrets.CLOUDFLARE_BUILDS_TOKEN }}
+          # 可选：构建机拉清单用的专用令牌（Worker 侧 BUILD_TOKEN = 构建机侧 MANIFEST_TOKEN）。
+          # 不配的话汇总里会让你把面板主密钥填给构建环境——能用，但不该长期这样。
+          BUILD_TOKEN: ${{ secrets.BUILD_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
           BOOT_WORKER_NAME: ${{ inputs.worker_name }}
           BOOT_KV_NAME: ${{ inputs.kv_name }}

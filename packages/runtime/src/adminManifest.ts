@@ -19,6 +19,7 @@ import {
   type ManifestPluginEntry,
 } from './manifestStore.js'
 import { clearInstallMarker, purgePluginData, runUninstallHook } from './purge.js'
+import { prefixesCollide, tablePrefix } from './sqlScope.js'
 import { Keys } from './store.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
@@ -44,7 +45,20 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1（wrangler.jsonc 的 d1_databases），构建清单不可用', 503)
   const plugins = await listManifestPlugins(db)
-  return json({ ok: true, hash: await manifestHash(plugins), plugins, generatedAt: new Date().toISOString() })
+  const hash = await manifestHash(plugins)
+  // 触发这次构建的账本记录（推送触发的构建没有对应记录，返回 null）。构建机据此对照
+  // 「触发时的清单」与「实际构建的清单」——不一致只告警、不阻断：并发装两个插件本来就会这样，
+  // 收敛到最新是设计语义，把它做成构建失败只会让正常操作无故炸掉。
+  const pending = (await listInstalls(db, 20)).find((r) => r.status === 'building' || r.status === 'pending')
+  return json({
+    ok: true,
+    hash,
+    plugins,
+    pendingBuild: pending
+      ? { buildUuid: pending.buildUuid, hash: pending.manifestHash, triggeredAt: pending.ts }
+      : null,
+    generatedAt: new Date().toISOString(),
+  })
 }
 
 /** 构建机拉配置：拉取当前 Worker 的基础设施绑定标识（KV ID, D1 ID 等） */
@@ -139,6 +153,20 @@ async function installFromSource(source: string, scope: RequestScope, deps: Admi
 
   const conflict = (declared.conflicts ?? []).find((c) => allNames.has(c))
   if (conflict) return { ok: false, error: `安装 ${declared.name} 与已装插件冲突：${declared.name} conflicts ${conflict}`, status: 409 }
+
+  // D1 表前缀不是单射：`my-plugin` 与 `my_plugin` 都落到 p_my_plugin_，卸载一个会连带删掉另一个的表。
+  // 装进来就晚了（DROP 不可逆），所以在安装这一步就挡住。
+  const prefixClash = [...allNames].find((n) => prefixesCollide(n, declared.name))
+  if (prefixClash) {
+    return {
+      ok: false,
+      status: 409,
+      error:
+        `${declared.name} 与已装插件 ${prefixClash} 的 D1 表前缀相同（${tablePrefix(declared.name)}）——` +
+        '两者不能共存：卸载其中一个会连带删掉另一个的表，且不可逆。请把插件名里的 `-` 改成 `_`（或反过来）后重装。',
+    }
+  }
+
   const missingDeps = Object.keys(declared.depends ?? {}).filter((d) => !allNames.has(d) && !deps.registry.providerOf(d))
   if (missingDeps.length > 0) {
     return { ok: false, error: `依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`, status: 400 }
@@ -262,17 +290,31 @@ export async function uninstallManifestPlugin(
     ? await runUninstallHook(registered, scope.contexts, purgeData, deps.logger)
     : { hook: 'none' as const, hookError: undefined }
 
-  const purged = purgeData ? await purgePluginData(name, scope.env) : null
+  // 把其他已知插件名一并交给清理逻辑：D1 表前缀可能碰撞（`my-plugin` vs `my_plugin`），
+  // 没有这份名单就无法判断某张表到底属于谁，宁可留孤儿也不能误删邻居
+  const otherNames = [
+    ...new Set([
+      ...deps.registry.all().map((p) => p.manifest.name),
+      ...(await listManifestPlugins(db)).map((p) => p.name),
+    ]),
+  ]
+  const purged = purgeData ? await purgePluginData(name, scope.env, otherNames) : null
   await clearInstallMarker(name, scope.env)
 
   await deleteManifestPlugin(db, name)
   const hash = await manifestHash(await listManifestPlugins(db))
   const install = await insertInstall(db, { action: 'uninstall', name, source: existing.source, manifestHash: hash, status: 'pending' })
+
+  // 就地触发构建：只改 D1 清单的话，插件还留在正在运行的 bundle 里——卸载等于没生效。
+  // 触发失败不回滚卸载（清单已经改了，回滚只会更乱），如实报出来让用户手动重试。
+  const build = await triggerProjectionBuild(scope, deps)
+
   return json({
     ok: true,
     removed: existing,
     hash,
     install,
+    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
     data: { purged: purgeData, hook, ...(hookError ? { hookError } : {}), ...(purged ?? {}) },
   })
 }

@@ -461,7 +461,8 @@ describe('admin', () => {
     )
     expect(await status.json()).toMatchObject({
       projection: 'sha256-abc',
-      plugins: [{ name: 'echo', enabled: false, commands: [{ name: 'echo', aliases: ['say'] }] }],
+      // installed=false：仓库内置插件，面板不显示卸载入口（改 qqbot.manifest.json 重新构建才下架）
+      plugins: [{ name: 'echo', enabled: false, installed: false, commands: [{ name: 'echo', aliases: ['say'] }] }],
     })
   })
 

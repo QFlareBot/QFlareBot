@@ -84,16 +84,19 @@ export async function listAccounts(token) {
 
 /**
  * 权限试探：逐个 GET 只读端点，401/403 即缺权限。
- * 返回 missing 列表（空数组 = 通过）。account_settings 的读权限由
- * listAccounts 能否拿到该账户隐式验证，这里不再单独试探。
+ * 返回 missing 列表（空数组 = 通过）。
+ *
+ * **只能证明「读」权限**：GET 通过不代表 Edit 存在，缺 Edit 要等真正部署时才报 403。
+ * 所以这个结果不是「权限齐备」的保证——请按 README 的权限清单创建 token（引导链接已预填全部权限）。
+ * account_settings 的读权限由 listAccounts 能否拿到该账户隐式验证，这里不再单独试探。
  */
 export async function probePermissions(token, accountId) {
   const probes = [
-    { label: 'Workers Scripts（编辑）', path: `/accounts/${accountId}/workers/scripts`, r2: false },
-    { label: 'KV Storage（编辑）', path: `/accounts/${accountId}/storage/kv/namespaces?per_page=1`, r2: false },
-    { label: 'D1（编辑）', path: `/accounts/${accountId}/d1/database?per_page=1`, r2: false },
+    { label: 'Workers Scripts（读）', path: `/accounts/${accountId}/workers/scripts`, r2: false },
+    { label: 'KV Storage（读）', path: `/accounts/${accountId}/storage/kv/namespaces?per_page=1`, r2: false },
+    { label: 'D1（读）', path: `/accounts/${accountId}/d1/database?per_page=1`, r2: false },
     // R2 未激活的账号这条必 4xx，不算缺权限——留给创建阶段降级
-    { label: 'R2（编辑）', path: `/accounts/${accountId}/r2/buckets?per_page=1`, r2: true },
+    { label: 'R2（读）', path: `/accounts/${accountId}/r2/buckets?per_page=1`, r2: true },
   ]
   const missing = []
   for (const probe of probes) {
@@ -252,6 +255,7 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     webhookUrl,
     manifestUrl,
     adminToken,
+    buildToken,
     resources,
     buildsTokenWritten,
     qqSaved,
@@ -301,8 +305,27 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   lines.push('   pnpm --filter @qqbot/seed run manifest:deploy')
   lines.push('   # 环境变量（Settings → Builds → Environment variables）')
   lines.push(`   MANIFEST_URL=${manifestUrl}`)
-  lines.push(`   MANIFEST_TOKEN=${redactSecrets ? '<你在部署时填写的 ADMIN_TOKEN>' : adminToken}`)
+  // Worker 侧叫 BUILD_TOKEN、构建机侧叫 MANIFEST_TOKEN，是同一个值——名字不一致最容易配错
+  lines.push(
+    `   MANIFEST_TOKEN=${
+      buildToken
+        ? redactSecrets
+          ? '<你配置的 BUILD_TOKEN（专用令牌）>'
+          : buildToken
+        : redactSecrets
+          ? '<你在部署时填写的 ADMIN_TOKEN>'
+          : adminToken
+    }`,
+  )
   lines.push('   ```')
+  if (!buildToken) {
+    lines.push('')
+    lines.push(
+      '   ⚠️ 上面填的是**面板主密钥 ADMIN_TOKEN**——构建环境因此持有面板登录凭证。想换成专用令牌：' +
+        '`wrangler secret put BUILD_TOKEN` 写入一个随机长字符串（Worker 侧只认这个名字），' +
+        '再把构建机侧的 `MANIFEST_TOKEN` 改成同一个值。也可以在 GitHub 仓库配 `BUILD_TOKEN` secret 后重跑引导。',
+    )
+  }
   if (buildsTokenWritten) {
     lines.push('')
     lines.push('   构建凭证 `CF_BUILDS_TOKEN` 已写入 Worker，装插件时自动触发重建。')
@@ -363,6 +386,7 @@ export async function runBootstrap(opts) {
     domain,
     qq,
     buildsToken,
+    buildToken,
     adminToken: customAdminToken,
     repoRoot,
     onStep = () => {},
@@ -459,6 +483,9 @@ export async function runBootstrap(opts) {
         CF_D1_ID: d1?.id || '',
         CF_R2_NAME: r2?.name || '',
         CF_CUSTOM_DOMAIN: domain || '',
+        // 构建机拉清单用的专用令牌（Worker 侧叫 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）。
+        // 不配的话构建机只能拿面板主密钥当 MANIFEST_TOKEN——那等于把面板登录凭证交给构建环境。
+        ...(buildToken ? { BUILD_TOKEN: buildToken } : {}),
         ...(buildsToken ? { CF_BUILDS_TOKEN: buildsToken } : {}),
       },
     })
@@ -478,6 +505,8 @@ export async function runBootstrap(opts) {
     webhookUrl: `${baseUrl}/webhook`,
     manifestUrl,
     adminToken,
+    /** 配了专用令牌就带出来（构建机侧的 MANIFEST_TOKEN 用它，而不是面板主密钥） */
+    buildToken: buildToken || null,
     resources: {
       kv: kv ? { name: kvTarget, id: kv.id, created: kv.created } : null,
       d1: d1 ? { name: d1Target, id: d1.id, created: d1.created } : null,

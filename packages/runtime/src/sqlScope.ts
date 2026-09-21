@@ -19,6 +19,17 @@ export function tablePrefix(plugin: string): string {
   return `p_${plugin.replace(/[^a-zA-Z0-9_]/g, '_')}_`
 }
 
+/**
+ * 两个插件名是否落到同一个表前缀。
+ *
+ * `tablePrefix` 把非字母数字一律换成 `_`，于是 `my-plugin` 与 `my_plugin` 都得到 `p_my_plugin_`。
+ * 这不是可以放过的巧合：卸载其中一个会按前缀把另一个的表一起 `DROP` 掉，且不可逆。
+ * 所以安装时拒绝这种组合，清理时也要再确认一遍归属（见 purge.ts）。
+ */
+export function prefixesCollide(a: string, b: string): boolean {
+  return a !== b && tablePrefix(a) === tablePrefix(b)
+}
+
 interface Stmt {
   /** 上一个有意义的词是表关键字，下一个标识符应当是表名 */
   expectTable: boolean

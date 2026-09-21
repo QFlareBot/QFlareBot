@@ -45,3 +45,9 @@ jobs:
       - name: 验证种子应用清单解析与自部署预构建
         run: pnpm --filter @qqbot/seed run manifest:prepare
 
+      # deploy 阶段本身在 CI 里跑不了（需要 Cloudflare 凭证），但「生成的部署配置能否被平台接受」
+      # 可以离线验证：dry-run 不需要任何凭证，覆盖配置结构、模块解析与产物体积。
+      # 这是 deploy 阶段唯一的 CI 防线——缺了它，配置生成坏了要等真实构建才发现。
+      - name: 校验生成的部署配置（wrangler dry-run，免凭证）
+        run: pnpm --filter @qqbot/seed run deploy:check
+

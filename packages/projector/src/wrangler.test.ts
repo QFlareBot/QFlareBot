@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
 import { parseJsonc, stripJsonComments } from './jsonc.js'
@@ -81,6 +82,24 @@ describe('deriveBindings', () => {
       expect(warnings).toEqual([])
     } finally {
       delete process.env.CF_KV_ID
+      delete process.env.CF_D1_ID
+      delete process.env.CF_R2_NAME
+    }
+  })
+
+  it('CF_D1_ID / CF_R2_NAME 为 none 时视为「显式跳过」，不当作资源标识也不报缺 id', () => {
+    process.env.CF_D1_ID = 'none'
+    process.env.CF_R2_NAME = 'none'
+    try {
+      const { bindings, warnings } = deriveBindings({
+        kv_namespaces: [{ binding: 'KV', id: 'kv1' }],
+        d1_databases: [{ binding: 'DB', database_name: 'qqbot' }],
+        r2_buckets: [{ binding: 'R2' }],
+      })
+      expect(bindings.d1.databaseId).toBe(PROVISIONED_PLACEHOLDER)
+      expect(bindings.r2?.bucketName).toBe(PROVISIONED_PLACEHOLDER)
+      expect(warnings).toEqual([])
+    } finally {
       delete process.env.CF_D1_ID
       delete process.env.CF_R2_NAME
     }
@@ -209,5 +228,70 @@ describe('generateWranglerConfig', () => {
     expect(out.kv_namespaces?.[0]?.id).toBe('kv-id')
     expect(out.d1_databases).toBeUndefined()
     expect(out.r2_buckets).toBeUndefined()
+  })
+
+  // 回归：apps/seed/wrangler.jsonc 曾把 R2 桶名硬编码在模板里，导致下面的剥离分支永远进不去——
+  // 引导流程里「R2 不可用 → 降级为不绑定」实际不生效，未激活 R2 的账户会卡在首次部署。
+  it('模板只声明 binding 名、环境变量又没给时，剥离 D1 与 R2（R2 降级回归）', () => {
+    const templateBase = {
+      name: 'qqbot',
+      kv_namespaces: [{ binding: 'KV' }],
+      d1_databases: [{ binding: 'DB', database_name: 'qqbot' }],
+      r2_buckets: [{ binding: 'R2' }],
+      vars: { WORKER_NAME: 'qqbot' },
+    }
+    process.env.CF_KV_ID = 'kv-real'
+    delete process.env.CF_D1_ID
+    delete process.env.CF_R2_NAME
+    try {
+      const { bindings } = deriveBindings(templateBase)
+      const out = generateWranglerConfig({
+        base: templateBase,
+        projection: makeProjection(),
+        mainPath: 'out/index.js',
+        bindings,
+      })
+      expect(out.kv_namespaces?.[0]?.id).toBe('kv-real')
+      expect(out.d1_databases).toBeUndefined()
+      expect(out.r2_buckets).toBeUndefined()
+    } finally {
+      delete process.env.CF_KV_ID
+    }
+  })
+
+  it('CF_R2_NAME=none 时即使模板硬编码了桶名也剥离 R2（哨兵优先于模板值）', () => {
+    const templateBase = {
+      name: 'qqbot',
+      kv_namespaces: [{ binding: 'KV', id: 'kv1' }],
+      r2_buckets: [{ binding: 'R2', bucket_name: 'qqbot-artifacts' }],
+    }
+    process.env.CF_R2_NAME = 'none'
+    try {
+      const { bindings } = deriveBindings(templateBase)
+      const out = generateWranglerConfig({
+        base: templateBase,
+        projection: makeProjection(),
+        mainPath: 'out/index.js',
+        bindings,
+      })
+      expect(out.r2_buckets).toBeUndefined()
+    } finally {
+      delete process.env.CF_R2_NAME
+    }
+  })
+
+  // 跨包守门：apps/seed/wrangler.jsonc 是「模板只声明 binding 名、资源标识一律由环境注入」的
+  // 唯一范本。一旦有人在模板里写回 bucket_name / database_id / id，上面那条降级路径就会失效，
+  // 而未激活 R2 的账户只会在首次部署时才炸——所以在这里把契约钉死。
+  it('种子模板只声明 binding 名，不硬编码任何资源标识', () => {
+    const seedTemplate = parseJsonc<{
+      kv_namespaces?: Array<Record<string, unknown>>
+      d1_databases?: Array<Record<string, unknown>>
+      r2_buckets?: Array<Record<string, unknown>>
+    }>(readFileSync(new URL('../../../apps/seed/wrangler.jsonc', import.meta.url), 'utf8'))
+
+    expect(seedTemplate.kv_namespaces?.[0]).toEqual({ binding: 'KV' })
+    expect(seedTemplate.r2_buckets?.[0]).toEqual({ binding: 'R2' })
+    expect(seedTemplate.d1_databases?.[0]).toEqual({ binding: 'DB', database_name: 'qqbot' })
   })
 })

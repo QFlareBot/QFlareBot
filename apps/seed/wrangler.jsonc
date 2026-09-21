@@ -10,7 +10,10 @@
   "kv_namespaces": [{ "binding": "KV" }],
   // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时整行删掉
   "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],
-  "r2_buckets": [{ "binding": "R2", "bucket_name": "qqbot-artifacts" }],
+  // R2 可选：这里只声明 binding 名，桶名由 CF_R2_NAME 注入（引导工作流写 Worker Secret，
+  // 构建机经 /admin/build-config 取回）。不要在这里硬编码桶名——那会让「R2 不可用 → 不绑定」
+  // 的降级失效：生成配置时它是个非空值，剥离分支永远进不去，R2 未激活的账户会卡在首次部署。
+  "r2_buckets": [{ "binding": "R2" }],
 
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发
   "triggers": { "crons": ["* * * * *"] },

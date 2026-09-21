@@ -39,9 +39,14 @@ export async function storageReport(scope: RequestScope, deps: AdminDeps): Promi
 
 /** DELETE /admin/storage/orphans/:name —— 清掉已卸载插件的残留数据 */
 export async function purgeOrphan(name: string, scope: RequestScope, deps: AdminDeps): Promise<Response> {
-  if ((await activePlugins(scope, deps)).has(name)) {
+  const active = await activePlugins(scope, deps)
+  if (active.has(name)) {
     return error(`${name} 仍装着，请先卸载插件再清数据`, 409)
   }
-  const purged = await purgePluginData(name, scope.env)
+  // 账本里的名字也算已知插件：表前缀可能碰撞（`my-plugin` vs `my_plugin`），
+  // 少了它们就分不清一张表属于谁，宁可留孤儿也不能误删
+  const known = new Set(active)
+  if (scope.env.DB) for (const r of await listInstalls(scope.env.DB, 200)) if (r.name) known.add(r.name)
+  const purged = await purgePluginData(name, scope.env, [...known])
   return json({ ok: true, plugin: name, ...purged })
 }

@@ -15,6 +15,7 @@ import { purgeOrphan, storageReport } from './adminStorage.js'
 import { validateConfig } from './configSchema.js'
 import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
+import { listManifestPlugins } from './manifestStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
 import type { Sender } from './session.js'
@@ -165,6 +166,16 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
 
   if (method === 'GET' && sub === '/status') {
     const stats = await eventStats(scope.env).catch(() => null)
+    // 哪些插件是「装进来的」（D1 清单里有记录）：面板据此决定是否显示卸载入口。
+    // 仓库内置插件卸载会被 404 挡掉，给个按钮只会误导。D1 读不到就降级为「都不可卸载」并留日志。
+    const installedNames = scope.env.DB
+      ? await listManifestPlugins(scope.env.DB)
+          .then((list) => new Set(list.map((p) => p.name)))
+          .catch((err: unknown) => {
+            deps.logger.warn('读取已装插件清单失败，面板将不显示卸载入口', { error: (err as Error).message })
+            return new Set<string>()
+          })
+      : new Set<string>()
     return json({
       ok: true,
       runtime: deps.runtimeVersion,
@@ -187,6 +198,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
           configSchema: p.manifest.configSchema ?? null,
           permissions: p.manifest.permissions,
           error: p.error?.message ?? null,
+          /** 来自 D1 清单（面板装进来的）才能卸载；仓库内置的改 qqbot.manifest.json 重新构建 */
+          installed: installedNames.has(p.manifest.name),
           commands: p.manifest.commands,
           events: p.manifest.events.flatMap((e) => e.event),
           buttons: p.manifest.buttons.map((b) => b.id),

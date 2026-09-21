@@ -6,6 +6,8 @@
  * 输入（环境变量）：
  *   CLOUDFLARE_API_TOKEN     必填，GitHub secret
  *   CLOUDFLARE_BUILDS_TOKEN  可选，GitHub secret（写为 Worker 的 CF_BUILDS_TOKEN）
+ *   BUILD_TOKEN              可选，GitHub secret（写为 Worker 的 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）；
+ *                            不配的话构建机只能拿面板主密钥当清单令牌
  *   CLOUDFLARE_ACCOUNT_ID    可选，多账户时必填
  *   QQ_APPID / QQ_APP_SECRET 可选，GitHub secret；配了则部署后存进 KV
  *   BOOT_WORKER_NAME / BOOT_KV_NAME / BOOT_D1_NAME / BOOT_R2_NAME  可选资源名（none=跳过该资源）
@@ -40,6 +42,7 @@ if (!adminToken) {
 if (adminToken) console.log(`::add-mask::${adminToken}`)
 if (env.QQ_APP_SECRET) console.log(`::add-mask::${env.QQ_APP_SECRET}`)
 if (env.CLOUDFLARE_BUILDS_TOKEN) console.log(`::add-mask::${env.CLOUDFLARE_BUILDS_TOKEN}`)
+if (env.BUILD_TOKEN) console.log(`::add-mask::${env.BUILD_TOKEN}`)
 
 try {
   const result = await runBootstrap({
@@ -52,6 +55,7 @@ try {
     domain: opt('BOOT_DOMAIN'),
     qq: env.QQ_APPID && env.QQ_APP_SECRET ? { appId: env.QQ_APPID, secret: env.QQ_APP_SECRET } : undefined,
     buildsToken: opt('CLOUDFLARE_BUILDS_TOKEN'),
+    buildToken: opt('BUILD_TOKEN'),
     adminToken,
     repoRoot,
     onStep: (name, state, detail) => {

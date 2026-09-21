@@ -20,6 +20,31 @@ export interface WranglerConfig {
 /** 资源 id 尚未创建时的占位符，摘要中会提醒 */
 export const PROVISIONED_PLACEHOLDER = '<provisioned>'
 
+/**
+ * `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵，不是资源标识。
+ * 必须在这里就拦掉：否则它会被当成一个非空值参与绑定构造，既污染上传版本的 metadata
+ * （多出一个叫 `none` 的绑定），又让 generateWranglerConfig 里的剥离分支永远进不去。
+ */
+const SKIP_SENTINEL = 'none'
+
+interface EnvValue {
+  value: string | undefined
+  /** 显式要求跳过（值为 none）——此时不该再报「缺 id」的提醒 */
+  skipped: boolean
+}
+
+function envValue(name: string): EnvValue {
+  const raw = process.env[name]?.trim()
+  if (!raw) return { value: undefined, skipped: false }
+  if (raw === SKIP_SENTINEL) return { value: undefined, skipped: true }
+  return { value: raw, skipped: false }
+}
+
+/** 该环境变量是否被显式要求跳过 */
+function isSkipped(name: string): boolean {
+  return envValue(name).skipped
+}
+
 export interface DerivedBindings {
   bindings: BaseBindings
   /** 使用了占位符的字段说明 */
@@ -32,15 +57,22 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
   const d1 = config.d1_databases?.[0]
   const r2 = config.r2_buckets?.[0]
 
-  const envKvId = process.env.CF_KV_ID?.trim()
-  const envD1Id = process.env.CF_D1_ID?.trim()
-  const envR2Name = process.env.CF_R2_NAME?.trim()
+  const envKv = envValue('CF_KV_ID')
+  const envD1 = envValue('CF_D1_ID')
+  const envR2 = envValue('CF_R2_NAME')
+  const envKvId = envKv.value
+  const envD1Id = envD1.value
+  const envR2Name = envR2.value
 
   if (!kv) warnings.push('wrangler 配置缺少 kv_namespaces，binding 名使用 KV')
   if (!d1) warnings.push('wrangler 配置缺少 d1_databases，binding 名使用 DB')
   if (kv && !kv.id && !envKvId) warnings.push(`kv_namespaces[0].id 缺失，使用占位符 ${PROVISIONED_PLACEHOLDER}`)
-  if (d1 && !d1.database_id && !envD1Id) warnings.push(`d1_databases[0].database_id 缺失，使用占位符 ${PROVISIONED_PLACEHOLDER}`)
-  if (r2 && !r2.bucket_name && !envR2Name) warnings.push(`r2_buckets[0].bucket_name 缺失，使用占位符 ${PROVISIONED_PLACEHOLDER}`)
+  if (d1 && !d1.database_id && !envD1Id && !envD1.skipped) {
+    warnings.push(`d1_databases[0].database_id 缺失，使用占位符 ${PROVISIONED_PLACEHOLDER}`)
+  }
+  if (r2 && !r2.bucket_name && !envR2Name && !envR2.skipped) {
+    warnings.push(`r2_buckets[0].bucket_name 缺失，使用占位符 ${PROVISIONED_PLACEHOLDER}`)
+  }
 
   const vars: Record<string, string> = {}
   for (const [k, v] of Object.entries(config.vars ?? {})) {
@@ -90,16 +122,25 @@ export function generateWranglerConfig(opts: {
   }
 
   // 动态补齐缺省的资源绑定 ID 与自定义域名；未指定的可选资源安全剥离避免校验失败
-  const kvId = (opts.bindings?.kv?.namespaceId && opts.bindings.kv.namespaceId !== PROVISIONED_PLACEHOLDER)
-    ? opts.bindings.kv.namespaceId
-    : process.env.CF_KV_ID?.trim()
+  // 显式跳过（CF_*=none）优先级最高：它表达的是「这个资源不存在」，模板里硬编码的值不能把它顶掉
+  const skipKv = isSkipped('CF_KV_ID')
+  const skipD1 = isSkipped('CF_D1_ID')
+  const skipR2 = isSkipped('CF_R2_NAME')
+
+  const kvId = skipKv
+    ? undefined
+    : (opts.bindings?.kv?.namespaceId && opts.bindings.kv.namespaceId !== PROVISIONED_PLACEHOLDER)
+      ? opts.bindings.kv.namespaceId
+      : process.env.CF_KV_ID?.trim()
   if (kvId && config.kv_namespaces?.[0] && !config.kv_namespaces[0].id) {
     config.kv_namespaces = [{ ...config.kv_namespaces[0], id: kvId }]
   }
 
-  const d1Id = (opts.bindings?.d1?.databaseId && opts.bindings.d1.databaseId !== PROVISIONED_PLACEHOLDER)
-    ? opts.bindings.d1.databaseId
-    : (process.env.CF_D1_ID?.trim() !== 'none' ? process.env.CF_D1_ID?.trim() : undefined)
+  const d1Id = skipD1
+    ? undefined
+    : (opts.bindings?.d1?.databaseId && opts.bindings.d1.databaseId !== PROVISIONED_PLACEHOLDER)
+      ? opts.bindings.d1.databaseId
+      : (process.env.CF_D1_ID?.trim() !== 'none' ? process.env.CF_D1_ID?.trim() : undefined)
   if (d1Id) {
     if (config.d1_databases?.[0]) {
       config.d1_databases = [{ ...config.d1_databases[0], database_id: d1Id }]
@@ -113,9 +154,11 @@ export function generateWranglerConfig(opts: {
     delete config.d1_databases
   }
 
-  const r2Name = (opts.bindings?.r2?.bucketName && opts.bindings.r2.bucketName !== PROVISIONED_PLACEHOLDER)
-    ? opts.bindings.r2.bucketName
-    : (process.env.CF_R2_NAME?.trim() !== 'none' ? process.env.CF_R2_NAME?.trim() : undefined)
+  const r2Name = skipR2
+    ? undefined
+    : (opts.bindings?.r2?.bucketName && opts.bindings.r2.bucketName !== PROVISIONED_PLACEHOLDER)
+      ? opts.bindings.r2.bucketName
+      : (process.env.CF_R2_NAME?.trim() !== 'none' ? process.env.CF_R2_NAME?.trim() : undefined)
   if (r2Name) {
     if (config.r2_buckets?.[0]) {
       config.r2_buckets = [{ ...config.r2_buckets[0], bucket_name: r2Name }]

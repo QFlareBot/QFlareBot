@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowLeft, PanelsTopLeft } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '../api/client.js'
 import PageHeader from '../components/PageHeader.vue'
 import SchemaForm from '../components/SchemaForm.vue'
@@ -17,6 +17,7 @@ import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
 const route = useRoute()
+const router = useRouter()
 const { pluginByName, refresh, status, patchLocal } = useStatus()
 const { push } = useToast()
 
@@ -28,6 +29,9 @@ const configError = ref('')
 const fieldErrors = ref<Record<string, string>>({})
 const priority = ref('0')
 const saving = ref(false)
+const removing = ref(false)
+/** 卸载时是否连插件数据一起清；默认保留（误删不可逆） */
+const purgeOnUninstall = ref(false)
 
 watch(
   plugin,
@@ -80,6 +84,36 @@ async function save() {
     }
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 卸载：从 D1 清单移除并就地触发重建（重建完成前插件仍在运行）。
+ * 卸载成功后回到列表——这个页面接下来就没有对应插件了。
+ */
+async function uninstall() {
+  if (!plugin.value) return
+  const name = plugin.value.name
+  const purge = purgeOnUninstall.value
+  const tail = purge ? '，并清空它的 KV / D1 / R2 数据（不可恢复）' : '（数据保留，之后可在「存储」页单独清掉）'
+  if (!confirm(`确定卸载 ${name}？它会从插件清单移除并触发一次重建${tail}`)) return
+
+  removing.value = true
+  try {
+    const res = await api.uninstallPlugin(name, purge)
+    if (res.data.hook === 'failed') {
+      push(`已卸载，但插件的 onUninstall 报错：${res.data.hookError ?? '未知原因'}`, 'warning')
+    }
+    if ('buildUuid' in res.build) {
+      push(`${name} 已卸载并触发重建，完成后从列表消失`, 'success')
+    } else {
+      push(`${name} 已卸载，但触发构建失败：${res.build.error}`, 'warning')
+    }
+    await router.push('/plugins')
+  } catch (e) {
+    push(`卸载失败：${(e as Error).message}`, 'error')
+  } finally {
+    removing.value = false
   }
 }
 </script>
@@ -149,6 +183,22 @@ async function save() {
               <div v-if="plugin.routes.length"><dt class="mb-1 text-xs text-fg-muted">HTTP 路由</dt><dd class="flex flex-col gap-0.5 font-mono text-xs"><span v-for="r in plugin.routes" :key="r.method + r.path">{{ r.method }} /p/{{ plugin.name }}{{ r.path }}<span v-if="r.auth === 'admin'" class="text-fg-muted"> · 需登录</span></span></dd></div>
               <p v-if="!plugin.commands.length && !plugin.events.length && !plugin.buttons.length && !plugin.cron.length && !plugin.routes.length" class="text-xs text-fg-muted">没有声明触发器（可能只提供服务或中间件）。</p>
             </dl>
+          </QCard>
+
+          <QCard v-if="plugin.installed" title="卸载" description="从插件清单移除并触发一次重建；重建完成前它仍在运行">
+            <div class="flex flex-col gap-3 text-sm">
+              <label class="flex cursor-pointer items-start gap-2">
+                <input v-model="purgeOnUninstall" type="checkbox" class="mt-0.5" />
+                <span>
+                  同时清空它的数据
+                  <span class="block text-xs text-fg-muted">KV / D1 / R2 一并删除，不可恢复；不勾选则数据保留，之后可在「存储」页清掉</span>
+                </span>
+              </label>
+              <div><QButton variant="danger" :loading="removing" @click="uninstall">卸载插件</QButton></div>
+            </div>
+          </QCard>
+          <QCard v-else title="卸载" description="这是仓库内置插件">
+            <p class="text-xs text-fg-muted">它在仓库的 <code class="font-mono">qqbot.manifest.json</code> 里，从那里移除后重新构建即可下架。</p>
           </QCard>
         </div>
       </div>

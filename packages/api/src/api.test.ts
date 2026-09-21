@@ -40,6 +40,15 @@ describe('crypto', () => {
     expect(await verifyEvent(SECRET, ts, body + ' ', sig)).toBe(false)
     expect(await verifyEvent(SECRET, ts, body, 'zz')).toBe(false)
   })
+
+  it('空 secret 当场抛错而不是死循环，且验签优雅返回 false', async () => {
+    // 拼不满 32 字节的 while 会一直转下去，把 isolate 挂到 CPU 超时——这里必须快速失败
+    await expect(getKeyPair('')).rejects.toThrow(/AppSecret 为空/)
+    // 失败的派生不留在缓存里：再来一次还是同一个明确错误，而不是被记住的拒绝
+    await expect(getKeyPair('')).rejects.toThrow(/AppSecret 为空/)
+    // webhook 入口是 catch 住返回 false 的，不会把异常抛给平台
+    expect(await verifyEvent('', '1789651239', '{}', 'aabb')).toBe(false)
+  })
 })
 
 describe('token', () => {

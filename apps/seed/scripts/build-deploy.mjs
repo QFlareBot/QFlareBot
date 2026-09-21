@@ -21,7 +21,7 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { buildPlugin } from '@qqbot/plugin-cli'
-import { CloudflareApiError, CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
+import { CloudflareApiError, CloudflareWorkersApi, PROVISIONED_PLACEHOLDER, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
@@ -38,7 +38,7 @@ function stableStringify(value) {
 }
 
 /** 拉取 D1 插件集；失败（未配置 / 网络错误 / Worker 不可达）回退到仓库内置清单 */
-async function fetchRemotePlugins() {
+async function fetchRemoteManifest() {
   const url = process.env.MANIFEST_URL
   if (!url) return null
   try {
@@ -48,7 +48,7 @@ async function fetchRemotePlugins() {
     const data = await res.json()
     if (!Array.isArray(data.plugins)) throw new Error('响应缺少 plugins 数组')
     console.log(`已从构建清单接口取得 ${data.plugins.length} 个插件（hash ${String(data.hash).slice(0, 12)}…）`)
-    return data.plugins
+    return { plugins: data.plugins, hash: String(data.hash ?? ''), pendingBuild: data.pendingBuild ?? null }
   } catch (err) {
     console.warn(`拉取构建清单失败（${err.message}），回退到仓库内置清单 qqbot.manifest.json`)
     return null
@@ -154,12 +154,24 @@ async function prepare() {
   }
 
   const base = JSON.parse(await readFile(path.join(appDir, 'qqbot.manifest.json'), 'utf8'))
-  const remote = (await fetchRemotePlugins()) ?? []
-  const overrides = new Map(remote.map((p) => [p.name, p]))
+  const remote = await fetchRemoteManifest()
+  const remotePlugins = remote?.plugins ?? []
+
+  // 触发时的清单与实际构建的清单不一致：只告警不失败。设计语义是「收敛到最新」，
+  // 并发装两个插件时第二次构建必然会遇到这种情况，做成失败只会让正常操作无故炸掉。
+  if (remote?.pendingBuild && remote.pendingBuild.hash !== remote.hash) {
+    console.warn(
+      `⚠️ 触发构建时的清单哈希（${String(remote.pendingBuild.hash).slice(0, 12)}…，构建 ${remote.pendingBuild.buildUuid ?? '未知'}）` +
+        `与本次实际构建的（${remote.hash.slice(0, 12)}…）不一致——触发之后清单又变过。` +
+        '本次按最新清单构建；构建完成后请确认插件是否都到位。',
+    )
+  }
+
+  const overrides = new Map(remotePlugins.map((p) => [p.name, p]))
   const baseNames = new Set(base.plugins.map((p) => p.name))
   const merged = [
     ...base.plugins.map((p) => overrides.get(p.name) ?? p),
-    ...remote.filter((p) => !baseNames.has(p.name)).sort((a, b) => a.name.localeCompare(b.name)),
+    ...remotePlugins.filter((p) => !baseNames.has(p.name)).sort((a, b) => a.name.localeCompare(b.name)),
   ]
 
   const plugins = []
@@ -225,6 +237,22 @@ async function deployPhase() {
   }
 
   const isInitialBootstrap = process.env.INITIAL_BOOTSTRAP === 'true'
+
+  // 未解析的绑定（仍是占位符）绝不能带进部署：Versions API 会把它当 id 上传，报一句看不懂的错；
+  // 而 wrangler 回退会把它当成「新资源」自动预配——静默换掉 KV/D1，插件快照与数据当场失联。
+  // 首次引导例外：那时资源由引导流程刚建好，走的正是 wrangler deploy 的资源创建语义。
+  if (!isInitialBootstrap) {
+    const unresolved = (projection.metadata.bindings ?? []).filter((b) => Object.values(b).includes(PROVISIONED_PLACEHOLDER))
+    if (unresolved.length > 0) {
+      throw new Error(
+        `基础设施绑定未解析：${unresolved.map((b) => b.name).join('、')} 仍是占位符 ${PROVISIONED_PLACEHOLDER}。` +
+          '拒绝部署——继续下去会把它们当成新资源自动预配，静默丢掉现有快照与插件数据。' +
+          '请确认 MANIFEST_URL 指向的 /admin/build-config 可达，且 Worker 上已写入 CF_KV_ID / CF_D1_ID / CF_R2_NAME。' +
+          '若确实是想让 wrangler 自动预配全新资源，请改用 `pnpm --filter @qqbot/seed run deploy`。',
+      )
+    }
+  }
+
   if (isInitialBootstrap) {
     console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 进行资源初始化与域名/触发器绑定…')
     execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
@@ -256,9 +284,17 @@ async function deployPhase() {
       onProgress: (step) => console.log(`[${step.stage}] ${step.message}`),
     })
   } catch (err) {
+    // 兜底只覆盖「这条路在当前环境走不通」的两种情况：
+    //   10007 = 脚本还不存在（首次创建）；401/403 = 构建环境注入的凭证与主 token 权限模型不同。
+    // 其余错误（含 SecretLossError / HealthCheckError 这两个安全阀）一律向上抛，不做兜底。
     const isScriptNotFound = err instanceof CloudflareApiError && err.errors?.some((e) => e.code === 10007)
-    if (isScriptNotFound) {
-      console.warn(`Worker ${scriptName} 尚未在 Cloudflare 创建，自动降级为 wrangler deploy 完成首次创建与配置绑定…`)
+    const isCredentialProblem = err instanceof CloudflareApiError && (err.status === 401 || err.status === 403)
+    if (isScriptNotFound || isCredentialProblem) {
+      console.warn(
+        isScriptNotFound
+          ? `Worker ${scriptName} 尚未在 Cloudflare 创建，自动降级为 wrangler deploy 完成首次创建与配置绑定…`
+          : `Versions API 拒绝了本次调用（HTTP ${err.status}：${err.message}），降级为 wrangler deploy 重试…`,
+      )
       execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
         cwd: appDir,
         stdio: 'inherit',

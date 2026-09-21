@@ -28,7 +28,9 @@ TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；R
 Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import" 不成立；Worker 内编译则受 CPU/体积限制且要自建依赖解析，同样不成立。因此插件以**源码**分发、在构建机编译：
 
 - **插件是源码仓库**（`git:<owner>/<repo>@<commit>[#<子目录>]`）。作者运行 `qqbot-plugin build` 生成 `dist/plugin.js` + `dist/manifest.json`，并把 `manifest.json` 作为**声明文件提交进仓库**——面板与安装器只读它（权限展示、撞名/依赖/冲突检测），永不执行插件代码。
-- **安装 = 写 D1 清单 + 触发构建**：`POST /admin/manifest/plugins` 校验声明清单（apiVersion、撞名、conflicts、depends）后写入 D1 的 `rt_manifest_plugins`；`POST /admin/builds` 调 Builds API 触发重建。安装/升级/卸载/构建全程记录在 `rt_installs` 账本（清单哈希、build_uuid、commit、状态），构建机拉到的清单哈希与触发时不一致即构建失败。
+- **安装 = 写 D1 清单 + 触发构建**：`POST /admin/manifest/plugins` 校验声明清单（apiVersion、撞名、conflicts、depends）后写入 D1 的 `rt_manifest_plugins`；`POST /admin/builds` 调 Builds API 触发重建。安装/升级/卸载/构建全程记录在 `rt_installs` 账本（清单哈希、build_uuid、commit、状态）。
+
+  账本哈希的语义要说准：构建机是**在构建那一刻**从 `/admin/build-manifest` 拉当前清单并据此重建的，也就是「收敛到最新」，**不是**「必须等于触发时那一份」——否则并发装两个插件就会让第二次构建无故失败。所以它**不阻断构建**：`/admin/build-manifest` 会一并返回触发这次构建的账本记录（`pendingBuild`），构建机发现「触发时的哈希」与「实际构建的哈希」不一致时在日志里显著告警，由人决定要不要再触发一次。这样既保留可追溯性，又不把正常并发变成构建失败。
 - **清单真相分层**：框架版本（core/ui）与内置插件在仓库的 `qqbot.manifest.json`（git 管，diff/回滚免费）；已安装插件集在 D1（运行时可写、有账本）；两者在构建时合并（D1 同名覆盖，可借此下架内置插件）。启用/禁用/改配置仍是 KV 快照，不触发构建。
 - **构建时校验**：构建机按 commit 拉 tarball、esbuild 就地打包，重新抽取清单并与声明清单比对，不一致即失败——防止声明与代码漂移。产物记 SRI 完整性。
 - 旧制品源（`npm:` / GitHub Release 的 `github:` / `url:`）投影器仍支持，属旧模型兼容，不再推荐。

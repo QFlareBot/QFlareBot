@@ -24,6 +24,9 @@ export function bytesToHex(buffer: ArrayBuffer | Uint8Array): string {
 }
 
 function seedFromSecret(secret: string): Uint8Array {
+  // 空 secret 会让下面的 while 永远拼不满 32 字节——直接把 isolate 挂死。
+  // 宁可当场抛错：拿不到 AppSecret 本来也派不出有意义的密钥，挂死只会让请求超时得不明不白。
+  if (!secret) throw new Error('AppSecret 为空，无法派生签名密钥')
   let seed = secret
   while (encoder.encode(seed).length < 32) seed += secret
   return encoder.encode(seed).slice(0, 32)
@@ -52,7 +55,11 @@ async function deriveKeyPair(secret: string): Promise<CryptoKeyPair> {
 export function getKeyPair(secret: string): Promise<CryptoKeyPair> {
   let pair = keyCache.get(secret)
   if (!pair) {
-    pair = deriveKeyPair(secret)
+    // 失败的派生不留缓存：否则一次瞬时错误会被永久记住，之后连重试的机会都没有
+    pair = deriveKeyPair(secret).catch((err: unknown) => {
+      keyCache.delete(secret)
+      throw err
+    })
     keyCache.set(secret, pair)
   }
   return pair

@@ -20,6 +20,8 @@ export interface PluginInfo {
   configSchema: JsonSchema | null
   permissions: string[]
   error: string | null
+  /** 来自 D1 清单（面板装进来的）才可卸载；仓库内置插件要改 qqbot.manifest.json 重新构建 */
+  installed: boolean
   commands: CommandSpec[]
   events: string[]
   buttons: string[]
@@ -158,6 +160,8 @@ export interface StorageReport {
 export interface UninstallResult {
   ok: true
   removed: { name: string; version: string; source: string }
+  /** 卸载后就地触发重建；失败时卸载本身仍然生效（清单已改），需要手动重试构建 */
+  build: { buildUuid: string } | { error: string }
   data: {
     purged: boolean
     hook: 'none' | 'ok' | 'failed'

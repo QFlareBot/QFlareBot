@@ -33,6 +33,9 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 | Account Settings | Read |
 | 账户范围 | 所有账户（或包含目标账户） |
 
+> 引导只做**只读探测**（GET 一个列表端点）：通过只说明读权限够用，Edit 缺失要到真正部署时才报 403。
+> 用上面的预填链接创建 token 可以避开这个盲区；手动创建时请照表逐项勾选。
+
 引导做了什么（无 UI 模式的完整清单）：
 
 - 验证 token 与权限；单账户自动推导账户 ID（多账户要求填 `account_id` 输入）
@@ -61,6 +64,13 @@ wrangler secret put ADMIN_TOKEN                 # 随机长字符串
 pnpm --filter @qqbot/seed run deploy
 ```
 
+不接触线上环境就想确认部署配置没问题时，先投影再 dry-run（免凭证）：
+
+```bash
+pnpm --filter @qqbot/seed run project
+pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，CI 也跑这一步
+```
+
 ## 插件以源码分发
 
 - 框架版本（core/ui）与**内置插件**在仓库的 `qqbot.manifest.json`，git 管理：diff、回滚、审查都免费。
@@ -86,7 +96,7 @@ pnpm --filter @qqbot/seed run deploy
    | 变量 | 说明 |
    | --- | --- |
    | `MANIFEST_URL` | `https://<你的域名>/admin/build-manifest` |
-   | `MANIFEST_TOKEN` | 可选。配了则用专用令牌拉清单；不配则该端点用 `ADMIN_TOKEN` 鉴权 |
+   | `MANIFEST_TOKEN` | 拉清单的令牌。**建议配**：与 Worker 侧的 `BUILD_TOKEN` 同值（专用令牌）。不配则回落到 `ADMIN_TOKEN`——那等于把面板主密钥交给构建环境 |
 
 4. 给 Worker 配置触发构建用的凭证（`wrangler secret put`，引导工作流会自动写入）：
 
@@ -96,7 +106,7 @@ pnpm --filter @qqbot/seed run deploy
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
    | `CF_WORKER_TAG` / `CF_TRIGGER_UUID` | **可选**。省略时运行时按 `vars.WORKER_NAME` 自发现并缓存进 KV（要求仓库已连接 Workers Builds；重连仓库导致缓存失效会自动重发现）。想写死也可以：tag 是 `GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错），trigger UUID 来自 `GET /accounts/{account_id}/builds/workers/{tag}/triggers` |
    | `CF_BUILD_BRANCH` | 可选，默认 `main` |
-   | `BUILD_TOKEN` | 可选，同上第 3 步的 `MANIFEST_TOKEN` |
+   | `BUILD_TOKEN` | 可选但建议。构建机拉清单的专用令牌——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**（名字不一致最容易配错）。引导工作流配了同名 GitHub secret 会自动写入；也可 `wrangler secret put BUILD_TOKEN` 手动写 |
 
    `vars.WORKER_NAME` 在 `wrangler.jsonc` 里（引导工作流按 Worker 名同步维护），自发现靠它定位自己。
 
@@ -111,7 +121,7 @@ pnpm --filter @qqbot/seed run deploy
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins }`；`BUILD_TOKEN` 优先，未配置走管理鉴权 |
+| `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins, pendingBuild }`；`BUILD_TOKEN` 优先，未配置走管理鉴权。`pendingBuild` 是触发这次构建的账本记录，构建机据此对照「触发时」与「实际构建」的清单哈希，不一致只告警 |
 | `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`；校验声明清单、撞名、conflicts、depends |
 | `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）；`purge=true` 连插件数据一起清，默认保留 |
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |

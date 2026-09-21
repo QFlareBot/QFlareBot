@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronRight } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { api } from '../api/client.js'
 import type { InstallRecord, PluginInfo } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
@@ -138,34 +138,61 @@ async function runUpdate(p: PluginInfo) {
   void refreshBuilds()
 }
 
-// —— 构建记录：默认折叠，首次展开才拉取（顺带省一次状态同步调用） ——
+// —— 构建记录：默认折叠，展开即拉取；有构建在跑就轮询到结束 ——
 
 const buildsOpen = ref(false)
-const buildsLoaded = ref(false)
 const builds = ref<InstallRecord[]>([])
 const buildsLoading = ref(false)
 const buildsSyncError = ref('')
+/** 拉取本身失败（网络/服务端），与 buildsSyncError（服务端说同步不了）分开提示，免得套错排查建议 */
+const buildsFetchError = ref('')
 
-function toggleBuilds() {
-  buildsOpen.value = !buildsOpen.value
-  if (buildsOpen.value && !buildsLoaded.value) {
-    buildsLoaded.value = true
-    void refreshBuilds()
+/** 构建是分钟级的，5 秒一次足够，也不至于把面板变成压测工具 */
+const BUILD_POLL_MS = 5000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
+}
+
+/**
+ * 有构建在跑就轮询，跑完自动停。
+ * 以前只在首次展开拉一次（buildsLoaded 守卫），于是「构建中」永远不变，看起来像卡死了。
+ */
+function syncPolling() {
+  const inFlight = builds.value.some((b) => b.status === 'building' || b.status === 'pending')
+  if (buildsOpen.value && inFlight) {
+    pollTimer ??= setInterval(() => void refreshBuilds(true), BUILD_POLL_MS)
+  } else {
+    stopPolling()
   }
 }
 
-async function refreshBuilds() {
-  buildsLoading.value = true
+function toggleBuilds() {
+  buildsOpen.value = !buildsOpen.value
+  if (buildsOpen.value) void refreshBuilds()
+  else stopPolling()
+}
+
+/** silent=true 用于轮询：不点亮按钮上的 loading，否则每 5 秒闪一次 */
+async function refreshBuilds(silent = false) {
+  if (!silent) buildsLoading.value = true
   try {
     const res = await api.builds()
     builds.value = res.builds
     buildsSyncError.value = res.syncError ?? ''
+    buildsFetchError.value = ''
+    // 只有拿到结果才决定要不要继续轮询；拉取失败就保持现状，下一轮再试
+    syncPolling()
   } catch {
-    builds.value = []
+    if (!silent) buildsFetchError.value = '拉取构建记录失败（网络或服务端错误）'
   } finally {
-    buildsLoading.value = false
+    if (!silent) buildsLoading.value = false
   }
 }
+
+onBeforeUnmount(stopPolling)
 
 // —— 重新构建：重试失败的构建、或让插件吃上机器人仓库的新依赖 ——
 
@@ -238,10 +265,13 @@ function formatTs(ts: number): string {
         </QButton>
       </template>
       <template v-if="buildsOpen">
+        <p v-if="buildsFetchError" class="border-b border-danger/30 bg-danger/10 px-4 py-2 text-xs text-danger">
+          {{ buildsFetchError }}
+        </p>
         <p v-if="buildsSyncError" class="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
           构建状态同步失败：{{ buildsSyncError }}（请检查 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，其中 WORKER_TAG 是 scripts 列表返回的 tag 而不是名字）
         </p>
-        <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点刷新同步构建状态。" />
+        <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点「重新构建」触发一次。" />
         <ul v-else class="divide-y divide-border">
           <li v-for="b in builds" :key="b.id" class="flex items-center gap-2 px-4 py-2">
             <QBadge :tone="STATUS_META[b.status].tone">{{ STATUS_META[b.status].label }}</QBadge>
