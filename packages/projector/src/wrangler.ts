@@ -14,6 +14,8 @@ export interface WranglerConfig {
   vars?: Record<string, unknown>
   durable_objects?: { bindings?: Array<{ name: string; class_name: string; script_name?: string }> }
   migrations?: Array<{ tag: string; new_classes?: string[]; new_sqlite_classes?: string[] }>
+  /** 声明 DO 生命周期的另一种模型；与 `migrations` 互斥（Cloudflare 强制） */
+  exports?: Record<string, { type?: string; storage?: string }>
   [key: string]: unknown
 }
 
@@ -90,9 +92,59 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
   return { bindings, warnings }
 }
 
+/** 把类名拼成一个可读的候选 tag（`P_foo_Game` → `p-foo-game`），并保证不与已有 tag 重复 */
+function suggestMigrationTag(existing: ReadonlySet<string>, classes: readonly string[]): string {
+  const slug = classes
+    .join('-')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40)
+    .replace(/-$/, '')
+  const base = slug || 'do-migration'
+  let tag = base
+  for (let i = 2; existing.has(tag); i++) tag = `${base}-${i}`
+  return tag
+}
+
+/**
+ * 插件 DO 类的迁移声明校验。
+ *
+ * `migrations` 是**只追加的历史**：平台记着「上次应用过的 tag」，下次部署拿它在列表里定位，
+ * 只应用其后的新增项。所以 tag 一旦应用过就必须永远留在列表里——它是历史，不是当前状态的快照。
+ *
+ * 以前这里按投影哈希现造一条 tag，等于每次构建都把历史推倒重来：哈希一变（装/卸/升级任意插件都算），
+ * 平台手里的旧 tag 就从列表里消失，wrangler 只能走「找不到已应用 tag」的恢复路径——警告，然后把
+ * 整份列表当 steps 全量重放，重新声明已经存在的类。而构建机没有任何持久状态可记，造不出正确的历史，
+ * 所以改为**校验**：模板的 migrations 必须覆盖当前所有 DO 类，缺了就报错让人补。
+ */
+function checkDoMigrations(base: WranglerConfig, doNames: readonly string[]): void {
+  // 模板自己用 exports 声明 DO 生命周期时 migrations 必须缺席（Cloudflare 规定两者互斥），无需校验
+  if (base.exports && Object.keys(base.exports).length > 0) return
+
+  const migrations = base.migrations ?? []
+  const declared = new Set<string>()
+  for (const m of migrations) {
+    for (const c of m.new_sqlite_classes ?? []) declared.add(c)
+    for (const c of m.new_classes ?? []) declared.add(c)
+  }
+  const missing = doNames.filter((n) => !declared.has(n))
+  if (!missing.length) return
+
+  const tag = suggestMigrationTag(new Set(migrations.map((m) => m.tag)), missing)
+  throw new Error(
+    `插件 Durable Object 类没有出现在 migrations 里：${missing.join('、')}\n` +
+      'migrations 是只追加的历史（平台靠「上次应用过的 tag」算增量），构建机没有这个状态，不能替你造。\n' +
+      '请在 wrangler.jsonc 的 migrations 末尾追加一项后重新构建（tag 不能与已有重复）：\n' +
+      `  { "tag": "${tag}", "new_sqlite_classes": [${missing.map((c) => `"${c}"`).join(', ')}] }`,
+  )
+}
+
 /**
  * 基于原 wrangler 配置生成可直接 `wrangler deploy` 的配置：
- * 指向投影输出、关闭打包、追加插件 DO 绑定与 sqlite 迁移，并按需注入动态推导的资源绑定 ID。
+ * 指向投影输出、关闭打包、追加插件 DO 绑定，并按需注入动态推导的资源绑定 ID。
+ *
+ * 注意这里**不再合成** `migrations`（原因见 checkDoMigrations）：只校验模板是否覆盖了当前所有 DO 类。
  */
 export function generateWranglerConfig(opts: {
   base: WranglerConfig
@@ -185,13 +237,9 @@ export function generateWranglerConfig(opts: {
     delete config.durable_objects
   }
 
-  const baseMigrations = (base.migrations ?? []).filter((m) => !m.tag.startsWith('p-'))
-  const migrations = [...baseMigrations]
-  if (doNames.length) {
-    migrations.push({ tag: `p-${projection.hash.slice(0, 8)}`, new_sqlite_classes: doNames })
-  }
-  if (migrations.length) config.migrations = migrations
-  else delete config.migrations
+  // migrations 只校验、不合成——构建机没有「上次应用到哪个 tag」的持久状态，造不出正确的历史
+  if (doNames.length) checkDoMigrations(base, doNames)
+  if (!(base.migrations ?? []).length) delete config.migrations
 
   return config
 }

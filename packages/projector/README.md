@@ -86,7 +86,8 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 ```
 
 - 写入 `<out>/index.js`、`runtime.js`、`plugins/*.js` 与 `projection.json`（hash、integrity、metadata）
-- 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings` 与 `migrations: [{ tag: 'p-<hash 前 8>', new_sqlite_classes }]`
+- 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings`
+- **不合成 `migrations`**：迁移是只追加的历史，构建机没有「上次应用到哪个 tag」的持久状态，造不出来。模板里的 `migrations` 原样保留，并在插件 DO 类没被任何一项覆盖时**报错**（附上该追加的条目）。生产路径走 Versions API，用 `exports` 声明 DO 生命周期，不涉及 `migrations`
 - bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒
 - `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵：它优先于模板里硬编码的值，命中就把对应字段从生成配置里剥掉。所以**模板只该声明 binding 名，别硬编码 `bucket_name` / `database_id`**——硬编码会让剥离分支永远进不去，「R2 不可用即不绑定」的降级随之失效
 - 之后 `wrangler dev -c wrangler.generated.jsonc` 即可本地运行
@@ -95,5 +96,5 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 
 - **尚未对 Cloudflare 线上 API 实测**，请求格式按官方文档编写（multipart `metadata` + 模块部分、`exports` 声明 sqlite DO、`percentage` 部署策略），首次接线时请留意错误信封
 - 含 Durable Object 的 Worker 平台不生成版本预览 URL，因此 `deploy()` 在未显式传 `healthCheck` 时会对含 DO 的投影自动跳过健康检查（显式传对象则强制检查）
-- `wrangler.generated.jsonc` 的迁移 tag 随 hash 变化；对已部署过的 Worker 再次 `wrangler deploy` 时，若 DO 类已存在需手工调整 migrations（通过 Versions API 部署不受影响，由 `exports` 自动 reconcile）
+- `wrangler deploy` 路径下，含插件 DO 的投影需要**人工维护 `migrations`**（生成器只校验，缺类即报错）。这是 Cloudflare 的模型决定的：迁移是只追加的历史，平台靠「上次应用过的 tag」算增量，而构建机没有这个状态。通过 Versions API 部署不受影响——那条路用 `exports` 声明 DO 生命周期，`migrations` 与 `exports` 互斥，由平台按 `exports` 自动 reconcile（此路径尚未对线上实测）
 - 版本元数据 bindings 目前只覆盖 KV / D1 / R2 / plain_text / 插件 DO；`vars` 中非字符串值会被 JSON 序列化为文本

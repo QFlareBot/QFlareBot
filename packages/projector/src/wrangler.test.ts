@@ -116,7 +116,16 @@ describe('generateWranglerConfig', () => {
     migrations: [{ tag: 'v1', new_sqlite_classes: ['Own'] }],
   }
 
-  it('指向投影输出、关闭打包、追加插件 DO 与迁移', () => {
+  /** DO 用例需要一个已声明插件类迁移的模板——migrations 是只追加历史，构建机不再替你合成 */
+  const doBase = {
+    ...base,
+    migrations: [
+      { tag: 'v1', new_sqlite_classes: ['Own'] },
+      { tag: 'v2', new_sqlite_classes: ['P_foo_Game', 'P_x_Y'] },
+    ],
+  }
+
+  it('指向投影输出、关闭打包、追加插件 DO 绑定', () => {
     const projection = makeProjection({
       hash: '0123456789abcdef'.repeat(4),
       metadata: {
@@ -124,7 +133,7 @@ describe('generateWranglerConfig', () => {
         exports: { P_foo_Game: { type: 'durable-object', storage: 'sqlite' } },
       },
     })
-    const out = generateWranglerConfig({ base, projection, mainPath: '.projected/index.js' })
+    const out = generateWranglerConfig({ base: doBase, projection, mainPath: '.projected/index.js' })
     expect(out.name).toBe('bot')
     expect(out.main).toBe('.projected/index.js')
     expect(out.no_bundle).toBe(true)
@@ -136,10 +145,33 @@ describe('generateWranglerConfig', () => {
         { name: 'P_foo_Game', class_name: 'P_foo_Game' },
       ],
     })
-    expect(out.migrations).toEqual([
-      { tag: 'v1', new_sqlite_classes: ['Own'] },
-      { tag: 'p-01234567', new_sqlite_classes: ['P_foo_Game'] },
-    ])
+    // 原样保留模板里的迁移，不再追加 `p-<hash 前 8>` 那一项
+    expect(out.migrations).toEqual(doBase.migrations)
+  })
+
+  it('插件 DO 类没出现在 migrations 里就报错，并给出该追加的条目', () => {
+    const projection = makeProjection({
+      metadata: {
+        ...makeProjection().metadata,
+        exports: { P_foo_Game: { type: 'durable-object', storage: 'sqlite' } },
+      },
+    })
+    expect(() => generateWranglerConfig({ base, projection, mainPath: 'o/index.js' })).toThrow(/P_foo_Game/)
+    expect(() => generateWranglerConfig({ base, projection, mainPath: 'o/index.js' })).toThrow(
+      /new_sqlite_classes": \["P_foo_Game"\]/,
+    )
+  })
+
+  it('模板用 exports 声明 DO 生命周期时不校验 migrations（Cloudflare 规定两者互斥）', () => {
+    const projection = makeProjection({
+      metadata: {
+        ...makeProjection().metadata,
+        exports: { P_foo_Game: { type: 'durable-object', storage: 'sqlite' } },
+      },
+    })
+    const exportsBase = { name: 'bot', exports: { P_foo_Game: { type: 'durable-object' } } }
+    const out = generateWranglerConfig({ base: exportsBase, projection, mainPath: 'o/index.js' })
+    expect(out).not.toHaveProperty('migrations')
   })
 
   it('无插件 DO 时不追加；缺 compatibility_date 时从投影补齐', () => {
@@ -157,7 +189,7 @@ describe('generateWranglerConfig', () => {
     const projection = makeProjection({
       metadata: { ...makeProjection().metadata, exports: { P_x_Y: { type: 'durable-object', storage: 'sqlite' } } },
     })
-    const once = generateWranglerConfig({ base, projection, mainPath: 'o/index.js' })
+    const once = generateWranglerConfig({ base: doBase, projection, mainPath: 'o/index.js' })
     const twice = generateWranglerConfig({ base: once, projection, mainPath: 'o/index.js' })
     expect(twice.durable_objects).toEqual(once.durable_objects)
     expect(twice.migrations).toEqual(once.migrations)
