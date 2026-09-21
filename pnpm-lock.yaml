@@ -50,6 +50,9 @@ importers:
       qqbot-plugin-sid:
         specifier: workspace:*
         version: link:../../plugins/sid
+      qqbot-plugin-t2i:
+        specifier: workspace:*
+        version: link:../../plugins/t2i
     devDependencies:
       '@qqbot/plugin-cli':
         specifier: workspace:*
@@ -180,6 +183,15 @@ importers:
         version: link:../../packages/sdk
 
   plugins/sid:
+    devDependencies:
+      '@qqbot/plugin-cli':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cli
+      '@qqbot/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
+  plugins/t2i:
     devDependencies:
       '@qqbot/plugin-cli':
         specifier: workspace:*

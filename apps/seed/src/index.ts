@@ -9,8 +9,9 @@ import image from 'qqbot-plugin-image'
 import keyboard from 'qqbot-plugin-keyboard'
 import multiReply from 'qqbot-plugin-multi-reply'
 import sid from 'qqbot-plugin-sid'
+import t2i from 'qqbot-plugin-t2i'
 
 export default createRuntime({
-  plugins: [echo, multiReply, image, keyboard, sid],
+  plugins: [echo, multiReply, image, t2i, keyboard, sid],
   ui,
 })

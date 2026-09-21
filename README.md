@@ -21,7 +21,7 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/plugin-cli` | `@qqbot/plugin-cli` | `qqbot-plugin build`：把插件打成单文件 ESM 并抽出 manifest.json |
 | `packages/ui` | `@qqbot/ui` | 管理面板（Vue 3），构建为可嵌入 Worker 的资源表 |
 | `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
-| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调）、sid（内置，查 OpenID/会话 ID/群角色） |
+| `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调）、t2i（AstrBot T2I 渲染服务，导出 `t2i` 服务给其他插件）、sid（内置，查 OpenID/会话 ID/群角色） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
 | `scripts/bootstrap/` | — | 引导部署：headless.mjs（无 UI）与 wizard.mjs（Quick Tunnel 网页向导），由根目录 `.github/workflows/bootstrap.yml` 调用 |
 | `scripts/probe-qq-api.mjs` | — | QQ OpenAPI 探测脚本：实测接口真实形状（凭证从线上 KV 或 .dev.vars 读，不回显） |
@@ -111,6 +111,6 @@ buttons: {
 
 ## 状态
 
-M1 + M2 + 面板安装：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 240。插件清单已入 D1（安装/卸载端点 + 安装账本），`GET /admin/build-manifest` 供构建机拉取，`POST /admin/builds` 经 Builds REST API 触发重建并同步状态与 commit；seed 自部署脚本（源码构建 + Versions API 健康检查部署）已实现并本地跑通。面板插件页支持粘贴仓库链接安装并查看构建记录。插件数据归框架管：D1 表名前缀强制（SQL 写 `{表名}` 占位）、卸载走 `onUninstall` + 按前缀兜底清理、`GET /admin/storage` 看用量与孤儿数据。**Builds 线上实测尚未完成**。详见 `docs/design.md`、`docs/plugin-guide.md`、`apps/seed/README.md`。
+M1 + M2 + 面板安装：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 321。插件清单已入 D1（安装/卸载端点 + 安装账本），`GET /admin/build-manifest` 供构建机拉取，`POST /admin/builds` 经 Builds REST API 触发重建并同步状态与 commit；seed 自部署脚本（源码构建 + Versions API 健康检查部署）已实现并本地跑通。面板插件页支持粘贴仓库链接安装并查看构建记录。插件数据归框架管：D1 表名前缀强制（SQL 写 `{表名}` 占位）、卸载走 `onUninstall` + 按前缀兜底清理、`GET /admin/storage` 看用量与孤儿数据。**Builds 线上实测尚未完成**。详见 `docs/design.md`、`docs/plugin-guide.md`、`apps/seed/README.md`。
 
 > `@qqbot` 这个 npm scope 只是占位，发布前请改成你自己的。
