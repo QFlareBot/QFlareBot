@@ -10,14 +10,16 @@
 ## 首次部署：引导工作流（推荐）
 
 仓库根目录的 [`.github/workflows/bootstrap.yml`](../.github/workflows/bootstrap.yml) 会把资源创建、
-配置回写、部署、密钥写入一次做完。**幂等可重跑**：资源按名字复用，配置已是目标值则不产生新提交。
+部署、密钥写入一次做完。**幂等可重跑、零 Git 污染**：资源按名字复用，全程不向你的 fork 产生任何提交。
 
 1. Fork 本仓库。
 2. 运行 **Bootstrap** 工作流（Actions → Bootstrap → Run workflow），两种模式自动选择：
    - **网页引导**（什么都没配时）：工作流起一个临时网页（Quick Tunnel），点开 run 页 Summary
      里的链接，跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
      （缺哪个权限当场点名），然后建资源、看进度、连接仓库、创建构建 token。
-   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 时）：直接跑完，汇总写进 run 页 Summary。
+   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，汇总写进
+     run 页 Summary。`ADMIN_TOKEN` 必须自己定（它就是面板登录密钥，只有你知道明文）；缺任一个
+     secret 会直接失败并在日志里给出配置指引。
 3. 工作流结束后照 Summary 里的清单收尾：QQ 开放平台填回调地址、连接仓库（向导会引导）。
 
 Token 权限清单（预填链接已带；手动创建照此勾选）：
@@ -36,13 +38,16 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 - 验证 token 与权限；单账户自动推导账户 ID（多账户要求填 `account_id` 输入）
 - **幂等创建/复用**同名 KV / D1 / R2（名字可在 workflow 输入里改；R2 未激活时自动降级为
   不绑定，只在后台激活 R2 后重跑即可）
-- 把资源 id、Worker 名、自定义域名写回 `wrangler.jsonc` 并 **commit 到你的 fork**
-  （K/V、D1 必须有 id：自部署走的 Versions API 不认名字，缺 id 报 10021）
 - 构建 + `wrangler deploy` 首次部署
-- 生成 `ADMIN_TOKEN` 并经 `wrangler secret bulk` 写入 Worker 密钥：
-  `ADMIN_TOKEN`、`CF_ACCOUNT_ID`，配了 `CLOUDFLARE_BUILDS_TOKEN` secret 时再写 `CF_BUILDS_TOKEN`
-- 表单里填了 QQ AppID/AppSecret 的话，部署后调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，
-  与管理面板同一条路径）
+- 资源 id、Worker 名、自定义域名**不进 Git**：经 `wrangler secret bulk` 写入 Worker Secrets，
+  并通过 `GET /admin/build-config` 构建端点动态下发给构建机（K/V、D1 必须有 id：自部署走的
+  Versions API 不认名字，缺 id 报 10021）
+- 写入 Worker 密钥：`ADMIN_TOKEN`（无 UI 模式取自你的 GitHub secret；网页向导模式在页面里
+  自填或自动生成并展示）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
+  `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`、`CF_CUSTOM_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
+  secret 时再写 `CF_BUILDS_TOKEN`
+- QQ 凭证：无 UI 模式配了 secrets `QQ_APPID`/`QQ_APP_SECRET`、或网页向导表单里填了的话，部署后
+  调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，与管理面板同一条路径）
 
 > R2 在新账户上需要先到后台激活一次（免费额度内不扣费），API 替代不了；向导会在前置检查里提醒。
 

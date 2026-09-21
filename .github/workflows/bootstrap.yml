@@ -41,9 +41,11 @@ on:
 permissions:
   contents: read
 
+# 部署类工作流必须排队而不是取消：中途杀掉引导会留下半配置状态
+# （比如 Worker 已部署但密钥未写入）。脚本本身幂等，排队重跑是安全的。
 concurrency:
-  group: bootstrap-${{ github.ref }}
-  cancel-in-progress: true
+  group: bootstrap
+  cancel-in-progress: false
 
 jobs:
   bootstrap:
