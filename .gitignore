@@ -17,3 +17,6 @@ packages/ui/public/tokens.css
 
 # 本地工具状态目录，不进版本库
 .freebuff/
+
+# WorkBuddy AI 本地工作目录（记忆/技能/会话数据），不进版本库
+.workbuddy-ai/
