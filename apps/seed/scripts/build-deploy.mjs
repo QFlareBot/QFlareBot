@@ -37,10 +37,17 @@ function stableStringify(value) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
 }
 
-/** 拉取 D1 插件集；失败（未配置 / 网络错误 / Worker 不可达）回退到仓库内置清单 */
+/**
+ * 拉取 D1 插件集。
+ *
+ * 失败不再静默吞掉——调用方要能区分「没配 MANIFEST_URL」「拉到了」「拉不到」三种情况，
+ * 因为「拉不到」时继续构建会让 D1 里装的插件从 Worker 上悄悄消失。
+ *
+ * @returns {{ skipped: true } | { ok: true, plugins: unknown[], hash: string, pendingBuild: unknown } | { ok: false, error: string }}
+ */
 async function fetchRemoteManifest() {
   const url = process.env.MANIFEST_URL
-  if (!url) return null
+  if (!url) return { skipped: true }
   try {
     const headers = process.env.MANIFEST_TOKEN ? { authorization: `Bearer ${process.env.MANIFEST_TOKEN}` } : {}
     const res = await fetch(url, { headers })
@@ -48,10 +55,9 @@ async function fetchRemoteManifest() {
     const data = await res.json()
     if (!Array.isArray(data.plugins)) throw new Error('响应缺少 plugins 数组')
     console.log(`已从构建清单接口取得 ${data.plugins.length} 个插件（hash ${String(data.hash).slice(0, 12)}…）`)
-    return { plugins: data.plugins, hash: String(data.hash ?? ''), pendingBuild: data.pendingBuild ?? null }
+    return { ok: true, plugins: data.plugins, hash: String(data.hash ?? ''), pendingBuild: data.pendingBuild ?? null }
   } catch (err) {
-    console.warn(`拉取构建清单失败（${err.message}），回退到仓库内置清单 qqbot.manifest.json`)
-    return null
+    return { ok: false, error: err.message }
   }
 }
 
@@ -155,11 +161,32 @@ async function prepare() {
 
   const base = JSON.parse(await readFile(path.join(appDir, 'qqbot.manifest.json'), 'utf8'))
   const remote = await fetchRemoteManifest()
-  const remotePlugins = remote?.plugins ?? []
+
+  // 拉不到清单时默认**硬失败**：继续下去只会打包仓库内置清单，D1 里装的插件会从 Worker 上
+  // 静默消失（数据还在 D1，插件不跑了），而构建却报成功——这是最难查的一类故障。
+  // 唯一该容忍的情况是本次部署本来就没有 D1：那时 build-manifest 返回 503 是预期的，
+  // 而「没有 D1」这件事由 build-config 的 d1Id === null 明确回答（拿不到这个答案就按"拉不到"处理）。
+  if (!remote.ok && !remote.skipped) {
+    if (remoteConfig?.d1Id === null) {
+      console.warn(`构建清单不可用（${remote.error}），但本次部署没有 D1，按"无 D1 插件集"继续`)
+    } else if (process.env.MANIFEST_FALLBACK === '1') {
+      console.warn(
+        `⚠️ 拉取构建清单失败（${remote.error}），MANIFEST_FALLBACK=1 已显式接受回退到仓库内置清单——` +
+          '本次构建不会包含 D1 里装的插件',
+      )
+    } else {
+      throw new Error(
+        `拉取构建清单失败（${remote.error}）：无法确认 D1 里装了哪些插件。\n` +
+          '继续构建只会打包仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在，插件不跑了）。\n' +
+          '请检查 MANIFEST_URL / MANIFEST_TOKEN 与面板可达性；确实要接受"只打包内置插件"，设 MANIFEST_FALLBACK=1 重跑。',
+      )
+    }
+  }
+  const remotePlugins = remote.ok ? remote.plugins : []
 
   // 触发时的清单与实际构建的清单不一致：只告警不失败。设计语义是「收敛到最新」，
   // 并发装两个插件时第二次构建必然会遇到这种情况，做成失败只会让正常操作无故炸掉。
-  if (remote?.pendingBuild && remote.pendingBuild.hash !== remote.hash) {
+  if (remote.ok && remote.pendingBuild && remote.pendingBuild.hash !== remote.hash) {
     console.warn(
       `⚠️ 触发构建时的清单哈希（${String(remote.pendingBuild.hash).slice(0, 12)}…，构建 ${remote.pendingBuild.buildUuid ?? '未知'}）` +
         `与本次实际构建的（${remote.hash.slice(0, 12)}…）不一致——触发之后清单又变过。` +

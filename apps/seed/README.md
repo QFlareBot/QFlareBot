@@ -97,6 +97,15 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
    | --- | --- |
    | `MANIFEST_URL` | `https://<你的域名>/admin/build-manifest` |
    | `MANIFEST_TOKEN` | 拉清单的令牌。**建议配**：与 Worker 侧的 `BUILD_TOKEN` 同值（专用令牌）。不配则回落到 `ADMIN_TOKEN`——那等于把面板主密钥交给构建环境 |
+   | `MANIFEST_FALLBACK` | 可选，默认不设。**只在应急时**设成 `1`：允许清单拉取失败后回退到仓库内置清单 |
+
+   > **清单拉不到 = 构建失败**（除非上面那个 `MANIFEST_FALLBACK=1`）。这是故意的：继续构建只会打包
+   > 仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在 D1，插件不跑了），而构建却报成功——
+   > 这是最难查的一类故障。
+   >
+   > 唯一的例外是**本次部署本来就没有 D1**（`CF_D1_ID` 未配）：那时清单端点返回 503 是预期的，
+   > 构建机会读 `/admin/build-config` 的 `d1Id === null` 自行判断并继续。所以别为了绕过报错去设
+   > `MANIFEST_FALLBACK`——先看清楚是「面板连不上」还是「真的没有 D1」。
 
 4. 给 Worker 配置触发构建用的凭证（`wrangler secret put`，引导工作流会自动写入）：
 
