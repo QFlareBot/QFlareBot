@@ -88,6 +88,7 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 - 写入 `<out>/index.js`、`runtime.js`、`plugins/*.js` 与 `projection.json`（hash、integrity、metadata）
 - 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings` 与 `migrations: [{ tag: 'p-<hash 前 8>', new_sqlite_classes }]`
 - bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒
+- `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵：它优先于模板里硬编码的值，命中就把对应字段从生成配置里剥掉。所以**模板只该声明 binding 名，别硬编码 `bucket_name` / `database_id`**——硬编码会让剥离分支永远进不去，「R2 不可用即不绑定」的降级随之失效
 - 之后 `wrangler dev -c wrangler.generated.jsonc` 即可本地运行
 
 ## 已知限制

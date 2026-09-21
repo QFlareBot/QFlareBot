@@ -123,7 +123,7 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 | --- | --- |
 | `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins, pendingBuild }`；`BUILD_TOKEN` 优先，未配置走管理鉴权。`pendingBuild` 是触发这次构建的账本记录，构建机据此对照「触发时」与「实际构建」的清单哈希，不一致只告警 |
 | `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`；校验声明清单、撞名、conflicts、depends |
-| `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）；`purge=true` 连插件数据一起清，默认保留 |
+| `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）**并就地触发一次重建**；响应里的 `build` 是 `{ buildUuid }` 或 `{ error }`——触发失败不回滚卸载，需要手动重试构建。`purge=true` 连插件数据一起清，默认保留 |
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |
 | `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit |
 | `GET /admin/storage` | 各插件占用的 KV 键数 / D1 表与行数 / R2 对象数与字节数，以及不属于任何已装插件的孤儿数据 |

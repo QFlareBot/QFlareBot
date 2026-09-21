@@ -28,7 +28,7 @@ TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；R
 Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import" 不成立；Worker 内编译则受 CPU/体积限制且要自建依赖解析，同样不成立。因此插件以**源码**分发、在构建机编译：
 
 - **插件是源码仓库**（`git:<owner>/<repo>@<commit>[#<子目录>]`）。作者运行 `qqbot-plugin build` 生成 `dist/plugin.js` + `dist/manifest.json`，并把 `manifest.json` 作为**声明文件提交进仓库**——面板与安装器只读它（权限展示、撞名/依赖/冲突检测），永不执行插件代码。
-- **安装 = 写 D1 清单 + 触发构建**：`POST /admin/manifest/plugins` 校验声明清单（apiVersion、撞名、conflicts、depends）后写入 D1 的 `rt_manifest_plugins`；`POST /admin/builds` 调 Builds API 触发重建。安装/升级/卸载/构建全程记录在 `rt_installs` 账本（清单哈希、build_uuid、commit、状态）。
+- **安装 / 升级 / 卸载 = 写 D1 清单 + 触发构建**：`POST /admin/manifest/plugins` 校验声明清单（apiVersion、撞名、conflicts、depends、表前缀唯一性）后写入 D1 的 `rt_manifest_plugins`；`DELETE /admin/manifest/plugins/:name` 做反向操作。**两者都在写完清单后就地调 `POST /admin/builds` 触发重建**——只改 D1 不重建的话，插件还留在正在运行的 bundle 里，等于没生效。构建触发失败不回滚清单改动（清单已经改了，回滚只会更乱），如实报出来让用户手动重试。安装/升级/卸载/构建全程记录在 `rt_installs` 账本（清单哈希、build_uuid、commit、状态）。
 
   账本哈希的语义要说准：构建机是**在构建那一刻**从 `/admin/build-manifest` 拉当前清单并据此重建的，也就是「收敛到最新」，**不是**「必须等于触发时那一份」——否则并发装两个插件就会让第二次构建无故失败。所以它**不阻断构建**：`/admin/build-manifest` 会一并返回触发这次构建的账本记录（`pendingBuild`），构建机发现「触发时的哈希」与「实际构建的哈希」不一致时在日志里显著告警，由人决定要不要再触发一次。这样既保留可追溯性，又不把正常并发变成构建失败。
 - **清单真相分层**：框架版本（core/ui）与内置插件在仓库的 `qqbot.manifest.json`（git 管，diff/回滚免费）；已安装插件集在 D1（运行时可写、有账本）；两者在构建时合并（D1 同名覆盖，可借此下架内置插件）。启用/禁用/改配置仍是 KV 快照，不触发构建。
@@ -44,9 +44,11 @@ Workers 没有可写文件系统，也禁止 `eval`，"下载到本地再 import
 
 **这不是安全边界**，插件和运行时编译进同一个 Worker、同一个 JS realm，真要使坏绕得过去；`permissions` 同样只用于安装前展示。前缀强制要买的是另外两样东西：插件之间不会撞表或误删，以及——**框架凭前缀才枚举得出一个插件建过哪些表**。卸载能把数据清干净，唯一的前提就是这个；表名逃出命名空间的那部分数据，框架永远只能留成孤儿。
 
+「不会撞表或误删」有个必须承认的前提：`tablePrefix` 把非字母数字一律换成 `_`，于是 `my-plugin` 与 `my_plugin` 落到**同一个前缀** `p_my_plugin_`。所以加了两道闸——安装时拒绝与已装插件同前缀的组合（409），卸载时若某张表同时匹配别的已知插件的前缀就跳过不删并回报 `skippedTables`。宁可留一条孤儿，也不能 `DROP` 掉邻居的表：那是不可逆的。
+
 由此：
 
-- **卸载分两步**：先调插件的 `onUninstall(ctx, { purgeData })`（趁它的代码还在这次部署里，重建之后就没机会了），再由框架按前缀兜底清理。钩子抛错不挡兜底——插件写坏了不该让数据永远清不掉。
+- **卸载的清理分两步**：先调插件的 `onUninstall(ctx, { purgeData })`（趁它的代码还在这次部署里，重建之后就没机会了），再由框架按前缀兜底清理。钩子抛错不挡兜底——插件写坏了不该让数据永远清不掉。
 - **数据默认保留**。卸载多半是不想要了，但误删不可逆。留下的数据在 `GET /admin/storage` 里列为孤儿（名字从 KV/R2 的键前缀反推，D1 的从 `rt_installs` 账本补），可以单独清掉。「默认删」和「管不了」之间的第三条路是「默认留但看得见」。
 - **`onInstall` 的 `rt:installed:<名>` 标记无条件删掉**。数据清了，重装必须重新建表；数据留着，`onInstall` 本来就要求幂等。留着标记的后果是重装后它静默不跑。
 - **跨插件访问数据走 service，不走数据层**。直读别人的表是隐形依赖：对方一卸载，消费者静默坏掉，框架看不见这层关系。`services` + `depends` 把依赖写进清单，安装时校验，面板上可见。

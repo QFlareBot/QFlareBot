@@ -111,6 +111,6 @@ buttons: {
 
 ## 状态
 
-M1 + M2 + 面板安装：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 338。插件清单已入 D1（安装/卸载端点 + 安装账本），`GET /admin/build-manifest` 供构建机拉取，`POST /admin/builds` 经 Builds REST API 触发重建并同步状态与 commit；seed 自部署脚本（源码构建 + Versions API 健康检查部署）已实现并本地跑通。面板插件页支持粘贴仓库链接安装并查看构建记录。插件数据归框架管：D1 表名前缀强制（SQL 写 `{表名}` 占位）、卸载走 `onUninstall` + 按前缀兜底清理、`GET /admin/storage` 看用量与孤儿数据。**Builds 线上实测尚未完成**。详见 `docs/design.md`、`docs/plugin-guide.md`、`apps/seed/README.md`。
+M1 + M2 + 面板安装：契约、运行时、投影器、CLI、示例、种子、管理面板与插件页面桥均已实现，单测 338。插件清单已入 D1（安装/卸载端点 + 安装账本），`GET /admin/build-manifest` 供构建机拉取，`POST /admin/builds` 经 Builds REST API 触发重建并同步状态与 commit；seed 自部署脚本（源码构建 + Versions API 健康检查部署）已实现并本地跑通。面板插件页支持粘贴仓库链接安装、查看构建记录（有构建在跑时轮询到结束）与卸载——**卸载会就地触发一次重建**，只改清单不重建等于没生效。插件数据归框架管：D1 表名前缀强制（SQL 写 `{表名}` 占位）、卸载走 `onUninstall` + 按前缀兜底清理、`GET /admin/storage` 看用量与孤儿数据。**Builds 线上实测尚未完成**。详见 `docs/design.md`、`docs/plugin-guide.md`、`apps/seed/README.md`。
 
 > `@qqbot` 这个 npm scope 只是占位，发布前请改成你自己的。

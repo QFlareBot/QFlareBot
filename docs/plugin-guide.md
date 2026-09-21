@@ -90,6 +90,8 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 `block` / `priority`（大者先执行）/ `scenes`（限定 `group | c2c | guild | guild_dm`）写在匹配器对象形式里。命令前缀默认 `/`，面板可改；命令名大小写不敏感。
 
+正则只用来「判断命中 + 取捕获组」，所以运行时编译前会**剥掉 `g` 和 `y`**：带 `g` 时 `String.match` 只返回整段匹配、`match[1]` 会是 `undefined`；`y` 和 `g` 还会把 `lastIndex` 留在正则实例上，让重复匹配的结果漂移。写 `/^echo (.+)$/` 就够了，不用加这两个标志。
+
 命令加 `bare: true` 即为**无前缀命令**：消息不以任何前缀开头时按**首词**匹配（带前缀调用同样命中）：
 
 ```ts
