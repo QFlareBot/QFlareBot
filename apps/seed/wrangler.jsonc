@@ -4,24 +4,32 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
 
-  // 以本文件为准声明全部绑定，不要在后台手工加，否则下次部署会丢。
-  // R2 只写桶名即可；KV 与 D1 必须写 id：wrangler deploy 能按名字自己查，但自部署
-  // 走的 Versions API 不行，缺 database_id 会报 10021。首次创建后把 id 写回这里。
-  "kv_namespaces": [{ "binding": "KV", "id": "e12215d244224a858b8dc01ddc937c9c" }],
-  // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时先注释掉
-  "d1_databases": [{ "binding": "DB", "database_name": "qqbot", "database_id": "6e87ab2e-c2d4-4052-bc97-e885cf45cc15" }],
+  // 绑定以本文件为准，不要在后台手工加，否则下次部署会丢。
+  // 资源 id 与自定义域名不写死在仓库：首次运行 .github/workflows/bootstrap.yml 引导工作流，
+  // 它会按名字创建/复用资源，把 id、域名写回本文件并提交到你的 fork。
+  // 引导工作流同时同步 name 与 vars.WORKER_NAME（后者供运行时自发现构建目标）。
+  // R2 只写桶名；KV 与 D1 必须有 id——自部署走的 Versions API 不认名字，缺 id 报 10021。
+  "kv_namespaces": [{ "binding": "KV" }],
+  // D1 可选：开启后有事件记录与插件 ctx.db。免费版最多 10 个库，配额不够时整行删掉
+  "d1_databases": [{ "binding": "DB", "database_name": "qqbot" }],
   "r2_buckets": [{ "binding": "R2", "bucket_name": "qqbot-artifacts" }],
 
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发
   "triggers": { "crons": ["* * * * *"] },
 
+  // 自部署自发现用：本 Worker 的脚本名（引导工作流按 name 同步更新；手工改名时记得一起改）
+  "vars": { "WORKER_NAME": "qqbot" },
+
   "observability": { "enabled": true },
 
-  // 自定义域名（大陆网络访问 *.workers.dev 不稳定）；面板、管理 API、回调地址都在这个域名下
-  "routes": [{ "pattern": "qqbot.kisaki.love", "custom_domain": true }],
-  "workers_dev": false,
-  // 自部署要靠 <版本号>-qqbot.<子域>.workers.dev/healthz 做切流量前的健康检查。
-  // 这个开关默认 false，不打开预览地址就是 404，健康检查必然失败、永远切不了流量。
-  // 只影响预览地址，生产流量仍然只走上面的自定义域名（workers_dev 保持 false）。
+  // workers.dev 地址默认开启：首次部署即可访问面板与 /webhook，
+  // 引导工作流也用它拼构建机拉清单的 /admin/build-manifest 地址。
+  // 大陆网络访问 *.workers.dev 不稳定——在引导里填了自定义域名的话，这里会被改回 false：
+  "workers_dev": true,
+  // 自定义域名示例（引导工作流会写入；生产建议配置）：
+  // "routes": [{ "pattern": "bot.example.com", "custom_domain": true }],
+  // 自部署要靠 <版本号>-<name>.<子域>.workers.dev/healthz 做切流量前的健康检查，
+  // 这个开关默认 true，不打开预览地址就是 404，健康检查必然失败、永远切不了流量。
+  // 只影响预览地址，生产流量仍走自定义域名（配了的话 workers_dev 会被改回 false）。
   "preview_urls": true
 }

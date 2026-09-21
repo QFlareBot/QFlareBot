@@ -73,6 +73,35 @@ export class CloudflareBuildsApi {
     return Array.isArray(result) ? result : (result.items ?? [])
   }
 
+  /**
+   * 列出账号下的 Worker 脚本。`id` 是脚本名，`tag` 是 Builds API 用的标识——
+   * 两者不是一回事（填错是账本"永远构建中"的经典原因）。
+   */
+  async listScripts(): Promise<Array<{ id: string; tag: string }>> {
+    const result = await this.#request<Array<{ id?: string; tag?: string }> | { items?: Array<{ id?: string; tag?: string }> }>(
+      'GET',
+      '/workers/scripts',
+    )
+    const items = Array.isArray(result) ? result : (result.items ?? [])
+    return items
+      .filter((s): s is { id: string; tag: string } => typeof s.id === 'string' && typeof s.tag === 'string')
+      .map((s) => ({ id: s.id, tag: s.tag }))
+  }
+
+  /**
+   * 查某个 Worker 的 Builds trigger（取第一个），返回 trigger_uuid。
+   * 仓库连上 Workers Builds 之前该列表为空——所以自发现只能在连接之后成功。
+   */
+  async getTriggerUuid(workerTag: string): Promise<string | null> {
+    const result = await this.#request<Array<{ trigger_uuid?: string; uuid?: string; id?: string }> | { items?: Array<{ trigger_uuid?: string; uuid?: string; id?: string }> }>(
+      'GET',
+      `/builds/workers/${encodeURIComponent(workerTag)}/triggers`,
+    )
+    const items = Array.isArray(result) ? result : (result.items ?? [])
+    const uuid = items[0]?.trigger_uuid ?? items[0]?.uuid ?? items[0]?.id
+    return typeof uuid === 'string' ? uuid : null
+  }
+
   async #request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { authorization: `Bearer ${this.#token}` }
     if (body !== undefined) headers['content-type'] = 'application/json'

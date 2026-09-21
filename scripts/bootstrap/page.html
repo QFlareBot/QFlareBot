@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qqbot-workers 引导向导</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #0f1115; color: #e6e6e6; line-height: 1.6; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #9aa0a6; font-size: 13px; margin-bottom: 20px; }
+  section { background: #171a21; border: 1px solid #2a2f3a; border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: #7ab8ff; }
+  ol.hint { margin: 8px 0; padding-left: 20px; font-size: 13px; color: #b8bdc7; }
+  code { background: #232833; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+  label { display: block; font-size: 13px; color: #9aa0a6; margin: 10px 0 4px; }
+  input, textarea, select { width: 100%; background: #0f1115; color: #e6e6e6; border: 1px solid #2a2f3a;
+         border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; }
+  textarea { min-height: 84px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 9px 16px;
+           font-size: 14px; cursor: pointer; margin-top: 12px; margin-right: 8px; }
+  button.ghost { background: #232833; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  a { color: #7ab8ff; }
+  .msg { font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+  .err { color: #ff7b72; }
+  .ok { color: #56d364; }
+  .hidden { display: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 4px 0; border-bottom: 1px solid #232833; word-break: break-all; }
+  td:first-child { color: #9aa0a6; width: 9em; }
+  details { margin-top: 10px; font-size: 13px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid #555; border-top-color: #7ab8ff;
+          border-radius: 50%; animation: r 1s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  pre.log { background: #0b0d11; border: 1px solid #232833; border-radius: 8px; padding: 12px;
+            font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🚀 qqbot-workers 引导向导</h1>
+  <div class="sub">仓库：<span id="repo"></span> —— 跟着五步走完，机器人就上线了</div>
+
+  <!-- 1. Token -->
+  <section id="step-token">
+    <h2>① 创建并粘贴 API Token</h2>
+    <ol class="hint">
+      <li>点下面按钮打开 Cloudflare 的 token 创建页——<b>名字和权限已经预填好</b>，确认后点 Create Token；</li>
+      <li>复制生成的 token，粘贴到下面输入框，点「验证」。</li>
+    </ol>
+    <p><a id="setup-token-link" target="_blank" rel="noopener"><button>打开预填的 Token 创建页 ↗</button></a></p>
+    <details><summary>预填的权限（链接失效时按这个手动勾选）</summary>
+      <ol class="hint">
+        <li>Workers Scripts — Edit</li>
+        <li>Workers KV Storage — Edit</li>
+        <li>D1 — Edit</li>
+        <li>Workers R2 Storage — Edit</li>
+        <li>Account Settings — Read</li>
+        <li>账户范围：所有账户</li>
+      </ol>
+    </details>
+    <textarea id="token-input" placeholder="粘贴 API token（只经过本页与 Cloudflare，不会存进仓库）"></textarea>
+    <button id="verify-btn">验证 Token</button>
+    <div id="verify-msg" class="msg hidden"></div>
+    <div id="account-pick" class="hidden">
+      <label>选择账户</label>
+      <select id="account-select"></select>
+      <button id="verify-again-btn">用这个账户重新验证</button>
+    </div>
+  </section>
+
+  <!-- 2. 表单 -->
+  <section id="step-form" class="hidden">
+    <h2>② 名称与可选项</h2>
+    <div class="hint">Worker 名留空用默认 <code>qqbot</code>，KV 与 D1 沿用该名；已存在同名资源会直接复用。R2 填 <code>none</code> 表示不启用。</div>
+    <label>Worker / KV / D1 名称</label>
+    <input id="f-worker" placeholder="qqbot">
+    <label>R2 桶名（留空 = &lt;Worker名&gt;-artifacts）</label>
+    <input id="f-r2" placeholder="qqbot-artifacts">
+    <label>自定义域名（可选；大陆访问 *.workers.dev 不稳定时建议填，域名需已托管在该账户）</label>
+    <input id="f-domain" placeholder="bot.example.com">
+    <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）</label>
+    <input id="f-qq-appid" placeholder="AppID">
+    <input id="f-qq-secret" placeholder="AppSecret" type="password">
+    <button id="start-btn">开始部署</button>
+    <div id="form-msg" class="msg hidden"></div>
+  </section>
+
+  <!-- 3. 进度 -->
+  <section id="step-progress" class="hidden">
+    <h2>③ 部署进度</h2>
+    <pre class="log" id="progress-log"></pre>
+    <div id="progress-msg" class="msg hidden"></div>
+  </section>
+
+  <!-- 4. 连接仓库 -->
+  <section id="step-connect" class="hidden">
+    <h2>④ 连接仓库（装/卸插件自动重建的前置）</h2>
+    <ol class="hint">
+      <li>点按钮打开 Workers Builds 设置页 → <b>Connect</b> → 选择这个 fork 仓库；</li>
+      <li>构建/部署命令按完成后页面上给的照抄；</li>
+      <li>连好后下面会自动变绿（每 5 秒检测一次），然后创建构建 token。</li>
+    </ol>
+    <p><a id="connect-link" target="_blank" rel="noopener"><button>打开 Workers Builds 设置页 ↗</button></a></p>
+    <div id="connect-status" class="msg"><span class="spin"></span>等待仓库连接…</div>
+  </section>
+
+  <!-- 5. 构建 token + 完成 -->
+  <section id="step-builds-token" class="hidden">
+    <h2>⑤ 创建构建 Token（Worker 触发重建用）</h2>
+    <div class="hint">同样预填好权限（Workers Builds Configuration Edit + Workers Scripts Read，范围限本账户）。创建后粘贴到下面。</div>
+    <p><a id="builds-token-link" target="_blank" rel="noopener"><button class="ghost">打开预填的构建 Token 创建页 ↗</button></a></p>
+    <div id="builds-token-fallback" class="hidden msg">⚠️ 未能解析预填链接，请手动创建：权限勾 <b>Workers Builds Configuration (Edit)</b> 与 <b>Workers Scripts (Read)</b>，账户范围选本账户。</div>
+    <textarea id="builds-token-input" placeholder="粘贴构建 token（留空跳过——之后也能在面板里看提示补配）"></textarea>
+    <button id="finish-btn">完成引导</button>
+    <button id="skip-btn" class="ghost">先跳过，之后再配</button>
+    <div id="builds-msg" class="msg hidden"></div>
+  </section>
+
+  <!-- 6. 完成 -->
+  <section id="step-done" class="hidden">
+    <h2>🎉 完成</h2>
+    <table id="result-table"></table>
+    <details><summary>ADMIN_TOKEN（面板登录密钥）</summary><code id="admin-token"></code></details>
+    <div class="msg">本工作流将在几秒后自动结束，向导链接随即失效。</div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id)
+const show = (id) => $(id).classList.remove('hidden')
+const say = (id, text, cls = '') => { const el = $(id); el.textContent = text; el.className = 'msg ' + cls; el.classList.remove('hidden') }
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`)
+    err.data = data
+    throw err
+  }
+  return data
+}
+
+const init = await api('/api/init')
+$('repo').textContent = init.repo
+$('setup-token-link').href = init.setupTokenUrl
+$('f-worker').value = init.defaults.workerName || 'qqbot'
+$('f-r2').value = init.defaults.r2Name || ''
+$('f-domain').value = init.defaults.domain || ''
+
+$('verify-btn').onclick = async () => {
+  $('verify-btn').disabled = true
+  try {
+    await api('/api/verify', { token: $('token-input').value.trim(), accountId: init.defaults.accountId || undefined })
+    say('verify-msg', `✅ Token 有效，账户 ${init.defaults.accountId || '已自动选择'}，权限齐全`, 'ok')
+    show('step-form')
+    $('step-form').scrollIntoView({ behavior: 'smooth' })
+  } catch (err) {
+    const accounts = err.data?.accounts
+    if (accounts && accounts.length > 1) {
+      $('account-pick').classList.remove('hidden')
+      const sel = $('account-select')
+      sel.innerHTML = ''
+      for (const a of accounts) sel.add(new Option(`${a.name} (${a.id})`, a.id))
+      say('verify-msg', err.message)
+    } else {
+      say('verify-msg', `❌ ${err.message}`, 'err')
+    }
+  } finally {
+    $('verify-btn').disabled = false
+  }
+}
+$('verify-again-btn').onclick = async () => {
+  try {
+    await api('/api/verify', { token: $('token-input').value.trim(), accountId: $('account-select').value })
+    say('verify-msg', '✅ Token 有效，权限齐全', 'ok')
+    show('step-form')
+  } catch (err) { say('verify-msg', `❌ ${err.message}`, 'err') }
+}
+
+$('start-btn').onclick = async () => {
+  $('start-btn').disabled = true
+  try {
+    await api('/api/provision', {
+      accountId: init.defaults.accountId || undefined,
+      workerName: $('f-worker').value.trim(),
+      kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2 和域名
+      r2Name: $('f-r2').value.trim(),
+      domain: $('f-domain').value.trim(),
+      qqAppId: $('f-qq-appid').value.trim(),
+      qqSecret: $('f-qq-secret').value.trim(),
+    })
+    show('step-progress')
+    $('step-progress').scrollIntoView({ behavior: 'smooth' })
+    pollProgress()
+  } catch (err) { say('form-msg', `❌ ${err.message}`, 'err'); $('start-btn').disabled = false }
+}
+
+let polling = false
+function pollProgress() {
+  if (polling) return
+  polling = true
+  const timer = setInterval(async () => {
+    try {
+      const p = await api('/api/progress')
+      $('progress-log').textContent = p.lines.join('\n')
+      $('progress-log').scrollTop = $('progress-log').scrollHeight
+      if (p.done) {
+        clearInterval(timer)
+        polling = false
+        if (!p.ok) {
+          say('progress-msg', `❌ ${p.error}${p.hint ? `\n提示：${p.hint}` : ''}`, 'err')
+          return
+        }
+        say('progress-msg', '✅ 部署完成，进入最后两步', 'ok')
+        show('step-connect')
+        show('step-builds-token')
+        const r = p.result
+        $('connect-link').href = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/builds`
+        $('result-table').innerHTML = [
+          ['管理面板', r.panelUrl], ['回调地址', r.webhookUrl], ['构建清单地址', r.manifestUrl], ['ADMIN_TOKEN', r.adminToken],
+        ].map(([k, v]) => `<tr><td>${k}</td><td><code>${v}</code></td></tr>`).join('')
+        $('admin-token').textContent = r.adminToken
+        pollConnect()
+      }
+    } catch { /* 网络抖动，下一轮再试 */ }
+  }, 1500)
+}
+
+function pollConnect() {
+  const timer = setInterval(async () => {
+    try {
+      const s = await api('/api/builds-status')
+      if (s.connected) {
+        clearInterval(timer)
+        say('connect-status', '✅ 仓库已连接！最后一步：创建构建 token', 'ok')
+        const link = await api('/api/builds-token-url', {})
+        if (link.url) $('builds-token-link').href = link.url
+        else $('builds-token-fallback').classList.remove('hidden')
+      }
+    } catch { /* 忽略，继续轮询 */ }
+  }, 5000)
+}
+
+$('finish-btn').onclick = async () => {
+  $('finish-btn').disabled = true
+  try {
+    await api('/api/complete', { buildsToken: $('builds-token-input').value.trim() })
+    show('step-done')
+    $('step-done').scrollIntoView({ behavior: 'smooth' })
+  } catch (err) {
+    say('builds-msg', `❌ ${err.message}`, 'err')
+    $('finish-btn').disabled = false
+  }
+}
+$('skip-btn').onclick = async () => {
+  try { await api('/api/complete', {}) } catch { /* 已完成也算收尾 */ }
+  show('step-done')
+  say('builds-msg', '已跳过构建 token——装插件触发重建前需要补配（见完成页提示）。', '')
+  $('step-done').scrollIntoView({ behavior: 'smooth' })
+}
+</script>
+</body>
+</html>

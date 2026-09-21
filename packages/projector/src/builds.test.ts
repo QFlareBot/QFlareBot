@@ -69,3 +69,42 @@ describe('CloudflareBuildsApi.listBuilds', () => {
     await expect(api.listBuilds('t')).rejects.toBeInstanceOf(CloudflareApiError)
   })
 })
+
+describe('CloudflareBuildsApi.listScripts', () => {
+  it('返回 id/tag 对，兼容数组与 { items } 两种返回', async () => {
+    const { api, calls } = fakeApi(({ url }) => {
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/workers/scripts')
+      return ok({ items: [{ id: 'qqbot', tag: 'bot-tag' }, { other: true }] })
+    })
+    expect(await api.listScripts()).toEqual([{ id: 'qqbot', tag: 'bot-tag' }])
+    expect(calls[0]!.init.method).toBe('GET')
+  })
+
+  it('缺 id/tag 的条目被过滤掉', async () => {
+    const { api } = fakeApi(() => ok([{ id: 'a', tag: 't1' }, { id: 'b' }, { tag: 't3' }]))
+    expect(await api.listScripts()).toEqual([{ id: 'a', tag: 't1' }])
+  })
+})
+
+describe('CloudflareBuildsApi.getTriggerUuid', () => {
+  it('返回第一个 trigger 的 trigger_uuid', async () => {
+    const { api, calls } = fakeApi(({ url }) => {
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/workers/bot-tag/triggers')
+      return ok({ items: [{ trigger_uuid: 'trig-9' }] })
+    })
+    expect(await api.getTriggerUuid('bot-tag')).toBe('trig-9')
+    expect(calls[0]!.init.method).toBe('GET')
+  })
+
+  it('仓库未连接（空列表）时返回 null 而不是抛错', async () => {
+    const { api } = fakeApi(() => ok([]))
+    expect(await api.getTriggerUuid('bot-tag')).toBeNull()
+  })
+
+  it('回退到 uuid / id 字段', async () => {
+    const { api } = fakeApi(() => ok([{ uuid: 'u-1' }]))
+    expect(await api.getTriggerUuid('t')).toBe('u-1')
+    const { api: api2 } = fakeApi(() => ok({ items: [{ id: 'i-1' }] }))
+    expect(await api2.getTriggerUuid('t')).toBe('i-1')
+  })
+})

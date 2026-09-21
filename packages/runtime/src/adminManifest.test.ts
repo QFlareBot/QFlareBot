@@ -244,6 +244,103 @@ describe('自部署触发与状态同步', () => {
   })
 })
 
+describe('构建目标自发现（省略 CF_WORKER_TAG / CF_TRIGGER_UUID）', () => {
+  const ok = (result: unknown) => new Response(JSON.stringify({ success: true, errors: [], result }), { status: 200 })
+
+  /** 带 discovery 端点的 mock：可数调用次数、可定制 triggers 列表 */
+  function discoveryMock(opts: { triggers?: Array<Record<string, unknown>>; scripts?: Array<Record<string, unknown>> } = {}) {
+    const calls: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.endsWith('/workers/scripts')) return ok(opts.scripts ?? [{ id: 'qqbot', tag: 'tag' }])
+      if (url.endsWith('/builds/workers/tag/triggers')) return ok(opts.triggers ?? [{ trigger_uuid: 'trig-1' }])
+      if (url.endsWith('/builds/triggers/trig-1/builds') || url.endsWith('/builds/triggers/trig-2/builds')) {
+        return ok({ build_uuid: 'build-9' })
+      }
+      return new Response(`unexpected ${url}`, { status: 500 })
+    }) as typeof fetch
+    return { fetchImpl, calls }
+  }
+
+  function discoverySetup(fetchImpl: typeof fetch, envOverrides: Record<string, unknown> = {}) {
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({
+      DB: createManifestD1(),
+      CF_ACCOUNT_ID: 'acc',
+      CF_BUILDS_TOKEN: 'tok',
+      ...envOverrides,
+    })
+    const call = (path: string, init: RequestInit = {}) =>
+      runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
+    return { call, env }
+  }
+
+  it('按 WORKER_NAME 自发现 tag 与 trigger 并缓存 KV，第二次触发不再查询', async () => {
+    const { fetchImpl, calls } = discoveryMock()
+    const { call, env } = discoverySetup(fetchImpl, { WORKER_NAME: 'qqbot' })
+
+    const first = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(first.status).toBe(200)
+    expect(((await first.json()) as { buildUuid: string }).buildUuid).toBe('build-9')
+    expect(calls.some((u) => u.endsWith('/workers/scripts'))).toBe(true)
+    expect(await env.KV.get('rt:cf_build_targets', 'json')).toEqual({ workerTag: 'tag', triggerUuid: 'trig-1' })
+
+    const scriptsCallsBefore = calls.filter((u) => u.endsWith('/workers/scripts')).length
+    const second = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(second.status).toBe(200)
+    expect(calls.filter((u) => u.endsWith('/workers/scripts')).length).toBe(scriptsCallsBefore)
+  })
+
+  it('仓库未连接（triggers 为空）：返回 502 并提示连接仓库', async () => {
+    const { fetchImpl } = discoveryMock({ triggers: [] })
+    const { call } = discoverySetup(fetchImpl, { WORKER_NAME: 'qqbot' })
+    const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: string }).error).toContain('连接')
+  })
+
+  it('WORKER_NAME 对不上脚本名：报错并提示同步 vars', async () => {
+    const { fetchImpl } = discoveryMock({ scripts: [{ id: 'other-bot', tag: 'tag2' }] })
+    const { call } = discoverySetup(fetchImpl, { WORKER_NAME: 'qqbot' })
+    const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: string }).error).toContain('WORKER_NAME')
+  })
+
+  it('缓存的 trigger 失效：清缓存重新自发现，重试一次成功', async () => {
+    // KV 里预埋一个过期 trigger（模拟重连过仓库），对它的触发一律 400
+    let seenStale = false
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/builds/triggers/trig-stale/builds')) {
+        seenStale = true
+        return new Response(JSON.stringify({ success: false, errors: [{ code: 1, message: 'no such trigger' }], result: null }), { status: 400 })
+      }
+      if (url.endsWith('/workers/scripts')) return ok([{ id: 'qqbot', tag: 'tag' }])
+      if (url.endsWith('/builds/workers/tag/triggers')) return ok([{ trigger_uuid: 'trig-2' }])
+      if (url.endsWith('/builds/triggers/trig-2/builds')) return ok({ build_uuid: 'build-10' })
+      return new Response(`unexpected ${url}`, { status: 500 })
+    }) as typeof fetch
+    const { call, env } = discoverySetup(fetchImpl, { WORKER_NAME: 'qqbot' })
+    await env.KV.put('rt:cf_build_targets', JSON.stringify({ workerTag: 'tag', triggerUuid: 'trig-stale' }))
+
+    const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    expect(seenStale).toBe(true)
+    expect(((await res.json()) as { buildUuid: string }).buildUuid).toBe('build-10')
+    expect(await env.KV.get('rt:cf_build_targets', 'json')).toEqual({ workerTag: 'tag', triggerUuid: 'trig-2' })
+  })
+
+  it('env 显式配置仍优先于自发现', async () => {
+    const { fetchImpl, calls } = discoveryMock()
+    const { call } = discoverySetup(fetchImpl, { CF_WORKER_TAG: 'tag', CF_TRIGGER_UUID: 'trig-1', WORKER_NAME: 'qqbot' })
+    const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    expect(calls.some((u) => u.endsWith('/workers/scripts'))).toBe(false)
+  })
+})
+
 describe('构建状态同步的真实形状', () => {
   it('outcome 映射：success→ok、fail→failed、无 outcome（进行中）→building', async () => {
     const buildsFixture = [

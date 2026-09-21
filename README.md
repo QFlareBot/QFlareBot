@@ -23,6 +23,7 @@ QQ 开放平台 ──POST /webhook──▶ Worker
 | `packages/ui-bridge` | `@qqbot/ui-bridge` | 设计 token、面板 ↔ 插件页面的 postMessage 桥 |
 | `plugins/*` | `qqbot-plugin-*` | 示例插件：echo、multi-reply、image、keyboard（按键面板与回调）、sid（内置，查 OpenID/会话 ID/群角色） |
 | `apps/seed` | — | 种子应用：Fork 后连接 Cloudflare 即可部署 |
+| `scripts/bootstrap/` | — | 引导部署：headless.mjs（无 UI）与 wizard.mjs（Quick Tunnel 网页向导），由根目录 `.github/workflows/bootstrap.yml` 调用 |
 | `scripts/probe-qq-api.mjs` | — | QQ OpenAPI 探测脚本：实测接口真实形状（凭证从线上 KV 或 .dev.vars 读，不回显） |
 | `templates/plugin` | — | 插件仓库模板（CI workflow + 声明清单约定） |
 | `docs/design.md` | — | 设计决策记录 |
@@ -96,7 +97,7 @@ buttons: {
 - 本地 `pnpm --filter @qqbot/seed project` 与构建机跑同一投影库，产出一致（投影哈希相同）。
 - 启用/禁用/改配置只改 KV 快照，不触发构建：`PATCH /admin/plugins/:name`。
 
-设置步骤（Workers Builds、环境变量、端点）见 [apps/seed/README.md](apps/seed/README.md)。
+设置步骤见 [apps/seed/README.md](apps/seed/README.md)：fork 后运行根目录的 **Bootstrap** 工作流（网页向导或无 UI）即可完成首次部署。
 
 ## 运行时路由
 

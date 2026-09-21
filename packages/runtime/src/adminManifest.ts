@@ -19,6 +19,7 @@ import {
   type ManifestPluginEntry,
 } from './manifestStore.js'
 import { clearInstallMarker, purgePluginData, runUninstallHook } from './purge.js'
+import { Keys } from './store.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
 
@@ -255,8 +256,7 @@ function buildsApi(scope: RequestScope, deps: AdminDeps): CloudflareBuildsApi | 
   return new CloudflareBuildsApi({ accountId: CF_ACCOUNT_ID, apiToken: CF_BUILDS_TOKEN, fetchImpl: deps.options.fetchImpl })
 }
 
-/**
- * Builds API 的"完成与否"在 build_outcome（success/fail/skipped/cancelled/terminated），
+/** Builds API 的"完成与否"在 build_outcome（success/fail/skipped/cancelled/terminated），
  * status 只有 queued/initializing/running/stopped——只看 status 会把完成的构建永远当"构建中"。
  */
 function buildToInstallState(build: BuildRecord): { status: InstallRecord['status']; cfStatus: string | null } {
@@ -266,6 +266,75 @@ function buildToInstallState(build: BuildRecord): { status: InstallRecord['statu
   return { status: 'building', cfStatus: build.status ?? null }
 }
 
+interface BuildTargets {
+  workerTag: string
+  triggerUuid: string
+}
+
+async function readCachedTargets(scope: RequestScope): Promise<BuildTargets | null> {
+  try {
+    const cached = await scope.env.KV.get(Keys.cfBuildTargets, 'json')
+    if (typeof cached === 'object' && cached !== null) {
+      const { workerTag, triggerUuid } = cached as Record<string, unknown>
+      if (typeof workerTag === 'string' && typeof triggerUuid === 'string') return { workerTag, triggerUuid }
+    }
+  } catch {
+    // KV 读失败不阻塞，直接走自发现
+  }
+  return null
+}
+
+async function clearCachedTargets(scope: RequestScope): Promise<void> {
+  try {
+    await scope.env.KV.delete(Keys.cfBuildTargets)
+  } catch {
+    // 删失败顶多下次多试一次无效 trigger
+  }
+}
+
+/**
+ * 解析构建目标（workerTag + triggerUuid）：env 显式配置优先，其次 KV 缓存，
+ * 最后 API 自发现（listScripts 按 WORKER_NAME 找 tag，再查 triggers）。
+ * 自发现让 CF_WORKER_TAG / CF_TRIGGER_UUID 成为可选——连接仓库之前这两者并不存在，
+ * 引导流程不必再教用户 curl 两个 API。
+ * 返回 null 表示缺 CF_ACCOUNT_ID / CF_BUILDS_TOKEN；其余失败抛带指引的 Error。
+ */
+async function resolveBuildTargets(scope: RequestScope, deps: AdminDeps): Promise<BuildTargets | null> {
+  const { CF_WORKER_TAG, CF_TRIGGER_UUID } = scope.env
+  if (CF_WORKER_TAG && CF_TRIGGER_UUID) return { workerTag: CF_WORKER_TAG, triggerUuid: CF_TRIGGER_UUID }
+  const api = buildsApi(scope, deps)
+  if (!api) return null
+
+  const cached = await readCachedTargets(scope)
+  const discover = async (): Promise<BuildTargets> => {
+    const scriptName = typeof scope.env.WORKER_NAME === 'string' && scope.env.WORKER_NAME ? scope.env.WORKER_NAME : 'qqbot'
+    const scripts = await api.listScripts()
+    const me = scripts.find((s) => s.id === scriptName)
+    if (!me) {
+      throw new Error(
+        `账号里找不到脚本 ${scriptName}（来自 vars.WORKER_NAME）——若改过 wrangler.jsonc 的 name，请把 vars.WORKER_NAME 一起改`,
+      )
+    }
+    const triggerUuid = await api.getTriggerUuid(me.tag)
+    if (!triggerUuid) {
+      throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——请到 Cloudflare 后台 Worker → Settings → Builds 连接仓库后重试')
+    }
+    return { workerTag: me.tag, triggerUuid }
+  }
+
+  let targets = cached ?? (await discover())
+  // env 里配了一半的（比如只给了 CF_WORKER_TAG）按 env 补齐
+  if (CF_WORKER_TAG || CF_TRIGGER_UUID) targets = { workerTag: CF_WORKER_TAG ?? targets.workerTag, triggerUuid: CF_TRIGGER_UUID ?? targets.triggerUuid }
+  if (!cached) {
+    try {
+      await scope.env.KV.put(Keys.cfBuildTargets, JSON.stringify(targets))
+    } catch {
+      // 缓存写失败不影响本次
+    }
+  }
+  return targets
+}
+
 /** 触发一次 Workers Build 重建当前清单；build 端点与插件一键更新共用 */
 async function triggerProjectionBuild(
   scope: RequestScope,
@@ -273,9 +342,8 @@ async function triggerProjectionBuild(
   branch?: string,
 ): Promise<{ ok: true; buildUuid: string; branch: string; hash: string; install: InstallRecord } | { ok: false; error: string; status: number }> {
   const env = scope.env
-  const missing = (['CF_ACCOUNT_ID', 'CF_BUILDS_TOKEN', 'CF_WORKER_TAG', 'CF_TRIGGER_UUID'] as const).filter((k) => !env[k])
-  if (missing.length > 0) {
-    return { ok: false, status: 503, error: `自部署未配置，缺少环境变量：${missing.join('、')}（设置步骤见 seed README）` }
+  if (!env.CF_ACCOUNT_ID || !env.CF_BUILDS_TOKEN) {
+    return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN（设置步骤见 seed README）' }
   }
   const db = await requireDb(scope)
   if (!db) return { ok: false, status: 503, error: '未绑定 D1，无法记录构建' }
@@ -284,13 +352,36 @@ async function triggerProjectionBuild(
   const api = buildsApi(scope, deps)
   if (!api) return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN' }
   const branchName = branch ?? env.CF_BUILD_BRANCH ?? 'main'
-  let buildUuid: string
+
+  let targets: BuildTargets | null = null
   try {
-    ;({ buildUuid } = await api.triggerBuild(env.CF_TRIGGER_UUID!, { branch: branchName }))
+    targets = await resolveBuildTargets(scope, deps)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: message })
-    return { ok: false, status: 502, error: `触发构建失败：${message}` }
+    return { ok: false, status: 502, error: `确定构建目标失败：${message}` }
+  }
+  if (!targets) return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN' }
+
+  let buildUuid: string
+  try {
+    ;({ buildUuid } = await api.triggerBuild(targets.triggerUuid, { branch: branchName }))
+  } catch (err) {
+    const firstError = err instanceof Error ? err.message : String(err)
+    // 缓存的 trigger_uuid 可能已失效（重连过仓库会换新）：清缓存重新解析，只重试一次。
+    // 解析结果与原来相同（env 配死或确实没变）就按原错误失败，不做无谓重试。
+    await clearCachedTargets(scope)
+    const refreshed = await resolveBuildTargets(scope, deps).catch(() => null)
+    if (!refreshed || refreshed.triggerUuid === targets.triggerUuid) {
+      await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: firstError })
+      return { ok: false, status: 502, error: `触发构建失败：${firstError}` }
+    }
+    try {
+      ;({ buildUuid } = await api.triggerBuild(refreshed.triggerUuid, { branch: branchName }))
+    } catch (err2) {
+      const message = err2 instanceof Error ? err2.message : String(err2)
+      await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: message })
+      return { ok: false, status: 502, error: `触发构建失败：${message}` }
+    }
   }
 
   await markPendingBuilding(db, hash, buildUuid)
@@ -320,22 +411,32 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
   const rows = await listInstalls(db, 50)
 
   const api = buildsApi(scope, deps)
-  const { CF_WORKER_TAG } = scope.env
   let syncError: string | null = null
   let byUuid: Map<string, BuildRecord> | null = null
-  if (!api || !CF_WORKER_TAG) {
+  const hasInFlight = rows.some((r) => r.buildUuid && (r.status === 'building' || r.status === 'pending'))
+  if (!api) {
     // 装过插件但没有 Builds 凭据：状态永远同步不了，如实告知
     if (rows.some((r) => r.status === 'building' || r.status === 'pending')) {
-      syncError = '未配置 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，无法同步构建状态'
+      syncError = '未配置 CF_ACCOUNT_ID / CF_BUILDS_TOKEN，无法同步构建状态'
     }
-  } else if (rows.some((r) => r.buildUuid && (r.status === 'building' || r.status === 'pending'))) {
+  } else if (hasInFlight) {
+    let workerTag: string | null = null
     try {
-      const builds = await api.listBuilds(CF_WORKER_TAG)
-      byUuid = new Map(builds.filter((b) => b.build_uuid).map((b) => [b.build_uuid!, b]))
+      workerTag = (await resolveBuildTargets(scope, deps))?.workerTag ?? null
     } catch (err) {
-      // 同步失败必须可见，否则账本会永远停在"构建中"（例如 CF_WORKER_TAG 填成了 worker 名字）
       syncError = err instanceof Error ? err.message : String(err)
-      deps.logger.warn('构建状态同步失败', { error: syncError })
+    }
+    if (workerTag && !syncError) {
+      try {
+        const builds = await api.listBuilds(workerTag)
+        byUuid = new Map(builds.filter((b) => b.build_uuid).map((b) => [b.build_uuid!, b]))
+      } catch (err) {
+        // 同步失败必须可见，否则账本会永远停在"构建中"（例如 CF_WORKER_TAG 填成了 worker 名字）
+        syncError = err instanceof Error ? err.message : String(err)
+        deps.logger.warn('构建状态同步失败', { error: syncError })
+      }
+    } else if (!syncError) {
+      syncError = '无法确定构建目标，构建状态未同步'
     }
   }
 
@@ -364,7 +465,8 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
     for (const row of rows) {
       if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
       if (!byUuid.has(row.buildUuid) && Date.now() - row.ts > NOT_FOUND_MS) {
-        const message = 'Cloudflare 构建列表中找不到该构建：请检查 CF_WORKER_TAG 是否为 workers/scripts 返回的 tag（而不是名字）'
+        const message =
+          'Cloudflare 构建列表中找不到该构建：若配置了 CF_WORKER_TAG，请确认它是 workers/scripts 返回的 tag（而不是名字）'
         await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
         row.status = 'failed'
         row.cfStatus = 'not_found'

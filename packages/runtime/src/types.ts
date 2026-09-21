@@ -19,12 +19,15 @@ export interface RuntimeEnv {
   CF_ACCOUNT_ID?: string
   /** Builds API 的 user-scoped API token（权限：Workers Builds Configuration Edit + Workers Scripts Read） */
   CF_BUILDS_TOKEN?: string
-  /** Worker 的 tag（GET /accounts/.../workers/scripts 返回的 id，不是名字） */
+  /** Worker 的 tag（GET /accounts/.../workers/scripts 返回的 tag，不是名字）。与 CF_TRIGGER_UUID
+   *  一起可省略：省略时运行时按 WORKER_NAME 自发现并缓存进 KV（要求仓库已连接 Workers Builds） */
   CF_WORKER_TAG?: string
-  /** Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers） */
+  /** Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers）；可省略，见上 */
   CF_TRIGGER_UUID?: string
   /** 触发构建的分支，默认 main */
   CF_BUILD_BRANCH?: string
+  /** 本 Worker 的脚本名（= wrangler.jsonc 的 name，引导工作流同步写入 vars）。自发现构建目标用 */
+  WORKER_NAME?: string
   [binding: string]: unknown
 }
 

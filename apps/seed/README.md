@@ -7,18 +7,54 @@
 - `src/index.ts`：静态入口，直接 import 工作区插件，供 `wrangler dev` 与快速部署。
 - `dist/index.js`：由清单投影生成（本地 `pnpm project`，或构建机上的 `manifest:prepare`），用 `wrangler.generated.jsonc` 或自部署脚本部署。
 
-## 首次部署
+## 首次部署：引导工作流（推荐）
+
+仓库根目录的 [`.github/workflows/bootstrap.yml`](../.github/workflows/bootstrap.yml) 会把资源创建、
+配置回写、部署、密钥写入一次做完。**幂等可重跑**：资源按名字复用，配置已是目标值则不产生新提交。
+
+1. Fork 本仓库。
+2. 运行 **Bootstrap** 工作流（Actions → Bootstrap → Run workflow），两种模式自动选择：
+   - **网页引导**（什么都没配时）：工作流起一个临时网页（Quick Tunnel），点开 run 页 Summary
+     里的链接，跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
+     （缺哪个权限当场点名），然后建资源、看进度、连接仓库、创建构建 token。
+   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 时）：直接跑完，汇总写进 run 页 Summary。
+3. 工作流结束后照 Summary 里的清单收尾：QQ 开放平台填回调地址、连接仓库（向导会引导）。
+
+Token 权限清单（预填链接已带；手动创建照此勾选）：
+
+| 权限组 | 级别 |
+| --- | --- |
+| Workers Scripts | Edit |
+| Workers KV Storage | Edit |
+| D1 | Edit |
+| Workers R2 Storage | Edit |
+| Account Settings | Read |
+| 账户范围 | 所有账户（或包含目标账户） |
+
+引导做了什么（无 UI 模式的完整清单）：
+
+- 验证 token 与权限；单账户自动推导账户 ID（多账户要求填 `account_id` 输入）
+- **幂等创建/复用**同名 KV / D1 / R2（名字可在 workflow 输入里改；R2 未激活时自动降级为
+  不绑定，只在后台激活 R2 后重跑即可）
+- 把资源 id、Worker 名、自定义域名写回 `wrangler.jsonc` 并 **commit 到你的 fork**
+  （K/V、D1 必须有 id：自部署走的 Versions API 不认名字，缺 id 报 10021）
+- 构建 + `wrangler deploy` 首次部署
+- 生成 `ADMIN_TOKEN` 并经 `wrangler secret bulk` 写入 Worker 密钥：
+  `ADMIN_TOKEN`、`CF_ACCOUNT_ID`，配了 `CLOUDFLARE_BUILDS_TOKEN` secret 时再写 `CF_BUILDS_TOKEN`
+- 表单里填了 QQ AppID/AppSecret 的话，部署后调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，
+  与管理面板同一条路径）
+
+> R2 在新账户上需要先到后台激活一次（免费额度内不扣费），API 替代不了；向导会在前置检查里提醒。
+
+### 手动首次部署（不用工作流）
 
 ```bash
-wrangler secret put BOT_APPID
-wrangler secret put BOT_SECRET
-wrangler secret put ADMIN_TOKEN
-pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
+pnpm install && pnpm build
+wrangler login                                  # OAuth，免建 API token
+# 手工把 KV / D1 创建出来并把 id 填进 wrangler.jsonc（或依赖 wrangler deploy 的自动预配）
+wrangler secret put ADMIN_TOKEN                 # 随机长字符串
+pnpm --filter @qqbot/seed run deploy
 ```
-
-`wrangler.jsonc` 里的 KV / D1 / R2 只写名字，wrangler 会自动创建缺失资源、复用同名资源。**不要在 Cloudflare 后台手工加绑定**，以配置文件为准才不会在下次部署时丢失。
-
-部署后到 QQ 开放平台把回调地址填成 `https://<域名>/webhook`。大陆网络访问 `*.workers.dev` 不稳定，生产环境请在 `wrangler.jsonc` 里配置自定义域名。
 
 ## 插件以源码分发
 
@@ -28,9 +64,10 @@ pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
 
 ## 自部署：Worker 触发 Workers Builds
 
-装/卸插件需要重新编译，而 Worker 里没有编译器。所以流程是：**Worker 改 D1 清单 → 调 Builds REST API 触发一次构建 → 构建机拉源码编译并部署**。设置步骤：
+装/卸插件需要重新编译，而 Worker 里没有编译器。所以流程是：**Worker 改 D1 清单 → 调 Builds REST API
+触发一次构建 → 构建机拉源码编译并部署**。设置步骤：
 
-1. 仓库推到 GitHub，在 Cloudflare Dashboard 的 Worker → Settings → Builds 里连接仓库。
+1. 仓库推到 GitHub，在 Cloudflare Dashboard 的 Worker → Settings → Builds 里连接仓库（引导工作流会给出直达链接）。
 2. 构建命令与部署命令：
 
    | 项 | 值 |
@@ -46,16 +83,17 @@ pnpm deploy            # 或 pnpm deploy:projected / pnpm deploy:manifest
    | `MANIFEST_URL` | `https://<你的域名>/admin/build-manifest` |
    | `MANIFEST_TOKEN` | 可选。配了则用专用令牌拉清单；不配则该端点用 `ADMIN_TOKEN` 鉴权 |
 
-4. 给 Worker 配置触发构建用的凭证（`wrangler secret put`）：
+4. 给 Worker 配置触发构建用的凭证（`wrangler secret put`，引导工作流会自动写入）：
 
    | 变量 | 说明 |
    | --- | --- |
    | `CF_ACCOUNT_ID` | Cloudflare 账号 ID |
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
-   | `CF_WORKER_TAG` | Worker 的 tag：`GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错） |
-   | `CF_TRIGGER_UUID` | `GET /accounts/{account_id}/builds/workers/{tag}/triggers` 返回的 `trigger_uuid` |
+   | `CF_WORKER_TAG` / `CF_TRIGGER_UUID` | **可选**。省略时运行时按 `vars.WORKER_NAME` 自发现并缓存进 KV（要求仓库已连接 Workers Builds；重连仓库导致缓存失效会自动重发现）。想写死也可以：tag 是 `GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错），trigger UUID 来自 `GET /accounts/{account_id}/builds/workers/{tag}/triggers` |
    | `CF_BUILD_BRANCH` | 可选，默认 `main` |
    | `BUILD_TOKEN` | 可选，同上第 3 步的 `MANIFEST_TOKEN` |
+
+   `vars.WORKER_NAME` 在 `wrangler.jsonc` 里（引导工作流按 Worker 名同步维护），自发现靠它定位自己。
 
 流程与安全阀：
 

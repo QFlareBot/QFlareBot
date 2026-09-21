@@ -7,6 +7,8 @@ export const Keys = {
   snapshot: 'rt:snapshot',
   token: 'rt:token',
   event: (id: string) => `rt:evt:${id}`,
+  /** CF_WORKER_TAG / CF_TRIGGER_UUID 自发现结果（env 未配置时才有内容） */
+  cfBuildTargets: 'rt:cf_build_targets',
   installed: (name: string) => `rt:installed:${name}`,
 } as const
 
