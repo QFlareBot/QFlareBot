@@ -7,6 +7,7 @@ import { resetSnapshotCache } from './store.js'
 import { resetLifecycle } from './lifecycle.js'
 import { resetEventsSchema } from './events.js'
 import { createEnv, createExecutionContext, createManifestD1 } from './testing/mocks.js'
+import type { ScheduledController } from '@cloudflare/workers-types'
 
 const BASE = 'https://bot.test'
 const ADMIN = 'admin-token'
@@ -77,6 +78,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       'raw.githubusercontent.com/me/qqbot-plugin-clash/b2c3d4e5f6/manifest.json': declaredManifest({ name: 'clash', conflicts: ['echo'] }),
       'raw.githubusercontent.com/me/qqbot-plugin-needy/c3d4e5f6a7/manifest.json': declaredManifest({ name: 'needy', depends: { greet: '*' } }),
       'raw.githubusercontent.com/me/qqbot-plugin-hello/f6a7b8c9d0/manifest.json': declaredManifest({ version: '2.0.0' }),
+      'raw.githubusercontent.com/me/qqbot-plugin-game/e5f6a7b8c9/manifest.json': declaredManifest({ name: 'game', durableObjects: ['Room', 'Lobby'] }),
       // 一对表前缀相同的插件名：- 与 _ 都会被 tablePrefix 归一成 _（见 sqlScope.ts）
       'raw.githubusercontent.com/me/qqbot-plugin-dashed/d1e2f3a4b5/manifest.json': declaredManifest({ name: 'my-plugin' }),
       'raw.githubusercontent.com/me/qqbot-plugin-scored/d1e2f3a4b6/manifest.json': declaredManifest({ name: 'my_plugin' }),
@@ -98,7 +100,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
   const call = (path: string, init: RequestInit = {}) =>
     runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
   const admin = { authorization: `Bearer ${ADMIN}` }
-  return { call, env, admin, triggerWrites }
+  return { call, env, admin, triggerWrites, runtime }
 }
 
 beforeEach(() => {
@@ -389,6 +391,69 @@ describe('自部署触发与状态同步', () => {
     const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
     expect(res.status).toBe(503)
     expect(((await res.json()) as { error: string }).error).toContain('CF_ACCOUNT_ID')
+  })
+
+  it('Cron 自动收敛账本——不再只在有人打开面板时才同步', async () => {
+    const { call, env, runtime } = setup()
+    // 装一个插件：账本里留下 install + build 两条 building 记录
+    await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+
+    await runtime.scheduled!(
+      { scheduledTime: Date.now(), cron: '* * * * *', noRetry() {} } as ScheduledController,
+      env,
+      createExecutionContext(),
+    )
+
+    // 没有打开过面板，状态也该回填好了
+    const { builds } = (await (await call('/admin/builds', { headers: { authorization: `Bearer ${ADMIN}` } })).json()) as {
+      builds: Array<{ status: string; cfStatus: string | null }>
+    }
+    expect(builds.every((b) => b.status === 'ok' && b.cfStatus === 'success')).toBe(true)
+  })
+
+  it('账本里没有进行中的记录时，Cron 不发任何请求', async () => {
+    const { env, runtime, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
+    await runtime.scheduled!(
+      { scheduledTime: Date.now(), cron: '* * * * *', noRetry() {} } as ScheduledController,
+      env,
+      createExecutionContext(),
+    )
+    // 连 trigger 自配置都不该被触发：整条路径在 listInstalls 判空时就返回了
+    expect(triggerWrites).toEqual([])
+  })
+
+  it('声明了 Durable Object 的插件先拦下来，给出要往 wrangler.jsonc 补的 migrations', async () => {
+    const { call, triggerWrites } = setup()
+    const res = await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-game@e5f6a7b8c9' }),
+    })
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: string; code: string }
+    expect(body.code).toBe('durable_objects_migration_required')
+    // 报的必须是投影后的导出名——用户照着抄进 wrangler.jsonc，构建期的 checkDoMigrations 才认
+    expect(body.error).toContain('"new_sqlite_classes": ["P_game_Room", "P_game_Lobby"]')
+
+    // 拦下来就不该留任何痕迹：没写 D1、没记账本、更没触发构建
+    const manifest = await (await call('/admin/build-manifest', { headers: { authorization: `Bearer ${ADMIN}` } })).json()
+    expect((manifest as { plugins: unknown[] }).plugins).toEqual([])
+    expect(triggerWrites).toEqual([])
+  })
+
+  it('确认已补 migrations 后放行', async () => {
+    const { call } = setup()
+    const res = await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', acknowledgeDurableObjects: true }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()) as { plugin: { name: string } }).toMatchObject({ plugin: { name: 'game' } })
   })
 
   it('安装就地触发构建——不依赖面板前端补发，curl 装也一样生效', async () => {

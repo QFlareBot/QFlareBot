@@ -21,7 +21,8 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { buildPlugin } from '@qqbot/plugin-cli'
-import { CloudflareApiError, CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
+import { CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
+import { classifyDeployError, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
@@ -166,25 +167,20 @@ async function prepare() {
   // 静默消失（数据还在 D1，插件不跑了），而构建却报成功——这是最难查的一类故障。
   // 唯一该容忍的情况是本次部署本来就没有 D1：那时 build-manifest 返回 503 是预期的，
   // 而「没有 D1」这件事由 build-config 的 d1Id === null 明确回答（拿不到这个答案就按"拉不到"处理）。
-  if (!remote.ok && !remote.skipped) {
-    // 只认 hasD1 —— 它由 Worker 侧的 `!!env.DB` 如实回答。早先这里看的是 `d1Id === null`，
-    // 而 d1Id 来自 CF_D1_ID secret：secret 没写但 D1 确实绑着的部署会被误判成「没有 D1」，
-    // 于是清单拉不到时静默放行，D1 里装的插件全部从 Worker 上消失。
-    // 旧版 Worker 没有这个字段 → undefined → 不等于 false → 走硬失败，方向是安全的。
-    if (remoteConfig?.hasD1 === false) {
-      console.warn(`构建清单不可用（${remote.error}），但本次部署没有 D1，按"无 D1 插件集"继续`)
-    } else if (process.env.MANIFEST_FALLBACK === '1') {
-      console.warn(
-        `⚠️ 拉取构建清单失败（${remote.error}），MANIFEST_FALLBACK=1 已显式接受回退到仓库内置清单——` +
-          '本次构建不会包含 D1 里装的插件',
-      )
-    } else {
-      throw new Error(
-        `拉取构建清单失败（${remote.error}）：无法确认 D1 里装了哪些插件。\n` +
-          '继续构建只会打包仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在，插件不跑了）。\n' +
-          '请检查 MANIFEST_URL / MANIFEST_TOKEN 与面板可达性；确实要接受"只打包内置插件"，设 MANIFEST_FALLBACK=1 重跑。',
-      )
-    }
+  const policy = manifestPolicy(remote, remoteConfig)
+  if (policy === 'no-d1') {
+    console.warn(`构建清单不可用（${remote.error}），但本次部署没有绑 D1，按"无 D1 插件集"继续`)
+  } else if (policy === 'forced-fallback') {
+    console.warn(
+      `⚠️ 拉取构建清单失败（${remote.error}），MANIFEST_FALLBACK=1 已显式接受回退到仓库内置清单——` +
+        '本次构建不会包含 D1 里装的插件',
+    )
+  } else if (policy === 'fail') {
+    throw new Error(
+      `拉取构建清单失败（${remote.error}）：无法确认 D1 里装了哪些插件。\n` +
+        '继续构建只会打包仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在，插件不跑了）。\n' +
+        '请检查 MANIFEST_URL / MANIFEST_TOKEN 与面板可达性；确实要接受"只打包内置插件"，设 MANIFEST_FALLBACK=1 重跑。',
+    )
   }
   const remotePlugins = remote.ok ? remote.plugins : []
 
@@ -282,7 +278,7 @@ async function deployPhase() {
   // 注入，而构建机的 build 与 deploy 是两条独立命令、两个进程，env 不传递。读模板会永远拿到
   // 模板里的默认名，把版本传到同名的另一个 Worker 上（同账号跑第二个 bot 时必然撞车）。
   const generated = parseJsonc(await readFile(path.join(appDir, 'wrangler.generated.jsonc'), 'utf8'))
-  const scriptName = process.env.CF_WORKER_NAME?.trim() || generated.name
+  const scriptName = resolveScriptName(generated)
   if (!scriptName) throw new Error('缺少 Worker 名称（wrangler.generated.jsonc 的 name 或环境变量 CF_WORKER_NAME）')
   // 打出来：部署到哪个 Worker 是这一步最值得当场核对的事，错了会把版本传到同名的另一个 Worker 上
   console.log(`部署目标 Worker：${scriptName}`)
@@ -312,12 +308,10 @@ async function deployPhase() {
     // 看投影记下的解析状态，不要去扫 metadata 里的占位符字符串：buildBindings 对 D1/R2 的处理
     // 是「是占位符就不 push」，没解析出来的绑定在 metadata 里是不出现而不是留个 <provisioned>，
     // 扫字符串只拦得住 KV，D1/R2 会被静默丢掉（版本上线后 env.DB 直接消失）。
-    if (!projection.bindings) {
+    const unresolved = unresolvedBindings(projection)
+    if (unresolved === null) {
       throw new Error('dist/projection.json 缺少 bindings 解析状态，无法确认绑定是否齐全——请重新运行 prepare 后再部署')
     }
-    const unresolved = Object.entries(projection.bindings)
-      .filter(([, state]) => state === 'unresolved')
-      .map(([name]) => name.toUpperCase())
     if (unresolved.length > 0) {
       throw new Error(
         `基础设施绑定未解析：${unresolved.join('、')}。` +
@@ -359,12 +353,11 @@ async function deployPhase() {
     // 兜底只覆盖「这条路在当前环境走不通」的两种情况：
     //   10007 = 脚本还不存在（首次创建）；401/403 = 构建环境注入的凭证与主 token 权限模型不同。
     // 其余错误（含 SecretLossError / HealthCheckError 这两个安全阀）一律向上抛，不做兜底。
-    const isScriptNotFound = err instanceof CloudflareApiError && err.errors?.some((e) => e.code === 10007)
-    const isCredentialProblem = err instanceof CloudflareApiError && (err.status === 401 || err.status === 403)
-    if (isScriptNotFound || isCredentialProblem) {
+    const kind = classifyDeployError(err)
+    if (kind !== 'rethrow') {
       runWranglerDeploy(
         generated,
-        isScriptNotFound
+        kind === 'script-not-found'
           ? `Worker ${scriptName} 尚未在 Cloudflare 创建`
           : `Versions API 拒绝了本次调用（HTTP ${err.status}：${err.message}）`,
       )

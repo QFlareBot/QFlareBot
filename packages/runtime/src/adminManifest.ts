@@ -1,4 +1,4 @@
-import { BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, type BuildRecord } from '@qqbot/projector'
+import { BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, doExportName, suggestMigrationTag, type BuildRecord } from '@qqbot/projector'
 import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
@@ -128,11 +128,13 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1，无法安装插件', 503)
 
-  const body = await readJson<{ source?: string }>(request)
+  const body = await readJson<{ source?: string; acknowledgeDurableObjects?: boolean }>(request)
   const source = body?.source?.trim()
   if (!source) return error('需要 source，例如 git:owner/repo@a1b2c3d4e5', 400)
-  const out = await installFromSource(source, scope, deps)
-  if (!out.ok) return error(out.error, out.status)
+  const out = await installFromSource(source, scope, deps, {
+    acknowledgeDurableObjects: body?.acknowledgeDurableObjects === true,
+  })
+  if (!out.ok) return error(out.error, out.status, out.code)
 
   // 就地触发构建：只改 D1 清单的话，插件根本不在正在运行的 bundle 里——装了等于没装。
   // 卸载与一键更新一直是这么做的，安装以前漏了，靠面板前端补发一次；
@@ -151,10 +153,49 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
 
 type InstallOutcome =
   | { ok: true; plugin: ManifestPluginEntry; previous?: { version: string }; hash: string; install: InstallRecord }
-  | { ok: false; error: string; status: number }
+  | { ok: false; error: string; status: number; code?: string }
+
+/** 声明了 DO 类、但还没确认仓库 migrations 已就位——面板据此给出「我已加好」的确认入口 */
+export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
+
+/**
+ * 声明了 Durable Object 的插件，装进来之前必须先往仓库的 wrangler.jsonc 补一条 migrations。
+ *
+ * 为什么非拦不可：migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有
+ * 这个持久状态、造不出正确的历史，所以 projector 选择了校验而不是合成（见 checkDoMigrations）。
+ * 校验发生在 prepare 阶段——也就是说插件已经写进 D1 之后才炸，而且是**每一次**构建都炸，
+ * 包括之后装别的插件、一键更新、卸载以外的任何操作，直到有人想到把它卸载。
+ * 构建日志还没内嵌进面板，用户在面板上只看得到一个「失败」。
+ *
+ * 运行时读不到仓库里的 wrangler.jsonc（它不在 bundle 里），没法判断那条 migrations 是否
+ * 已经加好，所以只能拦下来把要加的内容原样给出，由用户确认后带 acknowledgeDurableObjects 重装。
+ */
+function checkDurableObjectsDeclared(declared: Manifest, acknowledged: boolean): InstallOutcome | null {
+  const classes = declared.durableObjects ?? []
+  if (classes.length === 0 || acknowledged) return null
+  const exportNames = classes.map((c) => doExportName(declared.name, c))
+  const tag = suggestMigrationTag(new Set<string>(), exportNames)
+  return {
+    ok: false,
+    status: 409,
+    code: DO_MIGRATION_REQUIRED,
+    error:
+      `${declared.name} 声明了 Durable Object 类（${classes.join('、')}），装进来之前需要先改仓库。\n` +
+      'DO 的 migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个状态、造不出来。\n' +
+      '请在 apps/seed/wrangler.jsonc 的 migrations 末尾追加一项并提交（tag 不能与已有重复）：\n' +
+      `  { "tag": "${tag}", "new_sqlite_classes": [${exportNames.map((n) => `"${n}"`).join(', ')}] }\n` +
+      '不加就装的话，之后每一次构建都会失败（包括装别的插件），直到把它卸载。\n' +
+      '已经加好并推送了？确认后重新安装即可。',
+  }
+}
 
 /** 安装/升级一个 git 来源的插件：拉声明清单校验、冲突与依赖检查、写入 D1 并记一条 pending 账本 */
-async function installFromSource(source: string, scope: RequestScope, deps: AdminDeps): Promise<InstallOutcome> {
+async function installFromSource(
+  source: string,
+  scope: RequestScope,
+  deps: AdminDeps,
+  opts: { acknowledgeDurableObjects?: boolean } = {},
+): Promise<InstallOutcome> {
   const db = await requireDb(scope)
   if (!db) return { ok: false, error: '未绑定 D1，无法安装插件', status: 503 }
 
@@ -165,6 +206,9 @@ async function installFromSource(source: string, scope: RequestScope, deps: Admi
   if (typeof declared === 'string') return { ok: false, error: declared, status: 400 }
   const problems = validateManifest(declared)
   if (problems.length > 0) return { ok: false, error: `声明清单非法：${problems.join('；')}`, status: 400 }
+
+  const doBlocked = checkDurableObjectsDeclared(declared, opts.acknowledgeDurableObjects === true)
+  if (doBlocked) return doBlocked
 
   const installed = await listManifestPlugins(db)
   const registryNames = new Set(deps.registry.all().map((p) => p.manifest.name))
@@ -266,7 +310,7 @@ export async function updatePlugin(name: string, scope: RequestScope, deps: Admi
 
   const latestSource = `git:${git.owner}/${git.repo}@${latestSha}${git.subdir ? `#${git.subdir}` : ''}`
   const outcome = await installFromSource(latestSource, scope, deps)
-  if (!outcome.ok) return error(outcome.error, outcome.status)
+  if (!outcome.ok) return error(outcome.error, outcome.status, outcome.code)
 
   // 就地触发构建：换钉子之后不构建，新版永远不会上线
   const build = await triggerProjectionBuild(scope, deps)
@@ -532,12 +576,20 @@ export async function triggerBuild(request: Request, scope: RequestScope, deps: 
   return json({ ok: true, buildUuid: out.buildUuid, branch: out.branch, hash: out.hash, install: out.install })
 }
 
-/** GET /admin/builds —— 安装/构建账本；配置了 CF_* 时顺带同步进行中构建的状态与 commit */
-export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Promise<Response> {
-  const db = await requireDb(scope)
-  if (!db) return error('未绑定 D1，无安装记录', 503)
-  const rows = await listInstalls(db, 50)
-
+/**
+ * 把账本里还在进行中的记录与 Cloudflare 的构建状态对齐，并收敛卡死的记录。
+ *
+ * 面板打开时调一次，Cron 也调（见 syncBuildLedgerOnSchedule）——只靠面板的话，
+ * 装完插件关掉页面账本就永远停在「构建中」，24h 后还会被卡死收敛误标成失败。
+ *
+ * 返回同步失败的原因（成功为 null）；rows 会被就地更新成最新状态。
+ */
+async function syncBuildLedger(
+  db: D1Database,
+  rows: InstallRecord[],
+  scope: RequestScope,
+  deps: AdminDeps,
+): Promise<string | null> {
   const api = buildsApi(scope, deps)
   let syncError: string | null = null
   let byUuid: Map<string, BuildRecord> | null = null
@@ -587,8 +639,7 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
         row.commitHash = commitHash
       }
     }
-    // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛——
-    // 多半是 CF_WORKER_TAG 配错（填成了名字，指向了别的 worker）
+    // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛
     const NOT_FOUND_MS = 30 * 60 * 1000
     for (const row of rows) {
       if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
@@ -616,5 +667,39 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
     }
   }
 
+  return syncError
+}
+
+/** 两次自动同步之间的最短间隔：cron 每分钟都会来，构建通常跑几分钟，没必要每分钟问一次 */
+const LEDGER_SYNC_INTERVAL_MS = 3 * 60 * 1000
+
+/**
+ * Cron 里的账本同步。只有账本里真有进行中的记录才会走到网络，
+ * 并用 KV 时间戳节流——否则每分钟一次 cron 会把 Builds API 打成 1440 次/天。
+ */
+export async function syncBuildLedgerOnSchedule(scope: RequestScope, deps: AdminDeps): Promise<void> {
+  const db = scope.env.DB
+  if (!db) return
+  try {
+    const rows = await listInstalls(db, 50)
+    if (!rows.some((r) => r.status === 'building' || r.status === 'pending')) return
+
+    const last = Number((await scope.env.KV.get(Keys.cfLedgerSyncedAt)) ?? 0)
+    if (Number.isFinite(last) && Date.now() - last < LEDGER_SYNC_INTERVAL_MS) return
+    await scope.env.KV.put(Keys.cfLedgerSyncedAt, String(Date.now()))
+
+    const syncError = await syncBuildLedger(db, rows, scope, deps)
+    if (syncError) deps.logger.warn('定时同步构建状态未完成', { error: syncError })
+  } catch (err) {
+    deps.logger.warn('定时同步构建状态失败', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/** GET /admin/builds —— 安装/构建账本；配置了 CF_* 时顺带同步进行中构建的状态与 commit */
+export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Promise<Response> {
+  const db = await requireDb(scope)
+  if (!db) return error('未绑定 D1，无安装记录', 503)
+  const rows = await listInstalls(db, 50)
+  const syncError = await syncBuildLedger(db, rows, scope, deps)
   return json({ ok: true, builds: rows, ...(syncError ? { syncError } : {}) })
 }

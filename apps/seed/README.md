@@ -127,7 +127,8 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 
 流程与安全阀：
 
-- `POST /admin/builds` 用 `{"branch":"main"}` 触发构建（构建分支当前状态，无需自己解析最新 commit），返回 `buildUuid` 记入账本；`GET /admin/builds` 轮询状态并回填 commit。
+- `POST /admin/builds` 用 `{"branch":"main"}` 触发构建（构建分支当前状态，无需自己解析最新 commit），返回 `buildUuid` 记入账本；`GET /admin/builds` 轮询状态并回填 commit，Cron 每分钟也会检查一次（账本里没有进行中的记录时不产生任何请求）。
+- **声明了 Durable Object 的插件在安装这一步就被拦下。** DO 的 `migrations` 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个持久状态、造不出来，所以投影只校验不合成。校验发生在构建阶段——不拦的话插件已经写进 D1 才炸，而且是**每一次**构建都炸（包括之后装别的插件），直到有人想到卸载它。运行时读不到仓库里的 `wrangler.jsonc`，判断不了那条 migrations 加没加，所以把要加的内容原样给出，由用户确认后重装。
 - `deploy` 阶段直接用构建产物走 Versions API：上传版本 → 预览地址 `/healthz` 健康检查 → 切 100% 流量，健康检查失败不切（含 Durable Object 的 Worker 无预览 URL，平台限制下跳过）。
 - 部署目标取 `wrangler.generated.jsonc` 的 `name`，不是模板的——`CF_WORKER_NAME` 只在 `prepare` 进程里被 `/admin/build-config` 注入，而构建机的 build 与 deploy 是两条独立命令、两个进程。
 - 绑定没解析出来（`dist/projection.json` 的 `bindings` 里有 `unresolved`）一律拒绝部署。判据是投影记下的解析状态而不是元数据里的占位符：D1/R2 没解析出来时是**整个绑定不出现**，扫占位符只拦得住 KV。
@@ -140,10 +141,10 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 | 端点 | 说明 |
 | --- | --- |
 | `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins, pendingBuild }`；`BUILD_TOKEN` 优先，未配置走管理鉴权。`pendingBuild` 是触发这次构建的账本记录，构建机据此对照「触发时」与「实际构建」的清单哈希，不一致只告警 |
-| `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`；校验声明清单、撞名、conflicts、depends |
+| `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`**并就地触发一次重建**；校验声明清单、撞名、conflicts、depends。插件声明了 Durable Object 时返回 409 `durable_objects_migration_required` 并给出要往 `wrangler.jsonc` 补的 migrations（见下），补完后带 `acknowledgeDurableObjects: true` 重新安装 |
 | `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）**并就地触发一次重建**；响应里的 `build` 是 `{ buildUuid }` 或 `{ error }`——触发失败不回滚卸载，需要手动重试构建。`purge=true` 连插件数据一起清，默认保留 |
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |
-| `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit |
+| `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit。Cron 也会自动同步（有进行中记录时最快 3 分钟一次），所以装完插件关掉页面账本照样会收敛 |
 | `GET /admin/storage` | 各插件占用的 KV 键数 / D1 表与行数 / R2 对象数与字节数，以及不属于任何已装插件的孤儿数据 |
 | `DELETE /admin/storage/orphans/:name` | 清掉某个已卸载插件的残留数据（对还装着的插件返回 409） |
 

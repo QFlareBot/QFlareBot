@@ -5,8 +5,8 @@ export function json(data: unknown, status = 200, headers: Record<string, string
   })
 }
 
-export function error(message: string, status: number): Response {
-  return json({ ok: false, error: message }, status)
+export function error(message: string, status: number, code?: string): Response {
+  return json(code ? { ok: false, error: message, code } : { ok: false, error: message }, status)
 }
 
 export async function readJson<T = Record<string, unknown>>(request: Request): Promise<T | null> {

@@ -11,6 +11,8 @@ export const Keys = {
   cfBuildTargets: 'rt:cf_build_targets',
   /** 已把构建命令与清单环境变量写进 trigger 的标记（只写一次，不覆盖用户后来的手改） */
   cfTriggerConfigured: 'rt:cf_trigger_configured',
+  /** 上次由 Cron 同步构建账本的时刻（节流用） */
+  cfLedgerSyncedAt: 'rt:cf_ledger_synced_at',
   installed: (name: string) => `rt:installed:${name}`,
 } as const
 

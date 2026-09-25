@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ChevronRight } from 'lucide-vue-next'
 import { onBeforeUnmount, ref } from 'vue'
-import { api } from '../api/client.js'
+import { ApiError, DO_MIGRATION_REQUIRED, api } from '../api/client.js'
 import type { InstallRecord, PluginInfo } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
 import QBadge from '../components/ui/QBadge.vue'
@@ -44,6 +44,12 @@ function summary(p: PluginInfo): string[] {
 
 const sourceInput = ref('')
 const installing = ref(false)
+/**
+ * 插件声明了 Durable Object 时，安装端点会 409 并给出要往仓库 wrangler.jsonc 补的 migrations。
+ * 运行时读不到仓库里的那份配置，判断不了用户加没加，所以把原文摆出来让人确认后再装——
+ * 不拦的话装进去之后每一次构建都会失败，而构建日志还没内嵌，面板上只看得到一个「失败」。
+ */
+const doMigrationNotice = ref('')
 
 /** GitHub 链接 / owner/repo → 解析 ref 的最新 commit；git: 原样交给后端校验 */
 async function resolveSource(raw: string): Promise<string> {
@@ -68,7 +74,7 @@ async function resolveSha(owner: string, repo: string, ref: string): Promise<str
   return data.sha
 }
 
-async function install() {
+async function install(acknowledgeDurableObjects = false) {
   const raw = sourceInput.value.trim()
   if (!raw || installing.value) return
   installing.value = true
@@ -76,7 +82,8 @@ async function install() {
     const source = await resolveSource(raw)
     // 构建由安装端点就地触发，这里不再补发一次——补发只能覆盖面板这一条路径，
     // curl / 脚本装完照样什么都不会发生
-    const result = await api.installPlugin(source)
+    const result = await api.installPlugin(source, acknowledgeDurableObjects)
+    doMigrationNotice.value = ''
     void refresh()
     const label = `${result.plugin.name}@${result.plugin.version}`
     if ('buildUuid' in result.build) {
@@ -86,7 +93,11 @@ async function install() {
       push(`已安装 ${label}，但触发构建失败：${result.build.error}`, 'warning')
     }
   } catch (e) {
-    push((e as Error).message, 'error')
+    if (e instanceof ApiError && e.code === DO_MIGRATION_REQUIRED) {
+      doMigrationNotice.value = e.message
+    } else {
+      push((e as Error).message, 'error')
+    }
   } finally {
     installing.value = false
   }
@@ -253,6 +264,13 @@ function formatTs(ts: number): string {
           />
         </template>
       </QField>
+      <div v-if="doMigrationNotice" class="mt-3 rounded-md border border-warning/30 bg-warning/10 p-3">
+        <pre class="whitespace-pre-wrap font-mono text-xs text-warning">{{ doMigrationNotice }}</pre>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <QButton variant="primary" :loading="installing" @click="install(true)">已加好 migrations，继续安装</QButton>
+          <QButton variant="ghost" @click="doMigrationNotice = ''">取消</QButton>
+        </div>
+      </div>
     </QCard>
 
     <QCard

@@ -116,7 +116,7 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
 }
 
 /** 把类名拼成一个可读的候选 tag（`P_foo_Game` → `p-foo-game`），并保证不与已有 tag 重复 */
-function suggestMigrationTag(existing: ReadonlySet<string>, classes: readonly string[]): string {
+export function suggestMigrationTag(existing: ReadonlySet<string>, classes: readonly string[]): string {
   const slug = classes
     .join('-')
     .toLowerCase()

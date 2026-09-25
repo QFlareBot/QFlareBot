@@ -93,6 +93,7 @@ export {
   deriveBindings,
   generateWranglerConfig,
   resolveState,
+  suggestMigrationTag,
   PROVISIONED_PLACEHOLDER,
   type WranglerConfig,
   type DerivedBindings,

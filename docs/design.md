@@ -18,6 +18,7 @@ TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；R
 
 1. 部署走"先上传后切流量"，健康检查失败就不切。含 Durable Object 的 Worker 没有版本预览 URL（平台限制），此时跳过健康检查——这是当前最大的例外
 2. 插件用动态 `import()`，某个插件求值抛错只影响自己，面板照常可用（声明 Durable Object 的插件例外：类必须静态导出，随主模块求值，求值失败会拖垮整个 Worker）
+5. 声明 Durable Object 的插件在**安装**这一步就被拦下并给出要补的 `migrations`——投影对 DO 迁移只校验不合成（构建机没有「上次应用到哪个 tag」的持久状态），校验在构建阶段，不拦的话插件已入 D1 才炸，且此后每次构建都炸
 3. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台版本回滚、以及"恢复 D1 清单快照 + 重新触发构建"是最后手段
 4. 部署凭证不进 Worker：Worker 只持有 Builds 触发 token（user-scoped，权限仅触发构建与读构建状态）；编译与部署凭证由构建机持有
 

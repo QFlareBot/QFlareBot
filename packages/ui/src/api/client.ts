@@ -24,11 +24,16 @@ export class ApiError extends Error {
     message: string,
     /** 仅 400 的表单校验错误会带上 */
     readonly fields: FieldError[] = [],
+    /** 机器可读的失败原因，用于区分「需要用户确认后重试」这类可恢复失败 */
+    readonly code?: string,
   ) {
     super(message)
     this.name = 'ApiError'
   }
 }
+
+/** 插件声明了 Durable Object，需要先往仓库 wrangler.jsonc 补 migrations 再确认安装 */
+export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
 
 export const session = {
   get: () => localStorage.getItem(SESSION_KEY),
@@ -48,12 +53,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) headers['content-type'] = 'application/json'
 
   const res = await fetch(`/admin${path}`, { method, headers, body: body === undefined ? null : JSON.stringify(body) })
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; fields?: FieldError[] }
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; fields?: FieldError[]; code?: string }
   if (res.status === 401 && path !== '/login') {
     session.clear()
     onUnauthorized?.()
   }
-  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`, data.fields ?? [])
+  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`, data.fields ?? [], data.code)
   return data as T
 }
 
@@ -81,7 +86,12 @@ export const api = {
   createUrlLink: (body: Record<string, unknown>) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/url-link', body),
   qqMenu: () => request<{ ok: boolean; status: number; data: unknown }>('GET', '/qq/menu'),
   saveQQMenu: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('PUT', '/qq/menu', body),
-  installPlugin: (source: string) => request<InstallPluginResult>('POST', '/manifest/plugins', { source }),
+  installPlugin: (source: string, acknowledgeDurableObjects = false) =>
+    request<InstallPluginResult>(
+      'POST',
+      '/manifest/plugins',
+      acknowledgeDurableObjects ? { source, acknowledgeDurableObjects } : { source },
+    ),
   checkPluginUpdate: (name: string) =>
     request<{ ok: true; name: string; current: string; latestSha: string; latestVersion: string | null; upToDate: boolean; latestSource?: string }>(
       'POST',
