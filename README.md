@@ -5,8 +5,6 @@
 
 运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架：零服务器、Fork 即部署、面板装插件。
 
-![管理面板](docs/screenshots/overview.png)
-
 ## 特性
 
 - **零服务器**：走 QQ 开放平台 Webhook，一个 Worker 就是一个常驻在线的机器人，无需 IP 白名单。

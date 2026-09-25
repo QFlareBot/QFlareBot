@@ -1,7 +1,5 @@
 # 管理面板与插件页面
 
-![概览](screenshots/overview.png)
-
 ## 面板（`@qqbot/ui`）
 
 Vue 3 + Vite + Tailwind v4，hash 路由。构建产物由 `scripts/pack.mjs` 打成一张"路径 → 内容"表（`dist/ui.js`），作为普通模块进入 Worker bundle，由运行时在 `/` 下带 ETag 返回。不加载任何外部资源，字体用系统栈。
@@ -56,8 +54,6 @@ export default definePlugin({
 4. 有构建步骤的插件页面（Vue/React 等）用 `serveAssets('/ui/*', assets)` 一行托管构建产物，制品内联进 `plugin.js`。
 
 示例：`plugins/keyboard` 的「按键点击记录」页面——回调按键把点击写进插件自己的 KV，页面通过桥读出来并可清空。
-
-![插件页面](screenshots/plugin-ui.png)
 
 ## 本地开发
 

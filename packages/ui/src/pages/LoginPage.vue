@@ -33,7 +33,7 @@ async function submit() {
 <template>
   <div class="flex min-h-full items-center justify-center px-4">
     <form class="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-(--qb-shadow)" @submit.prevent="submit">
-      <h1 class="text-lg font-semibold text-fg">qqbot 控制台</h1>
+      <h1 class="text-lg font-semibold text-fg">FlareBot 控制台</h1>
       <p class="mt-1 mb-5 text-sm text-fg-muted">输入部署时设置的 <code class="font-mono text-xs">ADMIN_TOKEN</code>。登录后浏览器只保存 7 天有效的会话令牌。</p>
       <QField id="token" label="管理密钥" :error="error">
         <template #default="{ describedBy, invalid }">
