@@ -150,6 +150,16 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 - 构建机给每个插件记下出处（D1 装的还是仓库内置的、原始 git 来源）写进入口模块，面板据此分清已上线与未上线；出处不参与投影哈希，本地 `pnpm project` 与构建机的哈希照样一致。
 - 回滚三选一：Cloudflare 后台版本回滚；D1 恢复清单快照 + 重新触发构建；git revert 内置清单 + 重建。
 
+## 路由
+
+| 路径 | 说明 |
+| --- | --- |
+| `POST /webhook` | QQ 回调地址（在开放平台填 `https://<你的域名>/webhook`） |
+| `GET /healthz` | 健康检查，含投影哈希 |
+| `/` | 管理面板 |
+| `/admin/*` | 管理 API，需 `Authorization: Bearer <管理密钥或会话令牌>`；建议再挂 Cloudflare Access |
+| `/p/<插件>/*` | 插件自己的 HTTP 路由；`auth: 'admin'` 的接受面板会话或该插件的桥接令牌 |
+
 ## 管理端点（自部署相关）
 
 | 端点 | 说明 |

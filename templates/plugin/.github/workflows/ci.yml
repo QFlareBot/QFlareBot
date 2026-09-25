@@ -16,24 +16,34 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin
     steps:
+      # 与本地开发同一布局：FlareBot 与插件并排，devDependencies 里的 file:../FlareBot/... 才解析得到
       - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: actions/checkout@v4
+        with:
+          repository: clown145/FlareBot
+          path: FlareBot
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: FlareBot/package.json
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # @qqbot 是框架占位 scope：发布到 npm 之前，模板 CI 装不了依赖。
-      # 已把 scope 换成自己的仓库（package.json 里不再有 @qqbot/）会自动跳过本检查。
-      - name: 预检 @qqbot 依赖是否已发布
+      # SDK 与 plugin-cli 不发 npm，从 FlareBot 源码构建
+      - name: 构建 SDK 与 plugin-cli
+        working-directory: FlareBot
         run: |
-          if grep -q '"@qqbot/' package.json && ! npm view @qqbot/sdk version >/dev/null 2>&1; then
-            echo "::error::@qqbot/sdk 尚未发布到 npm，模板 CI 无法安装依赖。可选做法："
-            echo "  1. 把依赖 scope 换成你自己的并发布（见框架根 README 的占位 scope 说明）；"
-            echo "  2. 回到框架 monorepo 内以 workspace 方式开发本插件；"
-            echo "  3. npm link 本地调试，依赖可用后再启用本工作流。"
-            exit 1
-          fi
+          pnpm install --frozen-lockfile --filter '@qqbot/plugin-cli...'
+          pnpm --filter '@qqbot/plugin-cli...' build
 
       # tag 必须与 package.json 的 version 一致
       - name: 校验 tag 与 version 一致

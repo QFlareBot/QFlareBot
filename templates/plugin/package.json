@@ -4,9 +4,6 @@
   "description": "QQ 机器人插件示例：命令、正则与事件",
   "license": "MIT",
   "type": "module",
-  "files": [
-    "dist"
-  ],
   "keywords": [
     "qqbot-plugin"
   ],
@@ -18,8 +15,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250917.0",
-    "@qqbot/plugin-cli": "^0.1.0",
-    "@qqbot/sdk": "^0.1.0",
+    "@qqbot/plugin-cli": "file:../FlareBot/packages/plugin-cli",
+    "@qqbot/sdk": "file:../FlareBot/packages/sdk",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

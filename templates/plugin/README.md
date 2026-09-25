@@ -6,16 +6,21 @@
 
 ## 开发
 
+`@qqbot/sdk` 与 `@qqbot/plugin-cli` 不发 npm，从 FlareBot 源码构建。把 FlareBot 克隆到插件仓库旁边（`devDependencies` 里是 `file:../FlareBot/packages/*`）：
+
 ```bash
+git clone https://github.com/clown145/FlareBot
+(cd FlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
+cd qqbot-plugin-hello    # 与 FlareBot 同级
 npm install
 ```
+
+CI 按同样的布局拉取并构建 FlareBot。机器人的构建机不装 `devDependencies`，编译时一律用机器人仓库自己那一份 SDK。
 
 - `src/index.ts`：插件入口，必须默认导出 `definePlugin(...)`。示例包含一个命令 `/hello`、一个正则 `ping`、一个 `qq.group.robot_added` 事件，以及面板据以渲染配置表单的 `configSchema`。
 - 插件不 import 运行时，所有能力（配置、KV、D1、日志、OpenAPI）都从处理器参数的 `ctx` 上取。
 - **可以用第三方包**：写进 `dependencies`、**提交 lockfile**（`package-lock.json` 或 `pnpm-lock.yaml`），机器人的构建机按 lockfile 安装、打进 `plugin.js`；有依赖没 lockfile 会构建失败。包必须能在 Workers 里跑（不依赖 Node 内置模块、不用 `eval`）。`@qqbot/sdk` 放 `devDependencies`，其他 `@qqbot/*` 不许 import；`cloudflare:workers` 等 Workers 内建模块可以用，构建时保留为外部依赖。
 - 模板本身是 MIT，随便复制；复制后把 `LICENSE` 的署名和 `package.json` 的 `license` 换成你自己的（协议不限，不必跟框架一样用 GPL）。
-- **提示**：若独立开发插件且 `@qqbot/sdk` 与 `@qqbot/plugin-cli` 尚未发布到 npm 公共源，建议在本项目 monorepo 内以本地工作区方式开发，或通过 `npm link` 进行本地调试。在此之前，模板自带的 CI 会在「预检依赖」一步失败——这是预期行为，依赖可用或换成你自己的 scope 后自动恢复。
-
 ### 命名约定
 
 仓库名 = 包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`definePlugin({ name })` 用**去掉前缀的短名**：
