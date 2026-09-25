@@ -51,8 +51,9 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 - 资源 id、Worker 名**不进 Git**：经 `wrangler secret bulk` 写入 Worker Secrets，
   并通过 `GET /admin/build-config` 构建端点动态下发给构建机（K/V、D1 必须有 id：自部署走的
   Versions API 不认名字，缺 id 报 10021）
-- 写入 Worker 密钥：`ADMIN_TOKEN`（无 UI 模式取自你的 GitHub secret；网页向导模式在页面里
-  自填或自动生成并展示）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
+- 写入 Worker 密钥：`ADMIN_TOKEN`（**必须自己设置**，至少 12 个字符：无 UI 模式取自你的 GitHub
+  secret，网页向导模式在表单里填。引导不代为生成，也不在任何地方回显——公开仓库的日志与 Summary
+  谁都能看，生成出来的密码没有安全的途径交到你手上）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
   `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
   secret 时再写 `CF_BUILDS_TOKEN`
 - QQ 凭证：无 UI 模式配了 secrets `QQ_APPID`/`QQ_APP_SECRET`、或网页向导表单里填了的话，部署后

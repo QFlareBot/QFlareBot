@@ -90,8 +90,8 @@
     <input id="f-worker" placeholder="qqbot">
     <label>R2 桶名（留空 = &lt;Worker名&gt;-artifacts）</label>
     <input id="f-r2" placeholder="qqbot-artifacts">
-    <label>管理面板密码 ADMIN_TOKEN（可选；留空将自动生成随机密钥）</label>
-    <input id="f-admin-token" placeholder="留空自动生成（建议自己设置以便记忆）" type="password">
+    <label>管理面板密码 ADMIN_TOKEN（<b>必填</b>，至少 12 个字符）——自己定、自己记：引导不会代为生成，也不会在任何地方回显</label>
+    <input id="f-admin-token" placeholder="至少 12 个字符" type="password" minlength="12" autocomplete="new-password">
     <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）</label>
     <input id="f-qq-appid" placeholder="AppID">
     <input id="f-qq-secret" placeholder="AppSecret" type="password">
@@ -136,8 +136,6 @@
     <h2>🎉 完成</h2>
     <table id="result-table"></table>
     <div id="domains-guide" class="msg" style="margin-top: 12px; line-height: 1.6;"></div>
-    <details id="admin-token-wrap"><summary>ADMIN_TOKEN（面板登录密钥）</summary><code id="admin-token"></code></details>
-    <div id="admin-token-custom-hint" class="msg hidden" style="margin-top: 8px;">🔑 <b>面板登录密钥</b>：已设为您在表单中填写的自定义密码。</div>
     <div id="trigger-state" class="msg hidden" style="margin-top: 12px; line-height: 1.6;"></div>
     <div style="margin-top: 24px;">
       <button id="exit-btn" class="btn">完成并安全关闭向导</button>
@@ -150,6 +148,7 @@
 const $ = (id) => document.getElementById(id)
 const show = (id) => $(id).classList.remove('hidden')
 const say = (id, text, cls = '') => { const el = $(id); el.textContent = text; el.className = 'msg ' + cls; el.classList.remove('hidden') }
+const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 
 // 复制按钮：clipboard 不可用（非安全上下文等）时退回选中文本，让用户自己 Ctrl+C
 document.addEventListener('click', async (e) => {
@@ -227,6 +226,13 @@ $('verify-again-btn').onclick = async () => {
 }
 
 $('start-btn').onclick = async () => {
+  const adminToken = $('f-admin-token').value.trim()
+  // 与 lib.mjs 的 ADMIN_TOKEN_MIN_LENGTH 一致；这里只为早点提示，服务端 /api/provision 同样会拦
+  if (adminToken.length < 12) {
+    say('form-msg', '❌ 请设置管理面板密码 ADMIN_TOKEN，至少 12 个字符（它就是面板登录密码，引导不会代为生成）', 'err')
+    $('f-admin-token').focus()
+    return
+  }
   $('start-btn').disabled = true
   try {
     await api('/api/provision', {
@@ -234,7 +240,7 @@ $('start-btn').onclick = async () => {
       workerName: $('f-worker').value.trim(),
       kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2 和域名
       r2Name: $('f-r2').value.trim(),
-      adminToken: $('f-admin-token').value.trim() || undefined,
+      adminToken,
       qqAppId: $('f-qq-appid').value.trim(),
       qqSecret: $('f-qq-secret').value.trim(),
     })
@@ -264,25 +270,14 @@ function pollProgress() {
         show('step-builds')
         $('step-builds').scrollIntoView({ behavior: 'smooth' })
         const r = p.result
-        const isCustom = !!r.isCustomAdminToken
-        if (isCustom) {
-          $('admin-token-wrap').classList.add('hidden')
-          $('admin-token-custom-hint').classList.remove('hidden')
-        } else {
-          $('admin-token-wrap').classList.remove('hidden')
-          $('admin-token-custom-hint').classList.add('hidden')
-          $('admin-token').textContent = r.adminToken
-        }
         $('connect-link').href = r.buildsConnectUrl
         const rows = [
-          ['管理面板', r.panelUrl],
-          ['回调地址（QQ 开放平台）', r.webhookUrl],
-          ['构建清单地址（MANIFEST_URL）', r.manifestUrl],
+          ['管理面板', `<a href="${esc(r.panelUrl)}" target="_blank" rel="noopener">${esc(r.panelUrl)} ↗</a>`],
+          ['回调地址（QQ 开放平台）', `<div class="cmd"><code id="res-webhook">${esc(r.webhookUrl)}</code><button class="ghost" data-copy="res-webhook">复制</button></div>`],
+          ['构建清单地址（MANIFEST_URL）', `<code>${esc(r.manifestUrl)}</code>`],
+          ['面板登录', '用你在第 ② 步设置的 ADMIN_TOKEN'],
         ]
-        rows.push(['ADMIN_TOKEN', isCustom ? '已设为您自定义的密码' : r.adminToken])
-        $('result-table').innerHTML = rows
-          .map(([k, v]) => `<tr><td>${k}</td><td><code>${v}</code></td></tr>`)
-          .join('')
+        $('result-table').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')
 
         const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
         $('domains-guide').innerHTML = `💡 <b>自定义域名（可选）</b>：回调地址默认就是上面的 workers.dev 地址。如果 QQ 开放平台验证回调失败（国内网络访问 <code>*.workers.dev</code> 可能不稳定），或者想用自己的域名，到 <a href="${domainsUrl}" target="_blank" rel="noopener" style="color: #8ab4f8; text-decoration: underline;">Cloudflare 域名设置页 ↗</a> 的 Custom Domains 添加一个（如 <code>bot.yourdomain.com</code>），回调地址改填 <code>https://你的域名/webhook</code>。之后的部署都不会改动你绑的域名。`

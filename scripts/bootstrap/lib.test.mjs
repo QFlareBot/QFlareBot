@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  adminTokenProblem,
   BootstrapError,
   buildsConnectUrl,
   buildsTokenUrl,
@@ -9,6 +10,7 @@ import {
   readInstalledPlugins,
   renderSummary,
   resolveBuildToken,
+  runBootstrap,
   verifyToken,
 } from './lib.mjs'
 
@@ -32,6 +34,25 @@ function stubFetch(...responses) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('管理密钥必须自己设置', () => {
+  it('缺失或太短都不合格，够长才放行', () => {
+    expect(adminTokenProblem(undefined)).toMatch(/缺少管理密钥/)
+    expect(adminTokenProblem('')).toMatch(/缺少管理密钥/)
+    expect(adminTokenProblem('short-pass1')).toMatch(/至少 12 个字符/)
+    expect(adminTokenProblem('long-enough-pass')).toBeNull()
+  })
+
+  it('runBootstrap 不合格时在任何远端操作之前就拒绝——不会建资源，更不会代为生成', async () => {
+    const fetchSpy = vi.fn(() => {
+      throw new Error('不应发出任何请求')
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    await expect(runBootstrap({ token: 'tok', repoRoot: '/nonexistent' })).rejects.toThrow(/缺少管理密钥/)
+    await expect(runBootstrap({ token: 'tok', adminToken: 'short', repoRoot: '/nonexistent' })).rejects.toThrow(/至少 12 个字符/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('verifyToken', () => {
@@ -137,7 +158,6 @@ describe('renderSummary：沿用 BUILD_TOKEN', () => {
     panelUrl: 'https://qqbot.sub.workers.dev/',
     webhookUrl: 'https://qqbot.sub.workers.dev/webhook',
     manifestUrl: 'https://qqbot.sub.workers.dev/admin/build-manifest',
-    adminToken: 'admin',
     buildToken: null,
     buildTokenReused: true,
     resources: {},
@@ -151,5 +171,34 @@ describe('renderSummary：沿用 BUILD_TOKEN', () => {
     const md = renderSummary(result, { redactSecrets })
     expect(md).not.toContain('MANIFEST_TOKEN=null')
     expect(md).toContain('本次沿用、没有轮换')
+  })
+})
+
+describe('renderSummary：地址与密钥', () => {
+  const base = {
+    accountId: 'acc',
+    workerName: 'qqbot',
+    panelUrl: 'https://qqbot.sub.workers.dev/',
+    webhookUrl: 'https://qqbot.sub.workers.dev/webhook',
+    manifestUrl: 'https://qqbot.sub.workers.dev/admin/build-manifest',
+    buildToken: 'build-token-value',
+    buildTokenReused: false,
+    resources: {},
+    buildsTokenWritten: true,
+    triggerConfigured: true,
+    qqSaved: false,
+    warnings: [],
+  }
+
+  it('面板地址是可点的链接，回调地址单独放进代码块（GitHub 给代码块配了复制按钮）', () => {
+    const md = renderSummary(base, { redactSecrets: true })
+    expect(md).toContain('[https://qqbot.sub.workers.dev/](https://qqbot.sub.workers.dev/)')
+    expect(md).toContain('```text\nhttps://qqbot.sub.workers.dev/webhook\n```')
+  })
+
+  it('管理密钥不出现在汇总里，哪怕调用方误传了', () => {
+    const md = renderSummary({ ...base, adminToken: 'secret-admin-pass' }, { redactSecrets: false })
+    expect(md).not.toContain('secret-admin-pass')
+    expect(md).toContain('ADMIN_TOKEN')
   })
 })

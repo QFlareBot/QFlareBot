@@ -61,6 +61,26 @@ export async function cfFetch(token, apiPath, { method = 'GET', body } = {}) {
   return envelope.result
 }
 
+/** 面板登录密钥的最短长度：面板挂在公网上，太短的密码经不起猜 */
+export const ADMIN_TOKEN_MIN_LENGTH = 12
+
+/**
+ * 管理密钥必须由用户自己给，引导不代为生成。
+ *
+ * 生成出来的值没有安全的途径交到用户手上：公开仓库的 Actions 日志与 Step Summary
+ * 谁都能看，向导页面也只是一条临时隧道。用户自己定、自己记，引导全程只把它写进
+ * Worker Secret，不回显、不输出。
+ *
+ * @returns {string | null} 不合格时的说明；合格为 null
+ */
+export function adminTokenProblem(token) {
+  if (!token) return '缺少管理密钥 ADMIN_TOKEN：它就是面板登录密码，请自己设置一个（引导不会代为生成）'
+  if (token.length < ADMIN_TOKEN_MIN_LENGTH) {
+    return `管理密钥至少 ${ADMIN_TOKEN_MIN_LENGTH} 个字符：面板在公网上，太短的密码容易被猜中`
+  }
+  return null
+}
+
 /** 验证 token 本身有效且激活（这个端点只收 GET，POST 会报 7001） */
 export async function verifyToken(token) {
   const result = await cfFetch(token, '/user/tokens/verify')
@@ -352,7 +372,6 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     panelUrl,
     webhookUrl,
     manifestUrl,
-    adminToken,
     buildToken,
     buildTokenReused,
     resources,
@@ -368,28 +387,23 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   lines.push('')
   lines.push('| 项目 | 值 |')
   lines.push('| --- | --- |')
-  lines.push(`| 管理面板 | ${panelUrl} |`)
-  lines.push(`| 回调地址（填到 QQ 开放平台） | \`${webhookUrl}\` |`)
+  lines.push(`| 管理面板 | [${panelUrl}](${panelUrl}) |`)
   lines.push(`| 构建机拉清单地址（MANIFEST_URL） | \`${manifestUrl}\` |`)
   if (resources.kv) lines.push(`| KV | ${resources.kv.name}${resources.kv.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.d1) lines.push(`| D1 | ${resources.d1.name}${resources.d1.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.r2) lines.push(`| R2 | ${resources.r2.name}${resources.r2.created ? '（新建）' : '（复用已有）'} |`)
   lines.push('')
-  lines.push('<details><summary><b>ADMIN_TOKEN</b>（面板登录密钥）</summary>')
+  // 单独放进代码块：GitHub 给代码块配了一键复制按钮，表格里的行内代码没有
+  lines.push('**回调地址**（填到 QQ 开放平台，代码块右上角可一键复制）：')
   lines.push('')
-  if (redactSecrets) {
-    lines.push('⚠️ **为防止公开仓库泄露密钥，ADMIN_TOKEN 未明文写入本页公共 Step Summary。**')
-    lines.push('')
-    lines.push('- **无 UI 部署**：已应用您在 GitHub Secrets 中指定的 `ADMIN_TOKEN`；')
-    lines.push('- **网页向导部署**：已在向导网页中设置/展示；')
-    lines.push('- 若后续遗忘，可在 Cloudflare 控制台（Worker -> Settings -> Variables and Secrets）中重置，或使用 `wrangler secret put ADMIN_TOKEN` 重新设置。')
-  } else {
-    lines.push('```')
-    lines.push(adminToken)
-    lines.push('```')
-  }
+  lines.push('```text')
+  lines.push(webhookUrl)
+  lines.push('```')
   lines.push('')
-  lines.push('</details>')
+  lines.push(
+    '**面板登录**：用你自己设置的 `ADMIN_TOKEN`（无 UI 模式是 GitHub Secret 里那个，网页向导是表单里填的）。' +
+      '引导不会生成、也不会在任何地方输出它；忘了就 `wrangler secret put ADMIN_TOKEN` 重设。',
+  )
   lines.push('')
   lines.push('### 下一步')
   lines.push('')
@@ -481,6 +495,7 @@ export function appendStepSummary(markdown) {
  *   qq           可选 { appId, secret }，提供则部署后存进 KV
  *   buildsToken  可选，提供则写为 CF_BUILDS_TOKEN secret
  *   buildToken   可选，提供则写为 BUILD_TOKEN；不提供时 Worker 上已有就沿用，没有才生成
+ *   adminToken   必填，面板登录密钥（见 adminTokenProblem）
  *   repoRoot     仓库根目录
  *   onStep       可选 (name, state: 'run'|'ok'|'warn'|'fail', detail?) => void
  */
@@ -495,7 +510,7 @@ export async function runBootstrap(opts) {
     qq,
     buildsToken,
     buildToken,
-    adminToken: customAdminToken,
+    adminToken,
     repoRoot,
     onStep = () => {},
   } = opts
@@ -512,6 +527,10 @@ export async function runBootstrap(opts) {
       throw err
     }
   }
+
+  // 先于一切远端操作：密钥不合格就别建资源、别部署
+  const adminProblem = adminTokenProblem(adminToken)
+  if (adminProblem) throw new BootstrapError(adminProblem)
 
   await step('验证 API Token', async () => verifyToken(token))
 
@@ -581,7 +600,6 @@ export async function runBootstrap(opts) {
   const baseUrl = `https://${defaultDomain}`
   const manifestUrl = `${baseUrl}/admin/build-manifest`
 
-  const adminToken = customAdminToken || randomBytes(32).toString('base64url')
   // 构建机拉清单的专用令牌不留给用户决定：以前它是可选项，不配就退回「把 ADMIN_TOKEN 当
   // MANIFEST_TOKEN 用」——等于默认把面板登录凭证发给构建环境。首次自动生成，重跑沿用（见 resolveBuildToken）
   const existingSecrets = await step('查询 Worker 已有密钥', () => listWorkerSecretNames(token, accountId, workerName))
@@ -619,7 +637,6 @@ export async function runBootstrap(opts) {
     panelUrl: `${baseUrl}/`,
     webhookUrl: `${baseUrl}/webhook`,
     manifestUrl,
-    adminToken,
     /** 构建机侧的 MANIFEST_TOKEN 用它，不是面板主密钥；沿用 Worker 上已有值时为 null（值读不到） */
     buildToken: buildTokenPlan.value,
     buildTokenReused: buildTokenPlan.reused,
@@ -634,7 +651,6 @@ export async function runBootstrap(opts) {
     },
     buildsTokenWritten: !!buildsToken,
     qqSaved: !!(qq?.appId && qq?.secret),
-    isCustomAdminToken: Boolean(customAdminToken),
     warnings,
   }
 }

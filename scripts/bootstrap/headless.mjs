@@ -5,6 +5,7 @@
  *
  * 输入（环境变量）：
  *   CLOUDFLARE_API_TOKEN     必填，GitHub secret
+ *   ADMIN_TOKEN              必填，GitHub secret：面板登录密码，自己定（至少 12 个字符），引导不代为生成
  *   CLOUDFLARE_BUILDS_TOKEN  可选，GitHub secret（写为 Worker 的 CF_BUILDS_TOKEN）
  *   BUILD_TOKEN              可选，GitHub secret（写为 Worker 的 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）；
  *                            不配时首次自动生成，重跑沿用 Worker 上已有的值（不轮换）
@@ -17,7 +18,7 @@
 
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { appendStepSummary, BootstrapError, renderSummary, runBootstrap, SETUP_TOKEN_URL } from './lib.mjs'
+import { adminTokenProblem, appendStepSummary, BootstrapError, renderSummary, runBootstrap, SETUP_TOKEN_URL } from './lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -30,15 +31,14 @@ if (!env.CLOUDFLARE_API_TOKEN) {
 const opt = (name) => (env[name] && env[name].trim()) || undefined
 
 const adminToken = opt('ADMIN_TOKEN')
-if (!adminToken) {
-  console.error('❌ 缺少 ADMIN_TOKEN！')
-  console.error('无 UI 引导模式必须显式提供管理密钥（ADMIN_TOKEN）。')
-  console.error('为防止敏感信息泄露，GitHub Actions 会对公共日志与 Step Summary 进行安全脱敏。若由系统随机生成您将无法获知登录密码。')
-  console.error('请在仓库设置（Settings → Secrets and variables → Actions）中配置 Secret `ADMIN_TOKEN` 后重试；或者清空 CLOUDFLARE_API_TOKEN 使用网页向导模式（可在向导中直接输入或查看密码）。')
+const adminProblem = adminTokenProblem(adminToken)
+if (adminProblem) {
+  console.error(`❌ ${adminProblem}`)
+  console.error('请在仓库 Settings → Secrets and variables → Actions 里配置 Secret `ADMIN_TOKEN` 后重试。')
   process.exit(1)
 }
 
-if (adminToken) console.log(`::add-mask::${adminToken}`)
+console.log(`::add-mask::${adminToken}`)
 if (env.QQ_APP_SECRET) console.log(`::add-mask::${env.QQ_APP_SECRET}`)
 if (env.CLOUDFLARE_BUILDS_TOKEN) console.log(`::add-mask::${env.CLOUDFLARE_BUILDS_TOKEN}`)
 if (env.BUILD_TOKEN) console.log(`::add-mask::${env.BUILD_TOKEN}`)

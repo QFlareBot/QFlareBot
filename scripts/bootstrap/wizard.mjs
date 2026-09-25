@@ -27,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  adminTokenProblem,
   BootstrapError,
   BUILD_COMMAND,
   cfFetch,
@@ -305,13 +306,16 @@ const server = createServer(async (req, res) => {
       if (!state.token) return json(res, 400, { error: '先完成 token 验证' })
       if (state.provision && !state.provision.done) return json(res, 409, { error: '引导已在进行中' })
       const body = await readBody(req)
+      // 先校验再开工：前端也拦，但不能只靠前端
+      const adminToken = typeof body.adminToken === 'string' ? body.adminToken.trim() : ''
+      const adminProblem = adminTokenProblem(adminToken)
+      if (adminProblem) return json(res, 400, { error: adminProblem })
+      mask(adminToken)
       const lines = []
       const provision = { lines, done: false, ok: false, error: null, result: null }
       state.provision = provision
       const workerName = (body.workerName || state.workerName).trim() || 'qqbot'
       state.workerName = workerName
-      const adminToken = (typeof body.adminToken === 'string' && body.adminToken.trim()) || undefined
-      if (adminToken) mask(adminToken)
       if (body.qqSecret) mask(body.qqSecret)
       runBootstrap({
         token: state.token,
@@ -322,7 +326,7 @@ const server = createServer(async (req, res) => {
         r2Name: body.r2Name?.trim() || undefined,
         qq: body.qqAppId && body.qqSecret ? { appId: body.qqAppId.trim(), secret: body.qqSecret.trim() } : undefined,
         buildsToken: null, // 构建 token 在连接仓库后的收尾步骤写入
-        adminToken: adminToken || undefined,
+        adminToken,
         repoRoot,
         onStep: (name, st, detail) => {
           const mark = st === 'ok' ? '✅' : st === 'run' ? '⏳' : st === 'warn' ? '⚠️ ' : '❌'
