@@ -130,6 +130,29 @@ async function configureTrigger(buildsToken, accountId, triggerUuid, { manifestU
   })
 }
 
+/**
+ * 列某个 Worker 的 Builds trigger。
+ *
+ * 构建 token 能列脚本、却在这里 403（[10000] Authentication error），几乎一定是缺
+ * Workers Builds Configuration 权限——预填链接没把它勾上时就是这样。原样抛出那句
+ * Authentication error 等于让人自己猜，这里直接点名缺什么、怎么补。
+ */
+async function listTriggers(buildsToken, accountId, workerTag) {
+  try {
+    const triggers = await cfFetch(buildsToken, `/accounts/${accountId}/builds/workers/${workerTag}/triggers`)
+    return Array.isArray(triggers) ? triggers : triggers?.items ?? []
+  } catch (err) {
+    if (err instanceof BootstrapError && err.status === 403) {
+      throw new BootstrapError(
+        '构建 Token 缺少 Workers Builds Configuration（Edit）权限（权限列表里也可能叫 Workers CI）——' +
+          '到 Cloudflare 的 API Tokens 页编辑这个 token 补上这项（token 值不变），再回来重新粘贴',
+        { status: 403 },
+      )
+    }
+    throw err
+  }
+}
+
 // ── 隧道 ─────────────────────────────────────────────────────────────────
 
 async function startTunnel() {
@@ -345,8 +368,7 @@ const server = createServer(async (req, res) => {
         const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
         const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
         if (!me?.tag) return json(res, 200, { ok: false, connected: false, error: `找不到脚本 ${state.workerName}` })
-        const triggers = await cfFetch(buildsToken, `/accounts/${state.accountId}/builds/workers/${me.tag}/triggers`)
-        const items = Array.isArray(triggers) ? triggers : triggers?.items ?? []
+        const items = await listTriggers(buildsToken, state.accountId, me.tag)
         json(res, 200, { ok: true, connected: items.length > 0, count: items.length })
       } catch (err) {
         json(res, 200, { ok: false, connected: false, error: err.message })
@@ -368,8 +390,7 @@ const server = createServer(async (req, res) => {
           const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
           const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
           if (!me?.tag) throw new Error(`找不到脚本 ${state.workerName}`)
-          const triggers = await cfFetch(buildsToken, `/accounts/${state.accountId}/builds/workers/${me.tag}/triggers`)
-          const items = Array.isArray(triggers) ? triggers : triggers?.items ?? []
+          const items = await listTriggers(buildsToken, state.accountId, me.tag)
           if (!items.length) throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——先完成连接仓库一步')
           return items[0].trigger_uuid ?? items[0].uuid ?? items[0].id
         }
