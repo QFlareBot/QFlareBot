@@ -41,6 +41,8 @@ export default definePlugin<{ greeting: string }>({
 
 ## 文档
 
+文档站：<https://qflarebot.github.io>（由 `docs/` 自动构建）。
+
 - [插件开发指南](docs/plugin-guide.md)
 - [平台能力对照](docs/capabilities.md)
 - [面板与插件页面](docs/ui.md)
@@ -57,6 +59,8 @@ pnpm test
 cp apps/seed/.dev.vars.example apps/seed/.dev.vars   # 填写 BOT_APPID / BOT_SECRET / ADMIN_TOKEN
 pnpm dev                                             # 打开 http://localhost:8787
 ```
+
+文档站依赖独立于 workspace，本地预览：`cd docs && pnpm install --ignore-workspace && pnpm dev`。
 
 | 目录 | 说明 |
 | --- | --- |

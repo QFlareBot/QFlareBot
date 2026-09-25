@@ -1,0 +1,40 @@
+import { defineConfig } from 'vitepress'
+
+const repo = 'https://github.com/qflarebot/QFlareBot'
+
+// 站点发布在 qflarebot.github.io 根路径，不需要 base
+export default defineConfig({
+  lang: 'zh-CN',
+  title: 'QFlareBot',
+  description: '运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架',
+  cleanUrls: true,
+  lastUpdated: true,
+  themeConfig: {
+    nav: [
+      { text: '快速部署', link: '/deploy' },
+      { text: '插件开发', link: '/plugin-guide' },
+    ],
+    sidebar: [
+      { text: '开始', items: [{ text: '快速部署', link: '/deploy' }] },
+      {
+        text: '插件开发',
+        items: [
+          { text: '插件开发指南', link: '/plugin-guide' },
+          { text: '平台能力对照', link: '/capabilities' },
+          { text: '面板与插件页面', link: '/ui' },
+        ],
+      },
+      { text: '深入', items: [{ text: '设计决策', link: '/design' }] },
+    ],
+    socialLinks: [{ icon: 'github', link: repo }],
+    editLink: { pattern: `${repo}/edit/main/docs/:path`, text: '在 GitHub 上编辑此页' },
+    search: { provider: 'local' },
+    outline: { level: [2, 3], label: '本页目录' },
+    lastUpdated: { text: '最后更新' },
+    docFooter: { prev: '上一页', next: '下一页' },
+    returnToTopLabel: '回到顶部',
+    sidebarMenuLabel: '目录',
+    darkModeSwitchLabel: '外观',
+    footer: { message: '框架以 GPL-3.0-or-later 发布，SDK、插件模板与内置插件以 MIT 发布' },
+  },
+})

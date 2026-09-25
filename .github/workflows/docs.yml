@@ -1,0 +1,49 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # fork 没有发布密钥，只在主仓库跑
+    if: github.repository == 'qflarebot/QFlareBot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 「最后更新」时间读 git 历史
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      # docs/ 不在 workspace 里：VitePress 不进根 lockfile，Workers Builds 装依赖时不会带上它
+      - run: pnpm install --frozen-lockfile --ignore-workspace
+        working-directory: docs
+
+      - run: pnpm build
+        working-directory: docs
+
+      # 根域名 qflarebot.github.io 只能由同名仓库发布，构建产物推过去；
+      # DOCS_DEPLOY_KEY 是该仓库带写权限的 deploy key 私钥
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          external_repository: qflarebot/qflarebot.github.io
+          publish_branch: main
+          publish_dir: docs/.vitepress/dist
+          force_orphan: true

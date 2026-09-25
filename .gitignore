@@ -10,6 +10,7 @@ apps/seed/manifest.resolved.json
 apps/seed/.build-plugins/
 packages/ui/dist/
 packages/ui/public/tokens.css
+docs/.vitepress/cache/
 *.local
 
 # Claude Code 本地技能/配置，不进版本库
