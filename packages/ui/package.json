@@ -2,6 +2,7 @@
   "name": "@qqbot/ui",
   "version": "0.1.0",
   "description": "qqbot 管理面板（Vue 3），构建产物打包为可嵌入 Worker 的资源表",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "exports": {
     ".": {

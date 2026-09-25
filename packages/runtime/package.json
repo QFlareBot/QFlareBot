@@ -2,6 +2,7 @@
   "name": "@qqbot/runtime",
   "version": "0.1.0",
   "description": "QQ 机器人 Workers 运行时：Webhook 网关、事件分发、插件上下文注入与管理 API",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

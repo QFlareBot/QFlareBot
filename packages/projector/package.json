@@ -2,6 +2,7 @@
   "name": "@qqbot/projector",
   "version": "0.1.0",
   "description": "把部署清单投影为可部署的 Worker bundle，并通过 Cloudflare Versions API 部署（零运行时依赖）",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "sideEffects": false,
   "bin": {

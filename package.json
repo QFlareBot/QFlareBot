@@ -1,8 +1,9 @@
 {
-  "name": "qqbot-workers",
+  "name": "flarebot",
   "private": true,
   "version": "0.1.0",
   "description": "运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "packageManager": "pnpm@10.34.5",
   "engines": {

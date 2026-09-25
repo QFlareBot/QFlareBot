@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>qqbot-workers 引导向导</title>
+<title>FlareBot 引导向导</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -54,7 +54,7 @@
 <main>
   <header style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 20px;">
     <div>
-      <h1 style="margin: 0 0 4px;">🚀 qqbot-workers 引导向导</h1>
+      <h1 style="margin: 0 0 4px;">🚀 FlareBot 引导向导</h1>
       <div class="sub" style="margin-bottom: 0;">仓库：<span id="repo"></span> —— 跟着指引走完，机器人就上线了</div>
     </div>
     <button id="cancel-btn" class="ghost" style="color: #ff7b72; border: 1px solid #ff7b7244; margin: 0; font-size: 13px; padding: 6px 12px; white-space: nowrap; flex-shrink: 0;">终止向导</button>
@@ -67,7 +67,7 @@
       <li>点下面按钮打开 Cloudflare 的 token 创建页——<b>名字和权限已经预填好</b>，确认后点 Create Token；</li>
       <li>复制生成的 token，粘贴到下面输入框，点「验证」。</li>
     </ol>
-    <p><a id="setup-token-link" class="btn" href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_ci%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup" target="_blank" rel="noopener">打开预填的 Token 创建页 ↗</a></p>
+    <p><a id="setup-token-link" class="btn" href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_ci%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=flarebot-setup" target="_blank" rel="noopener">打开预填的 Token 创建页 ↗</a></p>
     <details><summary>预填的权限（链接失效时按这个手动勾选）</summary>
       <ol class="hint">
         <li>Workers Scripts — Edit</li>

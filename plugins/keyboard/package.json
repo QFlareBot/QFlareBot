@@ -2,6 +2,7 @@
   "name": "qqbot-plugin-keyboard",
   "version": "0.1.0",
   "description": "示例插件：内嵌按键面板与回调处理",
+  "license": "MIT",
   "type": "module",
   "keywords": ["qqbot-plugin"],
   "files": ["dist"],

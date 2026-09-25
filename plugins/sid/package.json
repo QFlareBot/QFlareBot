@@ -2,6 +2,7 @@
   "name": "qqbot-plugin-sid",
   "version": "0.1.0",
   "description": "内置插件：查询自己的 OpenID、当前会话 ID、群角色与头像",
+  "license": "MIT",
   "type": "module",
   "keywords": ["qqbot-plugin"],
   "files": ["dist"],

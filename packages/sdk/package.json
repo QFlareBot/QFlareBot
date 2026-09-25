@@ -2,6 +2,7 @@
   "name": "@qqbot/sdk",
   "version": "0.1.0",
   "description": "QQ 机器人插件契约：类型、definePlugin 与测试工具（零运行时依赖）",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "exports": {

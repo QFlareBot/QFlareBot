@@ -2,7 +2,7 @@
 
 运行在 Cloudflare Workers 上的 QQ 机器人插件模板。复制本目录、改掉包名即可开始开发。
 
-> 完整的插件开发指南（事件 / 回复 / 配置 / 存储 / 生命周期）见 qqbot-workers 仓库的 [docs/plugin-guide.md](../../docs/plugin-guide.md)；本篇只讲模板自身的约定与发布流程。
+> 完整的插件开发指南（事件 / 回复 / 配置 / 存储 / 生命周期）见 FlareBot 仓库的 [docs/plugin-guide.md](../../docs/plugin-guide.md)；本篇只讲模板自身的约定与发布流程。
 
 ## 开发
 
@@ -13,7 +13,7 @@ npm install
 - `src/index.ts`：插件入口，必须默认导出 `definePlugin(...)`。示例包含一个命令 `/hello`、一个正则 `ping`、一个 `qq.group.robot_added` 事件，以及面板据以渲染配置表单的 `configSchema`。
 - 插件不 import 运行时，所有能力（配置、KV、D1、日志、OpenAPI）都从处理器参数的 `ctx` 上取。
 - **可以用第三方包**：写进 `dependencies`、**提交 lockfile**（`package-lock.json` 或 `pnpm-lock.yaml`），机器人的构建机按 lockfile 安装、打进 `plugin.js`；有依赖没 lockfile 会构建失败。包必须能在 Workers 里跑（不依赖 Node 内置模块、不用 `eval`）。`@qqbot/sdk` 放 `devDependencies`，其他 `@qqbot/*` 不许 import；`cloudflare:workers` 等 Workers 内建模块可以用，构建时保留为外部依赖。
-- 记得补一个 `LICENSE`，模板不替你选。
+- 模板本身是 MIT，随便复制；复制后把 `LICENSE` 的署名和 `package.json` 的 `license` 换成你自己的（协议不限，不必跟框架一样用 GPL）。
 - **提示**：若独立开发插件且 `@qqbot/sdk` 与 `@qqbot/plugin-cli` 尚未发布到 npm 公共源，建议在本项目 monorepo 内以本地工作区方式开发，或通过 `npm link` 进行本地调试。在此之前，模板自带的 CI 会在「预检依赖」一步失败——这是预期行为，依赖可用或换成你自己的 scope 后自动恢复。
 
 ### 命名约定

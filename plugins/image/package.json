@@ -2,6 +2,7 @@
   "name": "qqbot-plugin-image",
   "version": "0.1.0",
   "description": "示例插件：富媒体图片发送",
+  "license": "MIT",
   "type": "module",
   "keywords": ["qqbot-plugin"],
   "files": ["dist"],

@@ -1,5 +1,5 @@
 /*
- * qqbot 设计 token —— design-system/qqbot-workers/MASTER.md 的机器可读版本。
+ * FlareBot 设计 token —— design-system/flarebot/MASTER.md 的机器可读版本。
  * 主面板与插件页面共用；语义命名，换风格只改这里的映射。
  * 主题由 <html data-theme="light|dark"> 切换，未设置时跟随系统。
  */
