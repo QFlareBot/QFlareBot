@@ -1,9 +1,12 @@
 import type { TokenCache } from '@qqbot/api'
-import type { BotConfig, RuntimeEnv, Snapshot } from './types.js'
+import type { BotConfig, RuntimeEnv, SavedBot, Snapshot } from './types.js'
 
 /** 运行时自用的 KV 键，与插件前缀 `p:` 分开 */
 export const Keys = {
+  /** 当前在用的机器人。换号只改这一个键，老运行时与 probe 脚本照旧能读 */
   botConfig: 'rt:bot',
+  /** 换下来的机器人（SavedBot[]，最近换下的在前） */
+  savedBots: 'rt:bot_saved',
   snapshot: 'rt:snapshot',
   token: 'rt:token',
   event: (id: string) => `rt:evt:${id}`,
@@ -51,13 +54,37 @@ export function resetSnapshotCache(): void {
 
 export async function readBotConfig(env: RuntimeEnv): Promise<BotConfig | null> {
   if (env.BOT_APPID && env.BOT_SECRET) return { appId: env.BOT_APPID, secret: env.BOT_SECRET }
+  return readStoredBotConfig(env)
+}
+
+/** 只看 KV 里面板保存的那份，不管 Worker Secret */
+export async function readStoredBotConfig(env: RuntimeEnv): Promise<BotConfig | null> {
   const stored = await env.KV.get<BotConfig>(Keys.botConfig, 'json')
-  return stored?.appId && stored.secret ? stored : null
+  return stored?.appId && stored.secret ? { appId: stored.appId, secret: stored.secret } : null
 }
 
 export async function writeBotConfig(env: RuntimeEnv, config: BotConfig): Promise<void> {
   await env.KV.put(Keys.botConfig, JSON.stringify(config))
   await env.KV.delete(Keys.token)
+}
+
+/** 换下来的机器人留多少个，超出丢掉换下最久的 */
+const SAVED_BOTS_LIMIT = 20
+
+export async function readSavedBots(env: RuntimeEnv): Promise<SavedBot[]> {
+  const list = await env.KV.get<SavedBot[]>(Keys.savedBots, 'json')
+  return Array.isArray(list) ? list.filter((b) => b?.appId && b.secret) : []
+}
+
+export async function writeSavedBots(env: RuntimeEnv, list: SavedBot[]): Promise<void> {
+  if (list.length) await env.KV.put(Keys.savedBots, JSON.stringify(list.slice(0, SAVED_BOTS_LIMIT)))
+  else await env.KV.delete(Keys.savedBots)
+}
+
+/** 快照里的机器人资料，只在属于 appId 这个号时返回；老快照没标 appId，按属于它处理 */
+export function profileOf(snapshot: Snapshot, appId: string | undefined): Snapshot['bot'] {
+  const bot = snapshot.bot
+  return bot && appId && (bot.appId ?? appId) === appId ? bot : undefined
 }
 
 /** token 存 KV 让所有 isolate 共享，避免冷启动风暴时反复取 token */

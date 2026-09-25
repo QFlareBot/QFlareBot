@@ -872,6 +872,142 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
   })
 })
 
+describe('切换机器人', () => {
+  /** 按 AppID 回不同名字；bad 里的 AppID 换 token 失败 */
+  function botFetch(bad: Set<string> = new Set()) {
+    let lastAppId = ''
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url.includes('getAppAccessToken')) {
+        lastAppId = JSON.parse(String(init?.body)).appId
+        if (bad.has(lastAppId)) return new Response(JSON.stringify({ code: 100016, message: 'invalid appid or secret' }), { status: 400 })
+        return new Response(JSON.stringify({ access_token: `tok-${lastAppId}`, expires_in: 7200 }))
+      }
+      if (url.includes('/users/@me')) {
+        const appId = new Headers(init?.headers).get('x-union-appid')
+        return new Response(JSON.stringify({ username: `机器人${appId}`, avatar: `https://a/${appId}` }))
+      }
+      return new Response('{}')
+    }
+    return fetchImpl
+  }
+
+  function setup(bad?: Set<string>, env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })) {
+    const runtime = createRuntime({ plugins: [], fetchImpl: botFetch(bad) })
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await runtime.fetch!(
+        new Request(`${BASE}/admin${path}`, {
+          method,
+          headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        }),
+        env,
+        createExecutionContext(),
+      )
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> }
+    }
+    return { env, call }
+  }
+
+  it('换 AppID 时旧的连同资料存下来，列表不回显 AppSecret；同一个号重存不进列表', async () => {
+    const { env, call } = setup()
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111b' })
+    expect(env.KV.store.has('rt:bot_saved')).toBe(false)
+
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+    expect(JSON.parse(env.KV.store.get('rt:bot')!)).toEqual({ appId: '222', secret: 'secret-222' })
+    expect(JSON.parse(env.KV.store.get('rt:bot_saved')!)).toEqual([
+      { appId: '111', secret: 'secret-111b', name: '机器人111', avatar: 'https://a/111', savedAt: expect.any(Number) },
+    ])
+    const listed = await call('GET', '/bot/saved')
+    expect(listed.body).toEqual({ ok: true, bots: [{ appId: '111', name: '机器人111', savedAt: expect.any(Number) }] })
+    expect(JSON.stringify(listed.body)).not.toContain('secret-111')
+    expect((await call('GET', '/status')).body.bot).toEqual({ appId: '222', source: 'kv', name: '机器人222' })
+  })
+
+  it('切回已保存的机器人：当前的换进列表，切回的移出列表，快照资料跟着换', async () => {
+    const { env, call } = setup()
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+
+    expect(await call('POST', '/bot/switch', { appId: '111' })).toEqual({ status: 200, body: { ok: true, appId: '111' } })
+    expect(JSON.parse(env.KV.store.get('rt:bot')!)).toEqual({ appId: '111', secret: 'secret-111' })
+    expect((await call('GET', '/bot/saved')).body.bots).toEqual([{ appId: '222', name: '机器人222', savedAt: expect.any(Number) }])
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).bot).toEqual({ appId: '111', name: '机器人111', avatar: 'https://a/111' })
+
+    expect((await call('POST', '/bot/switch', { appId: '333' })).status).toBe(404)
+    expect((await call('POST', '/bot/switch', {})).status).toBe(400)
+  })
+
+  it('切换时鉴权失败（比如平台上重置了 AppSecret）：什么都不改', async () => {
+    const bad = new Set<string>()
+    const { env, call } = setup(bad)
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+    const before = { bot: env.KV.store.get('rt:bot'), saved: env.KV.store.get('rt:bot_saved') }
+
+    bad.add('111')
+    const res = await call('POST', '/bot/switch', { appId: '111' })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/鉴权失败/)
+    expect({ bot: env.KV.store.get('rt:bot'), saved: env.KV.store.get('rt:bot_saved') }).toEqual(before)
+  })
+
+  it('删除已保存的机器人；删光后连键一起删', async () => {
+    const { env, call } = setup()
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+
+    expect(await call('DELETE', '/bot/saved/111')).toEqual({ status: 200, body: { ok: true, appId: '111' } })
+    expect(env.KV.store.has('rt:bot_saved')).toBe(false)
+    expect((await call('DELETE', '/bot/saved/111')).status).toBe(404)
+    expect(JSON.parse(env.KV.store.get('rt:bot')!).appId).toBe('222')
+  })
+
+  it('凭证来自 Worker Secret 时拒绝切换', async () => {
+    const env = createEnv()
+    env.KV.store.set('rt:bot_saved', JSON.stringify([{ appId: '111', secret: 'secret-111', savedAt: 1 }]))
+    const { call } = setup(undefined, env)
+    const res = await call('POST', '/bot/switch', { appId: '111' })
+    expect(res.status).toBe(409)
+    expect(env.KV.store.has('rt:bot')).toBe(false)
+  })
+
+  it('老快照的机器人资料没标 appId：按属于当前机器人处理，换号时跟着存下来', async () => {
+    const { env, call } = setup()
+    env.KV.store.set('rt:bot', JSON.stringify({ appId: '111', secret: 'secret-111' }))
+    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { name: '老名字', avatar: 'https://old' } }))
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+    expect(JSON.parse(env.KV.store.get('rt:bot_saved')!)[0]).toMatchObject({ appId: '111', name: '老名字', avatar: 'https://old' })
+  })
+
+  it('换号时拉不到新号资料：快照里不留上一个的名字', async () => {
+    const { env, call } = setup()
+    const runtime = createRuntime({
+      plugins: [],
+      fetchImpl: async (input) =>
+        String(input).includes('getAppAccessToken')
+          ? new Response(JSON.stringify({ access_token: 't', expires_in: 7200 }))
+          : new Response('{}', { status: 500 }),
+    })
+    env.KV.store.set('rt:bot', JSON.stringify({ appId: '111', secret: 'secret-111' }))
+    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { name: '老名字', avatar: 'https://old' } }))
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/bot`, {
+        method: 'PUT',
+        headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ appId: '222', secret: 'secret-222' }),
+      }),
+      env,
+      createExecutionContext(),
+    )
+    expect(res.status).toBe(200)
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).bot).toBeUndefined()
+    expect((await call('GET', '/status')).body.bot).toEqual({ appId: '222', source: 'kv', name: '' })
+  })
+})
+
 describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
   function adminRequest(method: string, path: string, body?: unknown) {
     return new Request(`${BASE}/admin${path}`, {

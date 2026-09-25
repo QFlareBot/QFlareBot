@@ -10,6 +10,7 @@ export type {
   Snapshot,
   PluginState,
   BotConfig,
+  SavedBot,
 } from './types.js'
 export { cronMatches } from './cron.js'
 export { serveAsset, type AssetBundle, type AssetFile } from './assets.js'

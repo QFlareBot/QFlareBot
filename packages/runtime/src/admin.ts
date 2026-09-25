@@ -23,7 +23,15 @@ import { listManifestPluginRecords, type ManifestPluginRecord } from './manifest
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
 import type { Sender } from './session.js'
-import { readSnapshot, writeBotConfig, writeSnapshot } from './store.js'
+import {
+  profileOf,
+  readSavedBots,
+  readSnapshot,
+  readStoredBotConfig,
+  writeBotConfig,
+  writeSavedBots,
+  writeSnapshot,
+} from './store.js'
 import type { PluginState, ResolvedOptions, Snapshot } from './types.js'
 
 export interface AdminDeps {
@@ -117,31 +125,56 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
   }
 }
 
-/** 向 QQ 换 token 验证后存进 KV；成功返回 null，失败返回给面板的错误文案 */
+/**
+ * 向 QQ 换 token 验证后设为当前机器人；成功返回 null，失败返回给面板的错误文案。
+ * 换成另一个 AppID 时，原来那个连同资料存进「已保存」列表，之后可一键切回；新的这个若在列表里就移出来。
+ */
 async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: string, secret: string): Promise<string | null> {
   try {
     await createTokenProvider({ appId, secret, fetchImpl: deps.options.fetchImpl }).get()
   } catch (err) {
     return `QQ 开放平台鉴权失败：${(err as Error).message}`
   }
+  const [previous, saved, before] = await Promise.all([
+    readStoredBotConfig(scope.env),
+    readSavedBots(scope.env),
+    readSnapshot(scope.env, true),
+  ])
+  const reused = saved.find((b) => b.appId === appId)
+  const archive = previous && previous.appId !== appId ? previous : null
   await writeBotConfig(scope.env, { appId, secret })
+  if (reused || archive) {
+    const rest = saved.filter((b) => b.appId !== appId && b.appId !== archive?.appId)
+    if (archive) {
+      const profile = profileOf(before, archive.appId)
+      rest.unshift({
+        ...archive,
+        ...(profile?.name ? { name: profile.name } : {}),
+        ...(profile?.avatar ? { avatar: profile.avatar } : {}),
+        savedAt: Date.now(),
+      })
+    }
+    await writeSavedBots(scope.env, rest)
+  }
   // 顺手拉一次机器人资料存进快照，运行时经 session.botName/botAvatar 下发，零额外 API。
-  // 拉取失败不影响凭证保存，只是资料为空。
+  // 拉取失败不影响凭证保存：退回列表里存着的资料，都没有就清空，免得换号后还挂着上一个机器人的名字。
+  let profile: Snapshot['bot']
   try {
     const client = new QQBotClient({ appId, secret, fetchImpl: deps.options.fetchImpl })
-    const profile = await client.me()
-    const snapshot = await readSnapshot(scope.env, true)
-    await writeSnapshot(scope.env, {
-      ...snapshot,
-      bot: {
-        name: typeof profile.username === 'string' ? profile.username : '',
-        avatar: typeof profile.avatar === 'string' ? profile.avatar : '',
-      },
-    })
+    const me = await client.me()
+    profile = {
+      appId,
+      name: typeof me.username === 'string' ? me.username : '',
+      avatar: typeof me.avatar === 'string' ? me.avatar : '',
+    }
   } catch (err) {
-    deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 将为空', { error: (err as Error).message })
+    deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 可能为空', { error: (err as Error).message })
+    // 换了号就不能用 profileOf(before, appId)：老快照没标 appId，会把上一个的资料认成这个的
+    profile = reused ? { appId, name: reused.name ?? '', avatar: reused.avatar ?? '' } : archive ? undefined : profileOf(before, appId)
   }
-  deps.logger.info('机器人凭证已更新', { appId })
+  const { bot: current, ...snapshot } = await readSnapshot(scope.env, true)
+  if (JSON.stringify(current) !== JSON.stringify(profile)) await writeSnapshot(scope.env, profile ? { ...snapshot, bot: profile } : snapshot)
+  deps.logger.info('机器人凭证已更新', { appId, ...(archive ? { archived: archive.appId } : {}) })
   return null
 }
 
@@ -153,9 +186,12 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
  * PUT  /admin/snapshot              整体覆盖快照
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority
  * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
- * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）
+ * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）；换了 AppID 时旧的存进已保存列表
  * POST /admin/bot/bind              扫码创建机器人：建绑定任务，返回 { taskId, key, qrUrl }
  * POST /admin/bot/bind/poll         { taskId, key } 轮询一次；扫码完成即解密凭证、验证并保存（同 PUT /admin/bot）
+ * GET  /admin/bot/saved             换下来的机器人（AppID、名字、换下时间；不含 AppSecret）
+ * POST /admin/bot/switch            { appId } 切回一个已保存的机器人（重新验证，当前的换进列表）
+ * DELETE /admin/bot/saved/:appId    删掉一个已保存的机器人（只删这里的凭证，QQ 开放平台上的机器人不受影响）
  * GET  /admin/events?limit&before   最近事件的分发摘要
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
@@ -221,7 +257,13 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       ok: true,
       runtime: deps.runtimeVersion,
       projection: deps.options.projection ?? null,
-      bot: scope.bot ? { appId: scope.bot.appId, source: scope.env.BOT_SECRET ? 'secret' : 'kv' } : null,
+      bot: scope.bot
+        ? {
+            appId: scope.bot.appId,
+            source: scope.env.BOT_SECRET ? 'secret' : 'kv',
+            name: profileOf(scope.snapshot, scope.bot.appId)?.name ?? '',
+          }
+        : null,
       webhookPath: deps.options.webhookPath,
       bindings: { kv: true, d1: !!scope.env.DB, r2: !!scope.env.R2 },
       snapshot: { revision: scope.snapshot.revision, safeMode: scope.snapshot.safeMode ?? false },
@@ -367,6 +409,38 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const problem = await saveBotCredentials(scope, deps, result.appId, result.secret)
     if (problem) return error(problem, 400)
     return json({ ok: true, status: 'created', appId: result.appId })
+  }
+
+  // 换下来的机器人：列表不回显 AppSecret，切回时由 Worker 取出来重新验证
+  if (sub === '/bot/saved' && method === 'GET') {
+    const bots = (await readSavedBots(scope.env)).map((b) => ({ appId: b.appId, name: b.name ?? '', savedAt: b.savedAt }))
+    return json({ ok: true, bots })
+  }
+
+  const savedRemove = matchPath('/bot/saved/:appId', sub)
+  if (savedRemove && method === 'DELETE') {
+    const appId = savedRemove.appId!
+    const saved = await readSavedBots(scope.env)
+    const rest = saved.filter((b) => b.appId !== appId)
+    if (rest.length === saved.length) return error(`已保存的机器人里没有 ${appId}`, 404)
+    await writeSavedBots(scope.env, rest)
+    deps.logger.info('已删除保存的机器人', { appId })
+    return json({ ok: true, appId })
+  }
+
+  if (sub === '/bot/switch' && method === 'POST') {
+    // Worker Secret 优先于 KV，这时切了也不生效，不如直说
+    if (scope.env.BOT_APPID && scope.env.BOT_SECRET) {
+      return error('当前机器人由 Worker Secret（BOT_APPID / BOT_SECRET）提供，面板切换不会生效；删掉这两个 Secret 后再切换', 409)
+    }
+    const body = await readJson<{ appId?: string }>(request)
+    const appId = body?.appId?.trim()
+    if (!appId) return error('需要 appId', 400)
+    const target = (await readSavedBots(scope.env)).find((b) => b.appId === appId)
+    if (!target) return error(`已保存的机器人里没有 ${appId}`, 404)
+    const problem = await saveBotCredentials(scope, deps, target.appId, target.secret)
+    if (problem) return error(problem, 400)
+    return json({ ok: true, appId })
   }
 
   if (sub === '/send' && method === 'POST') {

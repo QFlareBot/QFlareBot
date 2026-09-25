@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { Trash2 } from 'lucide-vue-next'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderSVG } from 'uqr'
 import { api } from '../api/client.js'
+import type { SavedBot } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
@@ -10,6 +12,7 @@ import QInput from '../components/ui/QInput.vue'
 import QSelect from '../components/ui/QSelect.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
+import StatusDot from '../components/ui/StatusDot.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
@@ -32,13 +35,62 @@ async function saveBot() {
   try {
     await api.saveBot(appId.value.trim(), secret.value.trim())
     secret.value = ''
-    await refresh()
+    await Promise.all([refresh(), loadSaved()])
     push('凭证已保存，并已向 QQ 开放平台验证通过', 'success')
   } catch (e) {
     botError.value = (e as Error).message
   } finally {
     savingBot.value = false
   }
+}
+
+// —— 换下来的机器人：换 AppID 时 Worker 把旧的存下来，这里一键切回（AppSecret 不经过面板）——
+
+const savedBots = ref<SavedBot[]>([])
+const switching = ref('')
+
+async function loadSaved() {
+  try {
+    savedBots.value = (await api.savedBots()).bots
+  } catch (e) {
+    push(`读取已保存的机器人失败：${(e as Error).message}`, 'error')
+  }
+}
+onMounted(loadSaved)
+
+function botLabel(b: { appId: string; name?: string }) {
+  return b.name ? `${b.name}（${b.appId}）` : b.appId
+}
+
+async function switchTo(b: SavedBot) {
+  switching.value = b.appId
+  try {
+    await api.switchBot(b.appId)
+    appId.value = b.appId
+    secret.value = ''
+    botError.value = ''
+    await Promise.all([refresh(), loadSaved()])
+    push(`已切换到 ${botLabel(b)}`, 'success')
+  } catch (e) {
+    push(`切换失败：${(e as Error).message}`, 'error')
+  } finally {
+    switching.value = ''
+  }
+}
+
+async function removeSaved(b: SavedBot) {
+  if (!confirm(`删除已保存的机器人 ${botLabel(b)}？只删这里存的凭证，QQ 开放平台上的机器人不受影响。`)) return
+  try {
+    await api.removeSavedBot(b.appId)
+    await loadSaved()
+    push('已删除', 'success')
+  } catch (e) {
+    push(`删除失败：${(e as Error).message}`, 'error')
+  }
+}
+
+function fmtDate(ts: number) {
+  return new Date(ts).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 // —— 扫码创建机器人（协议同 AstrBot）：手机 QQ 扫码即新建机器人，凭证由 Worker 解密验证后直接保存 ——
@@ -77,7 +129,7 @@ async function startBind() {
         bindState.value = res.status
         if (res.status === 'created') {
           appId.value = res.appId ?? ''
-          await refresh()
+          await Promise.all([refresh(), loadSaved()])
           push('机器人已创建，凭证已保存并验证通过', 'success')
         }
       } catch (e) {
@@ -254,6 +306,14 @@ async function saveMenu() {
     <PageHeader title="设置" />
     <div class="grid gap-4 lg:grid-cols-2">
       <QCard title="机器人凭证" :description="status?.bot?.source === 'secret' ? '当前由 Worker Secret 提供，这里保存的值不会覆盖它' : '保存前会先向 QQ 开放平台换取 AccessToken 验证'">
+        <div class="mb-4 flex items-center justify-between gap-3 text-sm">
+          <span class="text-fg-muted">当前机器人</span>
+          <StatusDot v-if="status?.bot" tone="success" :label="botLabel(status.bot)" />
+          <StatusDot v-else tone="warning" label="未配置" />
+        </div>
+        <p v-if="status?.bot && status.bot.source !== 'secret'" class="mb-3 text-xs text-fg-muted">
+          要换号就填新的 AppID 与 AppSecret 保存，或扫码新建；当前这个会自动存进下方「已保存的机器人」，之后一键切回。
+        </p>
         <form class="flex flex-col gap-4" @submit.prevent="saveBot">
           <QField id="appid" label="AppID" required>
             <template #default="{ describedBy }"><QInput id="appid" v-model="appId" mono autocomplete="off" :described-by="describedBy" /></template>
@@ -296,6 +356,31 @@ async function saveMenu() {
               <div><QButton size="sm" @click="startBind">重试</QButton></div>
             </template>
           </div>
+        </div>
+        <div v-if="savedBots.length" class="mt-4 border-t border-border pt-4">
+          <p class="text-sm font-medium text-fg">已保存的机器人</p>
+          <p class="mt-0.5 text-xs text-fg-muted">
+            切回不用再填 AppSecret。切换前确认它在 QQ 开放平台的回调地址指向这里；openid 每个机器人都不一样，Bot 管理员名单要在新号下重新 /sid 查询后添加。
+          </p>
+          <ul class="mt-2 divide-y divide-border">
+            <li v-for="b in savedBots" :key="b.appId" class="flex items-center justify-between gap-3 py-2">
+              <div class="min-w-0">
+                <p class="truncate text-sm text-fg">{{ b.name || '未命名机器人' }}</p>
+                <p class="text-xs text-fg-muted"><span class="font-mono">{{ b.appId }}</span> · {{ fmtDate(b.savedAt) }} 换下</p>
+              </div>
+              <div class="flex shrink-0 items-center gap-1">
+                <QButton
+                  size="sm"
+                  :loading="switching === b.appId"
+                  :disabled="status?.bot?.source === 'secret' || (!!switching && switching !== b.appId)"
+                  @click="switchTo(b)"
+                >切换</QButton>
+                <QButton size="sm" variant="ghost" :aria-label="`删除 ${botLabel(b)}`" :disabled="!!switching" @click="removeSaved(b)">
+                  <Trash2 class="size-3.5" aria-hidden="true" />
+                </QButton>
+              </div>
+            </li>
+          </ul>
         </div>
       </QCard>
 

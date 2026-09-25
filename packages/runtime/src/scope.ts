@@ -5,7 +5,7 @@ import { dispatch, type DispatchReport } from './dispatcher.js'
 import { ensureReady } from './lifecycle.js'
 import type { PluginRegistry } from './registry.js'
 import { buildSession, type Sender } from './session.js'
-import { kvTokenCache, readBotConfig, readSnapshot } from './store.js'
+import { kvTokenCache, profileOf, readBotConfig, readSnapshot } from './store.js'
 import type { BotConfig, ResolvedOptions, RuntimeEnv, Snapshot } from './types.js'
 import type { WebhookPayload } from '@qqbot/api'
 
@@ -70,10 +70,11 @@ export class RequestScope {
       ...(inner.recallMessage && { recallMessage: inner.recallMessage.bind(inner) }),
       ...(inner.ackInteraction && { ackInteraction: inner.ackInteraction.bind(inner) }),
     }
+    const profile = profileOf(this.snapshot, this.bot?.appId)
     const session = buildSession(payload, {
       botId: this.botId,
-      botName: this.snapshot.bot?.name ?? '',
-      botAvatar: this.snapshot.bot?.avatar ?? '',
+      botName: profile?.name ?? '',
+      botAvatar: profile?.avatar ?? '',
       sender: counting,
       maxPassiveReplies: this.options.maxPassiveReplies,
     })

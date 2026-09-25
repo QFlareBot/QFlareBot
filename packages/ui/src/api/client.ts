@@ -6,6 +6,7 @@ import type {
   InstallPreview,
   InstallRecord,
   ManagedPluginsResult,
+  SavedBot,
   Snapshot,
   Status,
   StorageReport,
@@ -79,6 +80,10 @@ export const api = {
   startBotBind: () => request<{ ok: true; taskId: string; key: string; qrUrl: string }>('POST', '/bot/bind'),
   pollBotBind: (taskId: string, key: string) =>
     request<{ ok: true; status: 'pending' | 'expired' | 'created'; appId?: string }>('POST', '/bot/bind/poll', { taskId, key }),
+  /** 换下来的机器人：换 AppID 时旧的自动存进来，切回不用再填 AppSecret */
+  savedBots: () => request<{ ok: true; bots: SavedBot[] }>('GET', '/bot/saved'),
+  switchBot: (appId: string) => request<{ ok: true; appId: string }>('POST', '/bot/switch', { appId }),
+  removeSavedBot: (appId: string) => request<{ ok: true; appId: string }>('DELETE', `/bot/saved/${encodeURIComponent(appId)}`),
   events: (limit = 50, before?: number) =>
     request<{ ok: true; events: EventRecord[] }>('GET', `/events?limit=${limit}${before ? `&before=${before}` : ''}`),
   clearEvents: () => request<{ ok: true }>('DELETE', '/events'),

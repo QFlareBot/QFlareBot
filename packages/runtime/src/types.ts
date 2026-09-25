@@ -101,8 +101,9 @@ export interface Snapshot {
   /**
    * 机器人资料：面板保存凭证时调一次 /users/@me 取回，随快照下发（session.botName/botAvatar）。
    * 不做运行时拉取与缓存——改资料后重新保存一次凭证即可刷新。
+   * appId 标明资料属于哪个机器人（换号后不能把上一个的名字安到新号头上）；老快照没有，按属于当前机器人处理。
    */
-  bot?: { name?: string; avatar?: string }
+  bot?: { appId?: string; name?: string; avatar?: string }
 }
 
 export interface PluginState {
@@ -115,4 +116,12 @@ export interface PluginState {
 export interface BotConfig {
   appId: string
   secret: string
+}
+
+/** 换下来的机器人：凭证连同当时的资料一起留着，面板可一键切回 */
+export interface SavedBot extends BotConfig {
+  name?: string
+  avatar?: string
+  /** 被换下来的时刻（毫秒） */
+  savedAt: number
 }

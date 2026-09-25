@@ -58,12 +58,21 @@ export interface Status {
   ok: true
   runtime: string
   projection: string | null
-  bot: { appId: string; source: 'secret' | 'kv' } | null
+  /** name 是保存凭证时拉到的机器人昵称；没拉到或老运行时为空 / 缺省 */
+  bot: { appId: string; source: 'secret' | 'kv'; name?: string } | null
   webhookPath: string
   bindings: { kv: boolean; d1: boolean; r2: boolean }
   snapshot: { revision: number; safeMode: boolean }
   stats: { total: number; last24h: number; errors24h: number } | null
   plugins: PluginInfo[]
+}
+
+/** 换下来的机器人（GET /bot/saved）；AppSecret 留在 Worker 里，不下发 */
+export interface SavedBot {
+  appId: string
+  name: string
+  /** 换下时刻（毫秒） */
+  savedAt: number
 }
 
 export interface EventRecord {
