@@ -10,10 +10,11 @@ import { expectedPluginName, extractPluginManifest, ManifestValidationError } fr
 const alias = { '@qqbot/sdk': fileURLToPath(new URL('../../sdk/src/index.ts', import.meta.url)) }
 
 const PLUGIN_SOURCE = `
-import { definePlugin } from '@qqbot/sdk'
-import { DurableObject } from 'cloudflare:workers'
+import { definePlugin, PluginDurableObject } from '@qqbot/sdk'
 
-export class Counter extends DurableObject {
+// 必须继承 PluginDurableObject 而不是平台的 DurableObject：前者会把平台给的裸 env
+// 换成本插件的作用域上下文（this.plugin），不继承的话构建期就会被 assertDurableObjectsScoped 挡下
+export class Counter extends PluginDurableObject {
   async increment() { return 1 }
 }
 
@@ -177,5 +178,25 @@ describe('expectedPluginName', () => {
     ['qqbot-plugin-', ''],
   ])('%s → %s', (pkgName, expected) => {
     expect(expectedPluginName(pkgName)).toBe(expected)
+  })
+})
+
+describe('Durable Object 基类强制', () => {
+  // 忘了继承的后果是静默的：类照样部署照样跑，但里面的 KV/D1/R2 全是未加前缀的，
+  // 建的表框架不认识、卸载时清不掉。跟 D1 表名占位符一样，必须在构建期挡住。
+  const BARE_DO_SOURCE = `
+import { definePlugin } from '@qqbot/sdk'
+import { DurableObject } from 'cloudflare:workers'
+
+export class Counter extends DurableObject {}
+
+export default definePlugin({ name: 'demo', commands: {}, durableObjects: { Counter } })
+`
+
+  it('DO 类没继承 PluginDurableObject 时构建失败，并给出改法', async () => {
+    await writePlugin(BARE_DO_SOURCE)
+    await expect(extractPluginManifest({ cwd: dir, alias })).rejects.toThrow(
+      /Durable Object 类必须继承 PluginDurableObject：Counter/,
+    )
   })
 })

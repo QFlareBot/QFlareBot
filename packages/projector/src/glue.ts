@@ -64,11 +64,18 @@ export function generateGlue(opts: { manifest: DeployManifest; hash: string }): 
 
   const lines: string[] = [
     '// 由 @qqbot/projector 生成，勿手改',
-    `import { createRuntime } from './${RUNTIME_MODULE}'`,
+    durableObjects.length
+      ? `import { createRuntime, durableScope } from './${RUNTIME_MODULE}'`
+      : `import { createRuntime } from './${RUNTIME_MODULE}'`,
   ]
   if (opts.manifest.ui) lines.push(`import ui from './${UI_MODULE}'`)
+  // DO 类不能裸重导出：平台 `new Room(state, env)` 时给的是未加前缀的裸 env，
+  // 插件在里面建的数据框架清不掉。durableScope 给类挂上作用域工厂，
+  // PluginDurableObject 的构造器取来把 env 换成本插件的作用域上下文。
   for (const d of durableObjects) {
-    lines.push(`export { ${d.className} as ${d.exportName} } from './${pluginModulePath(d.plugin)}'`)
+    const local = `_do_${d.exportName}`
+    lines.push(`import { ${d.className} as ${local} } from './${pluginModulePath(d.plugin)}'`)
+    lines.push(`export const ${d.exportName} = durableScope(${local}, ${JSON.stringify(d.plugin)})`)
   }
   // 主模块的命名导出只能是处理器或 DO 类，投影哈希不能 export
   lines.push('', `const PROJECTION = ${JSON.stringify(projectionId(opts.hash))}`, '')

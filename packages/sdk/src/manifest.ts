@@ -1,3 +1,4 @@
+import { PLUGIN_DURABLE_BASE } from './durable.js'
 import type { EventName } from './events.js'
 import { normalizePlugin } from './normalize.js'
 import {
@@ -49,6 +50,27 @@ function compact<T extends object>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T
 }
 
+/**
+ * DO 类必须继承 `PluginDurableObject`。
+ *
+ * 平台直接 `new Room(state, env)` 构造 DO，不经过框架，所以只有基类能把裸 env 换掉。
+ * 忘了继承的后果是静默的——类照样部署、照样跑，但里面的 KV / D1 / R2 全是未加前缀的，
+ * 建的表框架不认识、卸载时清不掉。这种「忘了就出事、出事还看不见」的约定必须在构建期挡住，
+ * 跟 D1 表名占位符一样，不能只写在文档里。
+ */
+function assertDurableObjectsScoped(def: PluginDefinition<unknown>): void {
+  const bad = Object.entries(def.durableObjects ?? {})
+    .filter(([, cls]) => typeof cls !== 'function' || (cls as unknown as Record<symbol, unknown>)[PLUGIN_DURABLE_BASE] !== true)
+    .map(([name]) => name)
+  if (bad.length === 0) return
+  throw new Error(
+    `插件 ${def.name} 的 Durable Object 类必须继承 PluginDurableObject：${bad.join('、')}\n` +
+      "  import { PluginDurableObject } from '@qqbot/sdk'\n" +
+      `  export class ${bad[0]} extends PluginDurableObject { … }\n` +
+      '不继承的话类里拿到的是未加前缀的裸 env，建的数据框架清不掉（卸载后永远是孤儿）。',
+  )
+}
+
 /** 从插件定义提取清单；`pkg` 用于补齐 version */
 export function extractManifest(
   def: PluginDefinition<unknown>,
@@ -56,6 +78,7 @@ export function extractManifest(
 ): Manifest {
   const version = def.version ?? pkg?.version
   if (!version) throw new Error(`插件 ${def.name} 缺少 version`)
+  assertDurableObjectsScoped(def)
   const n = normalizePlugin(def)
 
   const manifest: Manifest = {

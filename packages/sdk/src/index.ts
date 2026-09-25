@@ -108,6 +108,16 @@ export {
   type AnyPluginDefinition,
 } from './plugin.js'
 
+export { PluginDurableObject } from './durableBase.js'
+export {
+  PLUGIN_SCOPE,
+  PLUGIN_DURABLE_BASE,
+  type DurableContext,
+  type DurableScopeFactory,
+  type ScopedDurableObjectClass,
+  type ScopedDurableObjects,
+} from './durable.js'
+
 export { extractManifest, validateManifest, type Manifest } from './manifest.js'
 export { qqAvatar, qqAt, type AvatarSize } from './identity.js'
 export {

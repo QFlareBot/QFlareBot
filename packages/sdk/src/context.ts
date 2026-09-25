@@ -1,3 +1,6 @@
+// 纯类型循环引用（durable.ts 反过来引本文件的 ScopedKV 等）：`import type` 会被完整擦除，
+// 不产生运行时依赖，所以不会成环
+import type { ScopedDurableObjects } from './durable.js'
 import type {
   ImageSource,
   InteractionCode,
@@ -260,6 +263,8 @@ export interface PluginContext<C = unknown> {
   /** 大文件存储；未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
   readonly api: BotApi
+  /** 本插件声明的 Durable Object；未声明该类名或绑定缺失时抛错 */
+  readonly durable: ScopedDurableObjects
   /** 取其他插件提供的服务；未提供时抛错 */
   service<T = unknown>(name: string): T
   /** 让后台任务在响应返回后继续执行 */

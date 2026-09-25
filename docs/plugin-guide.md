@@ -179,6 +179,7 @@ commands: {
 | `ctx.kv` | 键前缀 `p:<名>:` | `get / getJSON<T> / put(key, value, { ttl? }) / delete / list(prefix?)`；ttl 最小 60 秒 |
 | `ctx.db` | 表名前缀 `p_<名>_` | SQL 里写 `{表名}` 占位，运行时展开；`run(sql, ...params)` / `all<T>` / `first<T>` 支持参数绑定；`exec` 跑建表语句 |
 | `ctx.r2` | 键前缀 `p/<名>/` | 大文件：`put(key, value, { contentType? }) / get / getText / getJSON / getStream / delete / head / list` |
+| `ctx.durable` | 命名空间 `P_<名>_<类名>` | 强一致单点，见下；`get(类名, 实例名)` / `namespace(类名)` |
 
 未绑定 D1 / R2 时调用会抛可读错误（绑定见 seed 的 `wrangler.jsonc`）。建表放 `hooks.onInstall`：
 
@@ -218,18 +219,38 @@ const rows = await ctx.db.all<Note>('SELECT * FROM {notes} WHERE user_id = ? ORD
 
 上面三个存储都是「最终一致、无协调」的。需要**强一致的单点**（同一个房间/同一场对局必须串行处理）、跨请求常驻的内存状态、WebSocket 长连接或 `alarm()` 自唤醒时，才轮到 Durable Object。绝大多数插件不需要——先确认 `ctx.kv` / `ctx.db` 真的解决不了，DO 带来的麻烦比它们多得多。
 
-声明方式是把类挂在 `durableObjects` 上：
+类必须继承 `PluginDurableObject`，再挂到 `durableObjects` 上：
 
 ```ts
-export class Room { /* constructor(state, env) … */ }
+import { definePlugin, PluginDurableObject } from '@qqbot/sdk'
+
+export class Room extends PluginDurableObject {
+  async join(userId: string) {
+    await this.plugin.db.run('INSERT OR IGNORE INTO {members} (id) VALUES (?)', userId)
+    const rows = await this.plugin.db.all<{ n: number }>('SELECT COUNT(*) AS n FROM {members}')
+    return rows[0]?.n ?? 0
+  }
+}
 
 export default definePlugin({
   name: 'game',
   durableObjects: { Room },
+  commands: {
+    join: async ({ ctx, session }) => {
+      const room = ctx.durable.get<Room>('Room', session.groupId ?? 'dm')
+      return `当前 ${await room.join(session.userId)} 人`   // RPC，直接拿返回值
+    },
+  },
 })
 ```
 
-投影时框架会把它以 **`P_<插件名>_<类名>`** 的名字重导出到 Worker 主模块，并注册同名的 namespace 绑定。插件名里的非字母数字会被换成 `_`，所以 `game` 的 `Room` 就是 `P_game_Room`。
+三件事一起看：
+
+- **`ctx.durable.get(类名, 实例名)`** 取实例，实例名走 `idFromName` —— 一个群 / 一个用户 / 一局游戏一个实例。类名不在自己 `durableObjects` 里会抛错，够不到别的插件的 DO。需要 `newUniqueId` / `idFromString` 时用 `ctx.durable.namespace(类名)`。
+- **`this.plugin`** 是 DO 里的作用域上下文（`kv` / `db` / `r2` / `logger`），前缀与处理器里的 `ctx.kv` / `ctx.db` 完全一致 —— 所以 DO 里建的表卸载时也清得掉。没有 `api` 与 `config`：两者都要读快照，同步构造器等不了。`this.ctx` 仍然是平台的 `DurableObjectState`（`storage`、`blockConcurrencyWhile` 照用）。
+- **继承是强制的，`qqbot-plugin build` 会拦。** 不继承的话平台把**未加前缀的裸 env** 直接塞给你，第 6 节那套「前缀即所有权」在 DO 里就失效了：建的表框架不认识，卸载时清不掉，永远是孤儿。这种「忘了就出事、出事还看不见」的约定不能只写在文档里，所以放在构建期挡住。
+
+投影时框架把类以 **`P_<插件名>_<类名>`** 导出到 Worker 主模块（插件名里的非字母数字换成 `_`，所以是 `P_game_Room`），并在导出时挂上作用域工厂 —— `PluginDurableObject` 的构造器就是靠它把裸 env 换掉的。因此 DO 类只能经由投影入口导出，手工在 `wrangler.jsonc` 里导出会在构造时抛错。
 
 **关键一步：安装会被拦下，要先往机器人仓库补一条 migrations。** 面板上装这个插件会返回 409，并把要加的内容原样给出：
 
@@ -242,11 +263,7 @@ export default definePlugin({
 
 为什么不能自动：`migrations` 是**只追加的历史**，平台记着「上次应用过的 tag」，下次部署拿它在列表里定位、只应用其后的新增项。构建机每次都是全新环境，没有这个状态，造不出正确的历史——所以投影对它只校验、不合成。而校验发生在构建阶段，不在安装这一步拦住的话，插件已经写进 D1 才炸，并且**此后每一次构建都会炸**（包括之后装别的插件），直到有人想起来把它卸载。
 
-还有三件事得先知道：
-
-- **插件目前拿不到自己的 namespace。** `PluginContext` 上只有 `kv / db / r2 / api / logger / service`，没有取 DO stub 的入口，`RouteInput` 也不透传 `env`。类会被正确部署和绑定，但处理器里没有办法向它发请求——这部分契约还没接上。
-- **DO 类里的 `env` 是未加前缀的原始 env。** 类由平台以 `(state, env)` 构造，不经过框架的作用域包装，所以 `env.KV` / `env.DB` 是全局的，第 6 节那套前缀隔离在这里不生效。要守规矩只能自己守。
-- **两条安全阀会失效。** DO 类必须静态导出、随主模块求值，所以求值抛错会拖垮整个 Worker，而不是只影响自己（第 3 节「动态 import 隔离」的例外）；另外含 DO 的 Worker 没有版本预览 URL，部署时的 `/healthz` 健康检查会被跳过，坏版本不会在切流量前被拦下。
+**两条安全阀在 DO 面前会失效**，这是选它之前要接受的代价：DO 类必须静态导出、随主模块求值，所以求值抛错会拖垮整个 Worker，而不是只影响自己（第 3 节「动态 import 隔离」的例外）；另外含 DO 的 Worker 没有版本预览 URL，部署时的 `/healthz` 健康检查会被跳过，坏版本不会在切流量前被拦下。
 
 卸载同样要手动收尾：类从 bundle 里消失之后，`wrangler.jsonc` 的 `migrations` 里那条 `new_sqlite_classes` 还留着。走 Versions API 的正常部署不受影响，但一旦降级到 `wrangler deploy`，声明了却不存在的类可能被拒（需要补一条 `deleted_classes`）。**这条我没有实测过**，卸载 DO 插件之后留意一下构建日志。
 
@@ -317,6 +334,7 @@ Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟
 | --- | --- |
 | `ctx.config` | 面板保存的配置（回落 defaultConfig） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
+| `ctx.durable` | 自己声明的 Durable Object：`get(类名, 实例名)` / `namespace(类名)`，见第 6 节 |
 | `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |
 | `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |
 | `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明） |

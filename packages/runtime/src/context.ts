@@ -1,127 +1,10 @@
 import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
 import { createLogger } from './logger.js'
+import { createScopedDurable } from './durable.js'
+import { createScopedDB, createScopedKV, createScopedR2 } from './scoped.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
 import { scopeSql, tablePrefix } from './sqlScope.js'
 import type { RuntimeEnv, Snapshot } from './types.js'
-
-/** 插件数据的键前缀。卸载时按它枚举并清理，见 purge.ts */
-export const kvPrefix = (plugin: string): string => `p:${plugin}:`
-export const r2Prefix = (plugin: string): string => `p/${plugin}/`
-
-function createScopedKV(kv: KVNamespace, name: string): ScopedKV {
-  const prefix = kvPrefix(name)
-  return {
-    get: (key) => kv.get(prefix + key),
-    getJSON: <T>(key: string) => kv.get<T>(prefix + key, 'json'),
-    async put(key, value, options) {
-      const body = typeof value === 'string' ? value : JSON.stringify(value)
-      await kv.put(prefix + key, body, options?.ttl ? { expirationTtl: Math.max(60, options.ttl) } : {})
-    },
-    delete: (key) => kv.delete(prefix + key),
-    async list(sub = '') {
-      const keys: string[] = []
-      let cursor: string | undefined
-      do {
-        const page = await kv.list({ prefix: prefix + sub, ...(cursor ? { cursor } : {}) })
-        for (const k of page.keys) keys.push(k.name.slice(prefix.length))
-        cursor = page.list_complete ? undefined : page.cursor
-      } while (cursor)
-      return keys
-    },
-  }
-}
-
-function createScopedR2(bucket: R2Bucket | undefined, name: string): ScopedR2 {
-  const prefix = r2Prefix(name)
-  if (!bucket) {
-    const missing = async (): Promise<never> => {
-      throw new Error('未绑定 R2（wrangler.jsonc 的 r2_buckets），插件无法使用 ctx.r2')
-    }
-    return { get: missing, getText: missing, getJSON: missing, getStream: missing, put: missing, delete: missing, head: missing, list: missing }
-  }
-
-  const strip = (key: string): string => key.slice(prefix.length)
-  const meta = (o: R2Object): StoredObject => ({
-    key: strip(o.key),
-    size: o.size,
-    uploadedAt: o.uploaded,
-    ...(o.customMetadata && Object.keys(o.customMetadata).length ? { metadata: o.customMetadata } : {}),
-  })
-
-  return {
-    async get(key) {
-      return (await bucket.get(prefix + key))?.arrayBuffer() ?? null
-    },
-    async getText(key) {
-      return (await bucket.get(prefix + key))?.text() ?? null
-    },
-    async getJSON<T>(key: string) {
-      return ((await bucket.get(prefix + key))?.json<T>() ?? null) as Promise<T | null> | null
-    },
-    async getStream(key) {
-      return (await bucket.get(prefix + key))?.body ?? null
-    },
-    async put(key, value, options) {
-      await bucket.put(prefix + key, value, {
-        ...(options?.contentType ? { httpMetadata: { contentType: options.contentType } } : {}),
-        ...(options?.metadata ? { customMetadata: options.metadata } : {}),
-      })
-    },
-    async delete(key) {
-      await bucket.delete(Array.isArray(key) ? key.map((k) => prefix + k) : prefix + key)
-    },
-    async head(key) {
-      const o = await bucket.head(prefix + key)
-      return o ? meta(o) : null
-    },
-    async list(sub = '', options) {
-      const objects: StoredObject[] = []
-      let cursor: string | undefined
-      do {
-        // limit 是总数上限，不是每页；R2 单页最多 1000
-        const remaining = options?.limit ? options.limit - objects.length : undefined
-        if (remaining !== undefined && remaining <= 0) break
-        const page = await bucket.list({
-          prefix: prefix + sub,
-          ...(remaining !== undefined ? { limit: Math.min(1000, remaining) } : {}),
-          ...(cursor ? { cursor } : {}),
-        })
-        for (const o of page.objects) objects.push(meta(o))
-        cursor = page.truncated ? page.cursor : undefined
-      } while (cursor)
-      return objects
-    },
-  }
-}
-
-function createScopedDB(db: D1Database | undefined, name: string): ScopedDB {
-  const prefix = tablePrefix(name)
-  if (!db) {
-    const missing = async () => {
-      throw new Error('未绑定 D1（wrangler.jsonc 的 d1_databases），插件无法使用 ctx.db')
-    }
-    return { table: (n) => prefix + n, exec: missing, run: missing, all: missing, first: missing }
-  }
-  // 展开 {表名} 占位并拦下指向别处的表；见 sqlScope.ts
-  const scope = (sql: string): string => scopeSql(sql, prefix)
-  return {
-    table: (n) => prefix + n,
-    async exec(sql) {
-      await db.exec(scope(sql))
-    },
-    async run(sql, ...params) {
-      const result = await db.prepare(scope(sql)).bind(...params).run()
-      return { changes: result.meta.changes ?? 0 }
-    },
-    async all<T>(sql: string, ...params: unknown[]) {
-      const result = await db.prepare(scope(sql)).bind(...params).all<T & Record<string, unknown>>()
-      return result.results as T[]
-    },
-    async first<T>(sql: string, ...params: unknown[]) {
-      return (await db.prepare(scope(sql)).bind(...params).first<T & Record<string, unknown>>()) as T | null
-    },
-  }
-}
 
 export interface ContextFactoryOptions {
   env: RuntimeEnv
@@ -158,6 +41,7 @@ export class ContextFactory {
       db: createScopedDB(env.DB, name),
       r2: createScopedR2(env.R2, name),
       api: this.options.api,
+      durable: createScopedDurable(env, name, plugin.manifest.durableObjects),
       service: <T>(serviceName: string): T => {
         if (!this.services.has(serviceName)) {
           throw new Error(`服务未就绪：${serviceName}（插件 ${name} 需在 depends 中声明）`)

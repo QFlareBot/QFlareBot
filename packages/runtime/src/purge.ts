@@ -6,7 +6,8 @@
  * 没有它，卸载插件就只能把数据留成孤儿。
  */
 import type { Logger } from '@qqbot/sdk'
-import { kvPrefix, r2Prefix, type ContextFactory } from './context.js'
+import type { ContextFactory } from './context.js'
+import { kvPrefix, r2Prefix } from './scoped.js'
 import { errorInfo } from './logger.js'
 import type { RegisteredPlugin } from './registry.js'
 import { tablePrefix } from './sqlScope.js'

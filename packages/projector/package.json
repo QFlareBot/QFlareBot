@@ -15,7 +15,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/cli.ts src/index.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist --sourcemap --log-level=warning",
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/cli.ts src/index.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist --external:cloudflare:workers --sourcemap --log-level=warning",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

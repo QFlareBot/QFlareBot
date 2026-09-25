@@ -8,7 +8,8 @@ describe('generateGlue', () => {
   const glue = generateGlue({ manifest: makeDeployManifest(), hash: HASH })
 
   it('导入 runtime 并默认导出 createRuntime 结果', () => {
-    expect(glue).toContain("import { createRuntime } from './runtime.js'")
+    // 有 DO 时要多带一个 durableScope；没有 DO 的清单不该白白引它
+    expect(glue).toContain("import { createRuntime, durableScope } from './runtime.js'")
     expect(glue).toContain('export default createRuntime({ plugins, projection: PROJECTION })')
   })
 
@@ -16,11 +17,15 @@ describe('generateGlue', () => {
     expect(glue).toContain("load: () => import('./plugins/foo.js')")
     expect(glue).toContain("load: () => import('./plugins/bar.js')")
     expect(glue.indexOf("import('./plugins/bar.js')")).toBeLessThan(glue.indexOf("import('./plugins/foo.js')"))
-    expect(glue).not.toMatch(/^import .* from '\.\/plugins\//m)
+    // 没有 DO 的插件不能出现静态 import：求值失败只该影响它自己
+    expect(glue).not.toMatch(/^import .* from '\.\/plugins\/bar\.js'/m)
   })
 
-  it('DO 类静态重导出并加前缀', () => {
-    expect(glue).toContain("export { Game as P_foo_Game } from './plugins/foo.js'")
+  it('DO 类经 durableScope 挂上作用域工厂再导出，而不是裸重导出', () => {
+    // 裸重导出会让平台把未加前缀的 env 直接交给插件，DO 里建的数据框架清不掉
+    expect(glue).toContain("import { Game as _do_P_foo_Game } from './plugins/foo.js'")
+    expect(glue).toContain('export const P_foo_Game = durableScope(_do_P_foo_Game, "foo")')
+    expect(glue).not.toContain("export { Game as P_foo_Game } from")
   })
 
   it('包含 PROJECTION 常量与 manifest JSON', () => {
@@ -35,13 +40,17 @@ describe('generateGlue', () => {
     const manifest = makeDeployManifest()
     manifest.plugins = manifest.plugins.filter((p) => p.name === 'bar')
     const out = generateGlue({ manifest, hash: HASH })
-    expect(out).not.toMatch(/^export \{ .* \} from/m)
+    expect(out).not.toContain('durableScope')
+    expect(out).toContain("import { createRuntime } from './runtime.js'")
     expect(out).toContain("import('./plugins/bar.js')")
   })
 
   it('生成结果是合法的 ES 模块语法', () => {
     // 用 Function 构造器无法解析 import/export，改用 dynamic import 的 data URL 校验语法
-    const src = glue.replace(/from '\.\/[^']+'/g, "from 'data:text/javascript,export const createRuntime=()=>1;export class Game{}'")
+    const src = glue.replace(
+      /from '\.\/[^']+'/g,
+      "from 'data:text/javascript,export const createRuntime=()=>1;export const durableScope=(c)=>c;export class Game{}'",
+    )
     return expect(import(`data:text/javascript,${encodeURIComponent(src)}`)).resolves.toBeDefined()
   })
 

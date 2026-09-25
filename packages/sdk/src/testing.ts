@@ -3,6 +3,7 @@
  * 不依赖运行时，`vitest` 中直接调用插件处理器即可。
  */
 import type { BotApi, GroupApi, Logger, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from './context.js'
+import type { ScopedDurableObjects } from './durable.js'
 import type { EventName } from './events.js'
 import type {
   Attachment,
@@ -356,6 +357,8 @@ export interface MockContextOptions<C> {
   db?: ScopedDB
   r2?: ScopedR2
   botId?: string
+  /** Durable Object 替身：键为类名。不注入时取用会抛错，提示怎么注入 */
+  durable?: Record<string, DurableObjectStub>
 }
 
 export function createMockContext<C = unknown>(
@@ -374,6 +377,24 @@ export function createMockContext<C = unknown>(
     first: unavailable,
   }
 
+  // DO 没法在 Node 里造真的，只能由调用方注入替身；没注入就抛错点名，别让测试
+  // 撞上一句 "Cannot read properties of undefined" 再去猜
+  const durableStubs = options.durable ?? {}
+  const durable: ScopedDurableObjects = {
+    get: (className) => {
+      const stub = durableStubs[className]
+      if (!stub) {
+        throw new Error(
+          `mock 环境未提供 Durable Object ${className}，请通过 createMockContext 的 options.durable 注入`,
+        )
+      }
+      return stub as never
+    },
+    namespace: (className) => {
+      throw new Error(`mock 环境不支持 durable.namespace('${className}')，请改用 options.durable 注入实例替身`)
+    },
+  }
+
   return {
     plugin: { name: plugin.name, version: plugin.version ?? '0.0.0' },
     botId: options.botId ?? 'test-bot',
@@ -383,6 +404,7 @@ export function createMockContext<C = unknown>(
     db,
     r2: options.r2 ?? createMemoryR2(),
     api: createRecordingApi(),
+    durable,
     service<T>(name: string): T {
       if (!(name in services)) throw new Error(`服务未提供：${name}`)
       return services[name] as T
