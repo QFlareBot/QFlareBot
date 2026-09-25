@@ -32,8 +32,9 @@ export interface MatchOptions {
 export interface CommandInput<C = unknown> {
   session: Session
   ctx: PluginContext<C>
-  /** 实际命中的命令名或别名 */
+  /** 实际命中的命令名或别名；子命令是完整的几个词，如 `pixiv random` */
   command: string
+  /** 命令名之后按空白切开的参数（子命令的词不在里面） */
   args: string[]
   /** 命令名之后的原始文本 */
   argText: string
@@ -103,8 +104,8 @@ export interface CommandSpec extends MatchOptions {
   usage?: string
   aliases?: string[]
   /**
-   * 无前缀触发：消息不以任何前缀开头时按**首词**匹配本命令（带前缀调用也命中）。
-   * 群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']` 使用。
+   * 不 @ 也触发：@ 机器人与单聊本来就不需要前缀；声明后，**没 @ 机器人**的消息（群/频道的全量消息）
+   * 也按**首词**匹配本命令（带前缀调用同样命中）。群聊首词极易撞上正常聊天，确实需要时再用。
    */
   bare?: boolean
   /** 门槛层级，不声明即 `'member'`（人人可用） */
@@ -208,6 +209,10 @@ export interface PluginDefinition<C = unknown> {
   /** 兼容的运行时版本范围 */
   coreRange?: string
 
+  /**
+   * 键即命令名。带空格就是子命令：`'pixiv random'` 接住 `/pixiv random …`，
+   * 名字越长越优先，对不上的落回 `pixiv`（参数照常给）
+   */
   commands?: Record<string, Command<C>>
   regex?: RegexRule<C>[] | RegexMap<C>
   events?: EventRule<C>[] | EventMap<C>

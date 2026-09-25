@@ -39,6 +39,8 @@ export interface DispatchReport {
 interface Candidate extends MatchRecord {
   priority: number
   block: boolean
+  /** 命令名占的词数，只有命令有；用来让最长的命令名胜出 */
+  words?: number
   registered: RegisteredPlugin
   run(ctx: Parameters<NonNullable<PluginDefinition['middleware']>>[0]['ctx']): Promise<void>
 }
@@ -84,7 +86,9 @@ export interface ParsedCommand {
   word: string
   args: string[]
   argText: string
-  /** 来自无前缀解析时为 true：只有声明了 `bare: true` 的命令参与匹配 */
+  /** 前缀之后、从命令词开始的原文；命令名有好几个词（子命令）时靠它切出参数原文 */
+  text: string
+  /** 来自无前缀解析时为 true：@ 了机器人（或单聊）时所有命令参与匹配，否则只有声明了 `bare: true` 的命令参与 */
   bare: boolean
 }
 
@@ -95,18 +99,37 @@ export function parseCommand(content: string, prefixes: string[]): ParsedCommand
     const rest = content.slice(prefix.length).trim()
     if (!rest) continue
     const [word = '', ...args] = rest.split(/\s+/)
-    return { word, args, argText: rest.slice(word.length).trim(), bare: false }
+    return { word, args, argText: rest.slice(word.length).trim(), text: rest, bare: false }
   }
   return null
 }
 
-/** 无前缀解析：首词即命令词。仅当消息不以前缀开头时兜底，配合命令的 bare 声明使用 */
+/** 无前缀解析：首词即命令词。仅当消息不以前缀开头时兜底，@ 了机器人或命令声明了 bare 才用得上 */
 export function parseBareCommand(content: string): ParsedCommand | null {
   const rest = content.trim()
   if (!rest) return null
   const [word = '', ...args] = rest.split(/\s+/)
   if (!word) return null
-  return { word, args, argText: rest.slice(word.length).trim(), bare: true }
+  return { word, args, argText: rest.slice(word.length).trim(), text: rest, bare: true }
+}
+
+/**
+ * 命令名占掉消息开头的几个词，对不上返回 0：`'pixiv random'` 对 `pixiv random 大图` 返回 2。
+ * 命令名带空格即子命令；不分大小写，中间几个空白都算一个
+ */
+function matchedWords(command: ParsedCommand, name: string): number {
+  const want = name.trim().toLowerCase().split(/\s+/)
+  const have = [command.word, ...command.args]
+  if (!want[0] || want.length > have.length) return 0
+  return want.every((w, i) => have[i]!.toLowerCase() === w) ? want.length : 0
+}
+
+/** 跳过开头 n 个词之后的原文；参数里的换行与空白原样保留 */
+function textAfterWords(text: string, n: number): string {
+  const re = /\S+/g
+  let end = 0
+  for (let i = 0; i < n && re.exec(text); i++) end = re.lastIndex
+  return text.slice(end).trim()
 }
 
 function toInteractionCode(code: number): InteractionCode {
@@ -115,6 +138,14 @@ function toInteractionCode(code: number): InteractionCode {
 
 export function isEnabled(snapshot: Snapshot, name: string): boolean {
   return snapshot.plugins[name]?.enabled ?? true
+}
+
+/** 按群的生效范围：只管群场景，单聊/频道一律放行；快照是整体 PUT 进来的，形状不对就当没设 */
+export function groupAllowed(snapshot: Snapshot, name: string, session: Session): boolean {
+  const groups = snapshot.plugins[name]?.groups
+  if (!groups || !Array.isArray(groups.ids) || session.scene !== 'group') return true
+  const listed = groups.ids.includes(session.targetId)
+  return groups.mode === 'allow' ? listed : !listed
 }
 
 function priorityOf(snapshot: Snapshot, name: string, declared: number | undefined): number {
@@ -130,6 +161,8 @@ interface DeniedMatch {
   plugin: string
   kind: 'command' | 'regex'
   name: string
+  /** 命令名占的词数，只有命令有 */
+  words?: number
 }
 
 /** 门槛层级：1 超级管理员（Bot 管理员名单）＞ 2 群主/群管理员（入站 member_role）＞ 3 普通成员 */
@@ -188,8 +221,13 @@ function collectCandidates(
     }
   }
 
+  // 命令名最长的胜出：/pixiv random 命中了 'pixiv random' 就不再算 'pixiv'，跨插件也一样。
+  // 权限不足的也参与比较——用户要的就是那条子命令，不能退回去执行父命令
+  const longest = Math.max(0, ...[...candidates, ...denied].map((c) => c.words ?? 0))
+  const keep = (c: { kind: string; words?: number }) => c.kind !== 'command' || c.words === longest
+
   // 稳定排序：优先级高的先执行，同级按注册顺序
-  return { candidates: candidates.sort((a, b) => b.priority - a.priority), denied }
+  return { candidates: candidates.filter(keep).sort((a, b) => b.priority - a.priority), denied: denied.filter(keep) }
 }
 
 /** 收集单个插件的候选；独立成函数，调用方才能按插件兜异常 */
@@ -204,27 +242,36 @@ function collectForPlugin(
 
   if (command) {
     for (const cmd of n.commands) {
-      // 无前缀消息只允许 bare 命令接住；带前缀的消息对 bare 命令同样生效
-      if (command.bare && !cmd.bare) continue
-      const names = [cmd.name, ...(cmd.aliases ?? [])]
-      if (!names.some((c) => c.toLowerCase() === command.word.toLowerCase())) continue
+      // 同 AstrBot：@ 机器人（含单聊）本身就是唤醒，无前缀也匹配所有命令；没 @ 时只有 bare 命令接得住。
+      // 带前缀的消息对 bare 命令同样生效
+      if (command.bare && !cmd.bare && !session.atMe) continue
+      const words = Math.max(...[cmd.name, ...(cmd.aliases ?? [])].map((c) => matchedWords(command, c)))
+      if (!words) continue
       if (!sceneAllowed(cmd.scenes, session)) continue
       if (userTier > tierOf(cmd.permission)) {
-        denied.push({ plugin: name, kind: 'command', name: cmd.name })
+        denied.push({ plugin: name, kind: 'command', name: cmd.name, words })
         continue
       }
+      const typed = [command.word, ...command.args]
       candidates.push({
         plugin: name,
         kind: 'command',
         name: cmd.name,
         priority: priorityOf(deps.snapshot, name, cmd.priority),
         block: cmd.block ?? true,
+        words,
         registered,
         run: async (ctx) =>
           send(
             name,
             `command:${cmd.name}`,
-            await cmd.handler({ session, ctx, command: command.word, args: command.args, argText: command.argText }),
+            await cmd.handler({
+              session,
+              ctx,
+              command: typed.slice(0, words).join(' '),
+              args: typed.slice(words),
+              argText: textAfterWords(command.text, words),
+            }),
           ),
       })
     }
@@ -302,7 +349,10 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
     return report
   }
 
-  const enabled = deps.registry.all().filter((p) => isEnabled(deps.snapshot, p.manifest.name))
+  // 在本群不生效的插件连中间件都不跑：对这个群来说它就不存在
+  const enabled = deps.registry
+    .all()
+    .filter((p) => isEnabled(deps.snapshot, p.manifest.name) && groupAllowed(deps.snapshot, p.manifest.name, session))
   const loaded = await Promise.all(enabled.map(async (registered) => ({ registered, def: await registered.load() })))
   const plugins = loaded.filter((p): p is { registered: RegisteredPlugin; def: PluginDefinition<unknown> } => !!p.def)
 

@@ -111,6 +111,18 @@ export interface PluginState {
   config?: unknown
   /** 覆盖插件声明的优先级 */
   priority?: number
+  /** 按群限定生效范围，不设即所有群都生效 */
+  groups?: GroupScope
+}
+
+/**
+ * 插件在哪些群生效：`allow` 只在列出的群生效，`deny` 在列出的群不生效。
+ * 只管群里的事件（消息、按键、群事件、中间件）；单聊、频道、定时任务与 HTTP 路由不受影响。
+ */
+export interface GroupScope {
+  mode: 'allow' | 'deny'
+  /** 群 openid（在群里发 /sid 查看） */
+  ids: string[]
 }
 
 export interface BotConfig {

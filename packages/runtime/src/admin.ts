@@ -32,7 +32,7 @@ import {
   writeSavedBots,
   writeSnapshot,
 } from './store.js'
-import type { PluginState, ResolvedOptions, Snapshot } from './types.js'
+import type { GroupScope, PluginState, ResolvedOptions, Snapshot } from './types.js'
 
 export interface AdminDeps {
   registry: PluginRegistry
@@ -179,12 +179,26 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
 }
 
 /**
+ * 校验并整理 PATCH 里的 groups：null 表示恢复所有群，返回 undefined 表示格式不对。
+ * 群 ID 去掉首尾空白、去重、丢掉空串；deny 名单为空等于没设，直接清掉
+ */
+function normalizeGroups(value: unknown): GroupScope | null | undefined {
+  if (value === null) return null
+  const v = value as Partial<GroupScope> | undefined
+  if (!v || (v.mode !== 'allow' && v.mode !== 'deny') || !Array.isArray(v.ids)) return undefined
+  if (!v.ids.every((id) => typeof id === 'string')) return undefined
+  const ids = [...new Set(v.ids.map((id) => id.trim()).filter(Boolean))]
+  if (v.mode === 'deny' && ids.length === 0) return null
+  return { mode: v.mode, ids }
+}
+
+/**
  * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
  * POST /admin/login                 用管理密钥换 7 天会话令牌
  * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、事件统计
  * GET  /admin/snapshot              读取快照
  * PUT  /admin/snapshot              整体覆盖快照
- * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority
+ * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority / groups（groups: null 恢复所有群）
  * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
  * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）；换了 AppID 时旧的存进已保存列表
  * POST /admin/bot/bind              扫码创建机器人：建绑定任务，返回 { taskId, key, qrUrl }
@@ -277,6 +291,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
           description: p.manifest.description ?? '',
           enabled: state?.enabled ?? true,
           priority: state?.priority ?? 0,
+          groups: state?.groups ?? null,
           // 与处理器里的 ctx.config 同一个规则：升级后新增的配置项回落默认值
           config: withConfigDefaults(state?.config, p.manifest.defaultConfig) ?? p.manifest.defaultConfig ?? null,
           configSchema: p.manifest.configSchema ?? null,
@@ -359,18 +374,24 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const name = pluginMatch.name!
     const plugin = deps.registry.get(name)
     if (!plugin) return error(`插件不存在：${name}`, 404)
-    const patch = await readJson<Partial<PluginState>>(request)
+    const patch = await readJson<Partial<Omit<PluginState, 'groups'>> & { groups?: unknown }>(request)
     if (!patch) return error('请求体格式错误', 400)
     // 存之前按 configSchema 校验：否则类型写错要等插件运行时才炸
     if ('config' in patch) {
       const fields = validateConfig(plugin.manifest.configSchema, patch.config)
       if (fields.length > 0) return json({ ok: false, error: '配置不符合 schema', fields }, 400)
     }
+    const groups = 'groups' in patch ? normalizeGroups(patch.groups) : null
+    if (groups === undefined) return error('groups 格式错误：应为 null 或 { mode: "allow" | "deny", ids: string[] }', 400)
     const current = await readSnapshot(scope.env, true)
     const state: PluginState = { enabled: true, ...current.plugins[name] }
     if (typeof patch.enabled === 'boolean') state.enabled = patch.enabled
     if ('config' in patch) state.config = patch.config
     if (typeof patch.priority === 'number') state.priority = patch.priority
+    if ('groups' in patch) {
+      if (groups) state.groups = groups
+      else delete state.groups
+    }
     const next = await writeSnapshot(scope.env, { ...current, plugins: { ...current.plugins, [name]: state } })
     return json({ ok: true, plugin: name, state, revision: next.revision })
   }

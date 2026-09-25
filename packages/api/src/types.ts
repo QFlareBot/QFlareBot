@@ -39,7 +39,8 @@ export interface RawMessageEvent {
     height?: number
     size?: number
   }>
-  mentions?: Array<{ id?: string; username?: string; bot?: boolean }>
+  /** `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人） */
+  mentions?: Array<{ id?: string; username?: string; bot?: boolean; is_you?: boolean }>
   /** ext 形如 ["msg_idx=REFIDX_...", "auth_token=..."] */
   message_scene?: { source?: string; ext?: string[] }
   message_type?: number

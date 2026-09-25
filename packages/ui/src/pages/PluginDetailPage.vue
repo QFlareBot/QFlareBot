@@ -3,6 +3,7 @@ import { ArrowLeft, PanelsTopLeft } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError, describeBuild } from '../api/client.js'
+import type { GroupScope } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
 import SchemaForm from '../components/SchemaForm.vue'
 import QBadge from '../components/ui/QBadge.vue'
@@ -11,6 +12,7 @@ import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
+import QSelect from '../components/ui/QSelect.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
 import { useStatus } from '../composables/useStatus.js'
@@ -28,6 +30,15 @@ const configError = ref('')
 /** 服务端 schema 校验的逐字段错误，喂给 SchemaForm 显示在对应输入框下 */
 const fieldErrors = ref<Record<string, string>>({})
 const priority = ref('0')
+/** 生效的群：all 即不设 groups */
+const groupMode = ref<string>('all')
+const groupIds = ref('')
+const groupError = ref('')
+const GROUP_MODES = [
+  { value: 'all', label: '所有群' },
+  { value: 'allow', label: '只在这些群' },
+  { value: 'deny', label: '除了这些群' },
+]
 const saving = ref(false)
 const removing = ref(false)
 /** 卸载时是否连插件数据一起清；默认保留（误删不可逆） */
@@ -40,9 +51,20 @@ watch(
     config.value = { ...((p.config as Record<string, unknown> | null) ?? {}) }
     configText.value = JSON.stringify(p.config ?? {}, null, 2)
     priority.value = String(p.priority)
+    groupMode.value = p.groups?.mode ?? 'all'
+    groupIds.value = (p.groups?.ids ?? []).join('\n')
   },
   { immediate: true },
 )
+
+/** 表单里的群设置 → PATCH 的 groups；「只在这些群」却一个都没填时返回 undefined（等于哪个群都不生效，多半是漏填） */
+function groupsPatch(): GroupScope | null | undefined {
+  if (groupMode.value === 'all') return null
+  const ids = groupIds.value.split(/[\s,，]+/).filter(Boolean)
+  if (groupMode.value === 'deny' && !ids.length) return null
+  if (!ids.length) return undefined
+  return { mode: groupMode.value as GroupScope['mode'], ids }
+}
 
 async function toggle(enabled: boolean) {
   if (!plugin.value) return
@@ -68,10 +90,16 @@ async function save() {
       return
     }
   }
+  const groups = groupsPatch()
+  if (groups === undefined) {
+    groupError.value = '至少填一个群 ID'
+    return
+  }
+  groupError.value = ''
   saving.value = true
   fieldErrors.value = {}
   try {
-    await api.patchPlugin(plugin.value.name, { config: next, priority: Number(priority.value) || 0 })
+    await api.patchPlugin(plugin.value.name, { config: next, priority: Number(priority.value) || 0, groups })
     await refresh()
     // KV 是最终一致的：本节点立刻生效，其他节点最多约 60 秒，不要承诺「下一次事件即生效」
     push('配置已保存，本节点立即生效，其他节点最多约 60 秒', 'success')
@@ -150,6 +178,16 @@ async function uninstall() {
             <QField id="priority" label="优先级" hint="数值大的先执行；命令命中后默认阻止后续插件">
               <template #default="{ describedBy }">
                 <QInput id="priority" v-model="priority" type="number" class="max-w-32" :described-by="describedBy" />
+              </template>
+            </QField>
+            <QField id="group-mode" label="生效的群" hint="只管群里的消息和事件，单聊、频道、定时任务不受影响">
+              <template #default="{ describedBy }">
+                <QSelect id="group-mode" v-model="groupMode" :options="GROUP_MODES" class="max-w-48" :aria-describedby="describedBy" />
+              </template>
+            </QField>
+            <QField v-if="groupMode !== 'all'" id="group-ids" label="群 ID" hint="在群里发 /sid 查看；每行一个，也可以用空格或逗号分隔" :error="groupError">
+              <template #default="{ describedBy, invalid }">
+                <QTextarea id="group-ids" v-model="groupIds" mono :rows="3" :described-by="describedBy" :invalid="invalid" />
               </template>
             </QField>
             <div><QButton type="submit" variant="primary" :loading="saving">保存</QButton></div>

@@ -181,7 +181,8 @@ export interface Session {
   readonly mentions: ReadonlyArray<Mention>
   /**
    * 这条消息是否在呼叫本机器人：单聊/频道私信天然是；@ 消息（at_message）由事件类型判定；
-   * 其余群消息按 mentions 里的 bot 标记尽力推断。非消息事件恒为 false。
+   * 群全量消息看平台在 mentions 上标的 is_you；频道全量消息按 mentions 里的 bot 标记尽力推断。
+   * 非消息事件恒为 false。为 true 时命令不带前缀也能触发。
    */
   readonly atMe: boolean
   readonly attachments: readonly Attachment[]

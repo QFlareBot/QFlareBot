@@ -7,7 +7,7 @@ import {
   suggestMigrationTag,
   type BuildRecord,
 } from '@qqbot/projector'
-import { validateManifest, type Manifest } from '@qqbot/sdk'
+import { commandKey, validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
 import {
@@ -256,7 +256,7 @@ function previousManifest(name: string, records: readonly ManifestPluginRecord[]
 
 function commandKeys(m: Manifest): Set<string> {
   const keys = new Set<string>()
-  for (const c of m.commands ?? []) for (const n of [c.name, ...(c.aliases ?? [])]) keys.add(n.toLowerCase())
+  for (const c of m.commands ?? []) for (const n of [c.name, ...(c.aliases ?? [])]) keys.add(commandKey(n))
   return keys
 }
 

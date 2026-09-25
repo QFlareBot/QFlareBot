@@ -61,6 +61,12 @@ describe('validateManifest', () => {
     expect(errors.some((e) => e.includes('正则非法'))).toBe(true)
     expect(errors.some((e) => e.includes('cron'))).toBe(true)
   })
+
+  it('命令名按运行时的匹配规则查重：不分大小写、多个空白算一个', () => {
+    const m = extractManifest(plugin, { version: '1.0.0' })
+    m.commands.push({ name: 'pixiv random' }, { name: 'Pixiv  RANDOM' }, { name: 'pixiv illust' })
+    expect(validateManifest(m).filter((e) => e.includes('命令名重复'))).toEqual(['命令名重复：Pixiv  RANDOM'])
+  })
 })
 
 describe('events', () => {

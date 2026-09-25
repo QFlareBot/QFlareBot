@@ -160,11 +160,12 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     bot: m.bot === true,
   }))
   const event = toEventName(rawType)
-  // 是否在呼叫本机器人：单聊/频道私信天然是；at_message 事件平台已过滤出被 @ 的消息；
-  // 其余消息类型只有 mentions 里的 bot 标记可参考（多个机器人在群时可能误判，尽力而为）
-  const atMe =
-    isMessageEvent(event) &&
-    (scene === 'c2c' || scene === 'guild_dm' || rawType.includes('AT_MESSAGE') || mentions.some((m) => m.bot))
+  // 是否在呼叫本机器人，规则照 AstrBot 的 QQ 官方适配器：单聊/频道私信天然是；at_message 事件平台只在被 @ 时推送；
+  // 群全量消息看 mentions 里平台标的 is_you——bot 标记只说明被 @ 的是机器人，群里有别的机器人时会误判。
+  // 频道全量消息（MESSAGE_CREATE）AstrBot 没接，仍按 bot 标记尽力推断
+  const mentionsMe =
+    rawType === 'GROUP_MESSAGE_CREATE' ? (d.mentions ?? []).some((m) => m.is_you === true) : mentions.some((m) => m.bot)
+  const atMe = isMessageEvent(event) && (scene === 'c2c' || scene === 'guild_dm' || rawType.includes('AT_MESSAGE') || mentionsMe)
   const eventId = payload.id ?? `${rawType}:${d.id ?? Date.now()}`
   const messageId = typeof d.id === 'string' && rawType.includes('MESSAGE') ? d.id : undefined
   const eventReplyId = !messageId && EVENT_ID_REPLYABLE.has(rawType) ? eventId : undefined

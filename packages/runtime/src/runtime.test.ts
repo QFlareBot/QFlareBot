@@ -466,6 +466,59 @@ describe('admin', () => {
     })
   })
 
+  describe('按群生效范围', () => {
+    const headers = { authorization: 'Bearer admin-token', 'content-type': 'application/json' }
+    const patch = (runtime: ReturnType<typeof createRuntime>, env: ReturnType<typeof createEnv>, groups: unknown) =>
+      runtime.fetch!(
+        new Request(`${BASE}/admin/plugins/echo`, { method: 'PATCH', headers, body: JSON.stringify({ groups }) }),
+        env,
+        createExecutionContext(),
+      )
+    const send = async (runtime: ReturnType<typeof createRuntime>, env: ReturnType<typeof createEnv>, body: Record<string, unknown>) => {
+      const res = await runtime.fetch!(
+        new Request(`${BASE}/admin/test-event`, { method: 'POST', headers, body: JSON.stringify(body) }),
+        env,
+        createExecutionContext(),
+      )
+      return ((await res.json()) as { matched: unknown[] }).matched
+    }
+
+    it('allow 只在列出的群生效，单聊不受影响；群 ID 去空白去重', async () => {
+      const { echo } = makePlugins()
+      const runtime = createRuntime({ plugins: [echo] })
+      const env = createEnv()
+      const res = await patch(runtime, env, { mode: 'allow', ids: [' G1 ', 'G1', ''] })
+      expect(await res.json()).toMatchObject({ ok: true, state: { groups: { mode: 'allow', ids: ['G1'] } } })
+
+      expect(await send(runtime, env, { targetId: 'G1', content: '/echo hi' })).toHaveLength(1)
+      expect(await send(runtime, env, { targetId: 'G2', content: '/echo hi' })).toEqual([])
+      expect(await send(runtime, env, { scene: 'c2c', targetId: 'U1', content: '/echo hi' })).toHaveLength(1)
+    })
+
+    it('deny 在列出的群不生效；groups: null 恢复所有群', async () => {
+      const { echo } = makePlugins()
+      const runtime = createRuntime({ plugins: [echo] })
+      const env = createEnv()
+      await patch(runtime, env, { mode: 'deny', ids: ['G1'] })
+      expect(await send(runtime, env, { targetId: 'G1', content: 'ping' })).toEqual([])
+      expect(await send(runtime, env, { targetId: 'G2', content: 'ping' })).toHaveLength(1)
+
+      const cleared = await patch(runtime, env, null)
+      expect(((await cleared.json()) as { state: Record<string, unknown> }).state).not.toHaveProperty('groups')
+      expect(await send(runtime, env, { targetId: 'G1', content: 'ping' })).toHaveLength(1)
+    })
+
+    it('格式不对的 groups 返回 400，快照不变', async () => {
+      const { echo } = makePlugins()
+      const runtime = createRuntime({ plugins: [echo] })
+      const env = createEnv()
+      for (const bad of [{ mode: 'only', ids: ['G1'] }, { mode: 'allow' }, { mode: 'allow', ids: [1] }, 'G1']) {
+        expect((await patch(runtime, env, bad)).status).toBe(400)
+      }
+      expect(await send(runtime, env, { targetId: 'G1', content: '/echo hi' })).toHaveLength(1)
+    })
+  })
+
   it('/healthz 无需鉴权', async () => {
     const runtime = createRuntime({ plugins: [], projection: 'sha256-x' })
     const res = await runtime.fetch!(new Request(`${BASE}/healthz`), createEnv(), createExecutionContext())
@@ -599,18 +652,55 @@ describe('无前缀命令（bare）', () => {
     return { calls, bare }
   }
 
-  it('无前缀消息按首词命中 bare 命令；普通命令不被裸词触发', async () => {
+  it('@ 机器人（at_message）与单聊时普通命令也免前缀', async () => {
     const { bare, calls } = makeBarePlugins()
     const runtime = createRuntime({ plugins: [bare] })
 
-    const hit = await testEvent(runtime, undefined, { content: 'sign 早起' })
+    const at = await testEvent(runtime, undefined, { content: 'echo 你好' })
+    expect(at.matched).toEqual([{ plugin: 'bare', kind: 'command', name: 'echo' }])
+    expect(at.outbox[0]!.message).toBe('echo 你好')
+
+    const c2c = await testEvent(runtime, undefined, { scene: 'c2c', targetId: 'U1', content: 'echo 在吗' })
+    expect(c2c.outbox[0]!.message).toBe('echo 在吗')
+    expect(calls).toEqual(['echo:你好', 'echo:在吗'])
+  })
+
+  it('群全量消息没 @ 机器人：只有 bare 命令按首词命中', async () => {
+    const { bare, calls } = makeBarePlugins()
+    const runtime = createRuntime({ plugins: [bare] })
+
+    const hit = await testEvent(runtime, undefined, { rawType: 'GROUP_MESSAGE_CREATE', content: 'sign 早起' })
     expect(hit.matched).toEqual([{ plugin: 'bare', kind: 'command', name: 'sign' }])
     expect(hit.outbox[0]!.message).toBe('已签到')
     expect(calls).toEqual(['sign:早起'])
 
-    const miss = await testEvent(runtime, undefined, { content: 'echo 你好' })
+    const miss = await testEvent(runtime, undefined, { rawType: 'GROUP_MESSAGE_CREATE', content: 'echo 你好' })
     expect(miss.matched).toEqual([])
     expect(miss.outbox).toEqual([])
+
+    // 带前缀照常命中
+    expect(
+      (await testEvent(runtime, undefined, { rawType: 'GROUP_MESSAGE_CREATE', content: '/echo 你好' })).outbox[0]!.message,
+    ).toBe('echo 你好')
+  })
+
+  it('群全量消息按 is_you 认 @：@ 本机器人免前缀，@ 别的机器人不算', async () => {
+    const { bare } = makeBarePlugins()
+    const runtime = createRuntime({ plugins: [bare] })
+
+    const me = await testEvent(runtime, undefined, {
+      rawType: 'GROUP_MESSAGE_CREATE',
+      content: '<@A1B2C3> echo 你好',
+      raw: { mentions: [{ id: 'A1B2C3', username: '本机器人', bot: true, is_you: true }] },
+    })
+    expect(me.outbox[0]!.message).toBe('echo 你好')
+
+    const other = await testEvent(runtime, undefined, {
+      rawType: 'GROUP_MESSAGE_CREATE',
+      content: '<@D4E5F6> echo 你好',
+      raw: { mentions: [{ id: 'D4E5F6', username: '别的机器人', bot: true, is_you: false }] },
+    })
+    expect(other.matched).toEqual([])
   })
 
   it('bare 命令带前缀调用同样命中，命令词大小写不敏感', async () => {
@@ -634,9 +724,92 @@ describe('无前缀命令（bare）', () => {
   })
 })
 
+describe('子命令（命令名带空格）', () => {
+  async function testEvent(runtime: ReturnType<typeof createRuntime>, body: Record<string, unknown>) {
+    const res = await runtime.fetch!(
+      new Request(`${BASE}/admin/test-event`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      createEnv(),
+      createExecutionContext(),
+    )
+    return (await res.json()) as { matched: Array<{ plugin: string; name: string }> }
+  }
+
+  function makePixiv() {
+    const calls: Array<{ name: string; command: string; args: string[]; argText: string }> = []
+    const record =
+      (name: string) =>
+      ({ command, args, argText }: { command: string; args: string[]; argText: string }) => {
+        calls.push({ name, command, args, argText })
+        return name
+      }
+    const pixiv = definePlugin({
+      name: 'pixiv',
+      version: '1.0.0',
+      commands: {
+        pixiv: record('pixiv'),
+        'pixiv random': record('pixiv random'),
+        'pixiv illust': { permission: 'bot_admin', handler: record('pixiv illust') },
+      },
+    })
+    return { pixiv, calls }
+  }
+
+  it('最长的命令名胜出；参数从子命令后面开始，原文保留换行', async () => {
+    const { pixiv, calls } = makePixiv()
+    const runtime = createRuntime({ plugins: [pixiv] })
+
+    expect((await testEvent(runtime, { content: '/pixiv random 大图' })).matched).toEqual([
+      { plugin: 'pixiv', kind: 'command', name: 'pixiv random' },
+    ])
+    await testEvent(runtime, { content: '/Pixiv   RANDOM 第一行\n第二行' })
+    // @ 机器人免前缀同样认子命令
+    await testEvent(runtime, { content: 'pixiv random' })
+    expect(calls).toEqual([
+      { name: 'pixiv random', command: 'pixiv random', args: ['大图'], argText: '大图' },
+      { name: 'pixiv random', command: 'Pixiv RANDOM', args: ['第一行', '第二行'], argText: '第一行\n第二行' },
+      { name: 'pixiv random', command: 'pixiv random', args: [], argText: '' },
+    ])
+  })
+
+  it('对不上子命令时落回父命令，参数照常给', async () => {
+    const { pixiv, calls } = makePixiv()
+    const runtime = createRuntime({ plugins: [pixiv] })
+    await testEvent(runtime, { content: '/pixiv' })
+    await testEvent(runtime, { content: '/pixiv 别的 x' })
+    // 只有前一半对上（random 后面没空格）不算子命令
+    await testEvent(runtime, { content: '/pixiv randomly' })
+    expect(calls.map((c) => [c.name, c.args])).toEqual([
+      ['pixiv', []],
+      ['pixiv', ['别的', 'x']],
+      ['pixiv', ['randomly']],
+    ])
+  })
+
+  it('子命令权限不够时不退回父命令', async () => {
+    const { pixiv, calls } = makePixiv()
+    const runtime = createRuntime({ plugins: [pixiv] })
+    expect((await testEvent(runtime, { content: '/pixiv illust 123' })).matched).toEqual([])
+    expect(calls).toEqual([])
+  })
+
+  it('跨插件也是最长的命令名胜出', async () => {
+    const parent = definePlugin({ name: 'parent', version: '1.0.0', commands: { pixiv: () => 'parent' } })
+    const child = definePlugin({ name: 'child', version: '1.0.0', commands: { 'pixiv random': () => 'child' } })
+    const runtime = createRuntime({ plugins: [parent, child] })
+    expect((await testEvent(runtime, { content: '/pixiv random' })).matched).toEqual([
+      { plugin: 'child', kind: 'command', name: 'pixiv random' },
+    ])
+    expect((await testEvent(runtime, { content: '/pixiv' })).matched).toEqual([{ plugin: 'parent', kind: 'command', name: 'pixiv' }])
+  })
+})
+
 describe('无前缀解析与头像', () => {
   it('parseBareCommand 取首词，空内容返回 null', () => {
-    expect(parseBareCommand('sign 早起')).toEqual({ word: 'sign', args: ['早起'], argText: '早起', bare: true })
+    expect(parseBareCommand('sign 早起')).toEqual({ word: 'sign', args: ['早起'], argText: '早起', text: 'sign 早起', bare: true })
     expect(parseBareCommand('')).toBeNull()
     expect(parseCommand('/echo x', ['/'])).toMatchObject({ word: 'echo', bare: false })
   })
@@ -761,34 +934,39 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
   const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
   const opts = { botId: 'b', sender, maxPassiveReplies: 5 }
 
-  it('at_message 事件 atMe 恒为 true；普通群消息按 mentions 的 bot 标记推断', () => {
+  it('at_message 事件 atMe 恒为 true；群全量消息按 is_you，频道全量消息按 bot 标记', () => {
     const at = buildSession(groupMessagePayload('hi'), opts)
     expect(at.atMe).toBe(true)
     expect(at.mentions).toEqual([])
 
-    const mentioned = buildSession(
+    const groupFull = (mentions?: Array<Record<string, unknown>>) =>
+      buildSession(
+        {
+          op: 0,
+          id: 'GROUP_MESSAGE_CREATE:x',
+          t: 'GROUP_MESSAGE_CREATE',
+          d: { id: 'm', content: 'hi', author: { member_openid: 'U1' }, group_openid: 'G1', ...(mentions ? { mentions } : {}) },
+        },
+        opts,
+      )
+
+    const mentioned = groupFull([{ id: 'BOT', username: 'bot', bot: true, is_you: true }])
+    expect(mentioned.atMe).toBe(true)
+    expect(mentioned.mentions).toEqual([{ id: 'BOT', username: 'bot', bot: true }])
+    // @ 的是群里别的机器人：bot 标记为真，但不是本机器人
+    expect(groupFull([{ id: 'OTHER', username: 'other', bot: true, is_you: false }]).atMe).toBe(false)
+    expect(groupFull().atMe).toBe(false)
+
+    const guildFull = buildSession(
       {
         op: 0,
-        id: 'GROUP_MESSAGE_CREATE:x',
-        t: 'GROUP_MESSAGE_CREATE',
-        d: {
-          id: 'm',
-          content: 'hi',
-          author: { member_openid: 'U1' },
-          group_openid: 'G1',
-          mentions: [{ id: 'BOT', username: 'bot', bot: true }],
-        },
+        id: 'MESSAGE_CREATE:z',
+        t: 'MESSAGE_CREATE',
+        d: { id: 'm3', content: 'hi', author: { id: 'U2' }, channel_id: 'C1', guild_id: 'GD1', mentions: [{ id: 'BOT', bot: true }] },
       },
       opts,
     )
-    expect(mentioned.atMe).toBe(true)
-    expect(mentioned.mentions).toEqual([{ id: 'BOT', username: 'bot', bot: true }])
-
-    const plain = buildSession(
-      { op: 0, id: 'GROUP_MESSAGE_CREATE:y', t: 'GROUP_MESSAGE_CREATE', d: { id: 'm2', content: 'hi', author: { member_openid: 'U1' }, group_openid: 'G1' } },
-      opts,
-    )
-    expect(plain.atMe).toBe(false)
+    expect(guildFull.atMe).toBe(true)
   })
 
   it('单聊天然 atMe，交互事件恒为 false', () => {

@@ -93,7 +93,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 | 匹配器 | 入参（除 session/ctx 外） | 默认 |
 | --- | --- | --- |
-| `commands` | `command`（命中的词）、`args: string[]`、`argText`（命令后的原文） | `block: true` |
+| `commands` | `command`（命中的命令名或别名，子命令是完整的几个词）、`args: string[]`、`argText`（命令后的原文） | `block: true` |
 | `regex` | `match: RegExpMatchArray` | `block: false` |
 | `events` | — | `block: false` |
 | `buttons` | `interaction`、`buttonId`、`buttonData` | `block: true` |
@@ -103,17 +103,31 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 `block` / `priority`（大者先执行）/ `scenes`（限定 `group | c2c | guild | guild_dm`）写在匹配器对象形式里。命令前缀默认 `/`，面板可改；命令名大小写不敏感。
 
-正则只用来「判断命中 + 取捕获组」，所以运行时编译前会**剥掉 `g` 和 `y`**：带 `g` 时 `String.match` 只返回整段匹配、`match[1]` 会是 `undefined`；`y` 和 `g` 还会把 `lastIndex` 留在正则实例上，让重复匹配的结果漂移。写 `/^echo (.+)$/` 就够了，不用加这两个标志。
+**@ 机器人或单聊时命令可以不带前缀**（规则同 AstrBot）："@机器人 签到"等同于"/签到"。群里没开"接收全部消息"的机器人收到的都是 @ 消息，所以群聊和单聊基本都不用打前缀；判断依据见下文 `session.atMe`。
 
-命令加 `bare: true` 即为**无前缀命令**：消息不以任何前缀开头时按**首词**匹配（带前缀调用同样命中）：
+**命令名带空格就是子命令**，每条都是普通命令，`permission`、`scenes`、`usage` 照常各写各的：
 
 ```ts
 commands: {
-  sign: { bare: true, scenes: ['c2c'], handler: () => '已签到' },
+  pixiv: () => HELP,                              // 单独 /pixiv，或后面跟了不认识的词
+  'pixiv random': ({ args }) => …,                // args 从 random 后面开始
+  'pixiv illust': { usage: '/pixiv illust <id>', handler: ({ args }) => … },
 },
 ```
 
-裸命令只应在确实需要时用——群聊首词极易撞上正常聊天，建议配合 `scenes: ['c2c']`。
+名字越长越优先（跨插件也一样），所以 `/pixiv random 大图` 只会进 `'pixiv random'`；对不上的落回 `pixiv`，`args` 照常给，和不写子命令时一样。子命令权限不够时不会退回父命令。别名不会自动组合：`pixiv` 有别名 `p站`，要 `/p站 random` 也能用，得在子命令的 `aliases` 里写 `'p站 random'`。
+
+正则只用来「判断命中 + 取捕获组」，所以运行时编译前会**剥掉 `g` 和 `y`**：带 `g` 时 `String.match` 只返回整段匹配、`match[1]` 会是 `undefined`；`y` 和 `g` 还会把 `lastIndex` 留在正则实例上，让重复匹配的结果漂移。写 `/^echo (.+)$/` 就够了，不用加这两个标志。
+
+命令加 `bare: true` 后，**没 @ 机器人**的消息也按**首词**匹配它（带前缀调用同样命中）。只有群开了"接收全部消息"、或频道私域收全量消息时才用得上：
+
+```ts
+commands: {
+  sign: { bare: true, handler: () => '已签到' },
+},
+```
+
+裸命令只应在确实需要时用——群聊首词极易撞上正常聊天。
 
 ### 权限
 
@@ -147,7 +161,7 @@ commands: {
 
 `session` 只读字段（完整类型见 `@qqbot/sdk`）：
 
-- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，其余群消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`
+- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`
 - **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 
@@ -182,6 +196,8 @@ commands: {
 - **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。按顶层字段合并：保存过的配置盖在 `defaultConfig` 上，快照里没有的字段回落默认值——所以升级后新增的配置项，保存过配置的用户也拿得到默认值。
 
 配置放"人工可改的设置"；插件的运行数据用下面的存储。
+
+**不用自己做群白名单/黑名单**：面板的插件详情页有「生效的群」（所有群 / 只在这些群 / 除了这些群），框架在分发时就把不生效的群挡掉，插件在那个群里连中间件都不会跑。它只管群，单聊、频道、定时任务与 HTTP 路由不受影响。
 
 ## 6. 存储状态
 

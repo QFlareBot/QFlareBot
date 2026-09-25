@@ -118,7 +118,7 @@ export {
   type ScopedDurableObjects,
 } from './durable.js'
 
-export { extractManifest, validateManifest, type Manifest } from './manifest.js'
+export { commandKey, extractManifest, validateManifest, type Manifest } from './manifest.js'
 export { qqAvatar, qqAt, type AvatarSize } from './identity.js'
 export {
   normalizePlugin,

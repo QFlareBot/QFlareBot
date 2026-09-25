@@ -9,6 +9,12 @@ export interface CommandSpec {
   permission?: string
 }
 
+/** 插件在哪些群生效：allow 只在列出的群，deny 除了列出的群；只管群，单聊与频道不受影响 */
+export interface GroupScope {
+  mode: 'allow' | 'deny'
+  ids: string[]
+}
+
 export interface PluginInfo {
   name: string
   version: string
@@ -16,6 +22,8 @@ export interface PluginInfo {
   description: string
   enabled: boolean
   priority: number
+  /** null 即所有群都生效 */
+  groups: GroupScope | null
   config: unknown
   configSchema: JsonSchema | null
   permissions: string[]

@@ -2,6 +2,7 @@ import type {
   BuildOutcome,
   CheckUpdateResult,
   EventRecord,
+  GroupScope,
   InstallPluginResult,
   InstallPreview,
   InstallRecord,
@@ -72,7 +73,7 @@ export const api = {
   status: () => request<Status>('GET', '/status'),
   snapshot: () => request<{ ok: true; snapshot: Snapshot }>('GET', '/snapshot'),
   putSnapshot: (snapshot: Snapshot) => request<{ ok: true; snapshot: Snapshot }>('PUT', '/snapshot', snapshot),
-  patchPlugin: (name: string, patch: { enabled?: boolean; config?: unknown; priority?: number }) =>
+  patchPlugin: (name: string, patch: { enabled?: boolean; config?: unknown; priority?: number; groups?: GroupScope | null }) =>
     request<{ ok: true; revision: number }>('PATCH', `/plugins/${encodeURIComponent(name)}`, patch),
   bridgeToken: (name: string) => request<{ ok: true; token: string }>('POST', `/plugins/${encodeURIComponent(name)}/bridge`),
   saveBot: (appId: string, secret: string) => request<{ ok: true; appId: string }>('PUT', '/bot', { appId, secret }),

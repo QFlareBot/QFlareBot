@@ -109,6 +109,14 @@ export function extractManifest(
   return manifest
 }
 
+/**
+ * 命令名的比较键：不分大小写、中间几个空白算一个，与运行时的匹配规则一致。
+ * `'Pixiv  Random'` 与 `'pixiv random'` 是同一条命令
+ */
+export function commandKey(name: string): string {
+  return name.trim().toLowerCase().split(/\s+/).join(' ')
+}
+
 /** 校验清单基本合法性，返回错误列表（空数组即合法） */
 export function validateManifest(m: Manifest): string[] {
   const errors: string[] = []
@@ -119,8 +127,10 @@ export function validateManifest(m: Manifest): string[] {
   const seen = new Set<string>()
   for (const cmd of m.commands) {
     for (const n of [cmd.name, ...(cmd.aliases ?? [])]) {
-      if (seen.has(n)) errors.push(`命令名重复：${n}`)
-      seen.add(n)
+      const key = commandKey(n)
+      if (!key) errors.push(`命令名不能为空（${cmd.name || '未命名命令'}）`)
+      else if (seen.has(key)) errors.push(`命令名重复：${n}`)
+      seen.add(key)
     }
   }
   for (const r of m.regex) {
