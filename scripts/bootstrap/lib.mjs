@@ -310,6 +310,67 @@ export async function putBotConfig({ baseUrl, adminToken, appId, secret }) {
   return true
 }
 
+// ── 扫码创建 QQ 机器人 ───────────────────────────────────────────────────
+//
+// 协议照抄 AstrBot（qqofficial/login_registration.py）。权威实现在 packages/api/src/bind.ts（面板用）；
+// 这里是副本——引导是裸 Node 脚本，import 不到 workspace 包。
+
+const QQ_BIND_HOST = 'https://q.qq.com'
+
+async function qqBindPost(pathname, payload) {
+  let res
+  try {
+    res = await fetch(`${QQ_BIND_HOST}${pathname}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch (err) {
+    throw new BootstrapError(`连接 QQ 开放平台失败：${err.message}`)
+  }
+  const data = await res.json().catch(() => null)
+  if (!res.ok || !data || typeof data !== 'object') throw new BootstrapError(`QQ 机器人绑定接口异常（HTTP ${res.status}）`)
+  if (data.retcode !== undefined && Number(data.retcode) !== 0) {
+    throw new BootstrapError(data.msg || 'QQ 机器人绑定接口返回失败')
+  }
+  return data.data && typeof data.data === 'object' ? data.data : {}
+}
+
+/** 建绑定任务：返回 { taskId, key, qrUrl }；key 是 base64 的 AES-256 密钥，轮询时用来解密 AppSecret */
+export async function createQQBindTask() {
+  const key = Buffer.from(randomBytes(32)).toString('base64')
+  const data = await qqBindPost('/lite/create_bind_task', { key })
+  const taskId = typeof data.task_id === 'string' ? data.task_id.trim() : ''
+  if (!taskId) throw new BootstrapError('QQ 机器人绑定任务响应缺少 task_id')
+  return { taskId, key, qrUrl: `${QQ_BIND_HOST}/qqbot/openclaw/connect.html?task_id=${encodeURIComponent(taskId)}&_wv=2` }
+}
+
+/** 解密 bot_encrypt_secret：base64(12 字节 nonce ‖ 密文 ‖ 16 字节 GCM tag) */
+export async function decryptQQBindSecret(encrypted, key) {
+  const raw = Buffer.from(encrypted, 'base64')
+  const keyBytes = Buffer.from(key, 'base64')
+  if (keyBytes.length !== 32 || raw.length <= 28) throw new BootstrapError('QQ 机器人凭证密文格式异常')
+  try {
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.subarray(0, 12) }, cryptoKey, raw.subarray(12))
+    return new TextDecoder().decode(plain)
+  } catch {
+    throw new BootstrapError('QQ 机器人凭证解密失败')
+  }
+}
+
+/** 轮询一次：{ status: 'pending' | 'expired' } 或 { status: 'created', appId, secret, userOpenid } */
+export async function pollQQBindResult(taskId, key) {
+  const data = await qqBindPost('/lite/poll_bind_result', { task_id: taskId })
+  const status = Number(data.status ?? 0)
+  if (status === 3) return { status: 'expired' }
+  if (status !== 2) return { status: 'pending' }
+  const appId = String(data.bot_appid ?? '').trim()
+  const encrypted = String(data.bot_encrypt_secret ?? '').trim()
+  if (!appId || appId === '0' || !encrypted) throw new BootstrapError('扫码成功但未返回完整 QQ 机器人凭证')
+  return { status: 'created', appId, secret: await decryptQQBindSecret(encrypted, key), userOpenid: String(data.user_openid ?? '').trim() }
+}
+
 // ── 汇总输出 ─────────────────────────────────────────────────────────────
 
 /** 主 token 的预填创建链接（权限组 key 已实测有效） */

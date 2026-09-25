@@ -71,6 +71,10 @@ export const api = {
     request<{ ok: true; revision: number }>('PATCH', `/plugins/${encodeURIComponent(name)}`, patch),
   bridgeToken: (name: string) => request<{ ok: true; token: string }>('POST', `/plugins/${encodeURIComponent(name)}/bridge`),
   saveBot: (appId: string, secret: string) => request<{ ok: true; appId: string }>('PUT', '/bot', { appId, secret }),
+  /** 扫码创建机器人：key 由面板保管，轮询时带回 */
+  startBotBind: () => request<{ ok: true; taskId: string; key: string; qrUrl: string }>('POST', '/bot/bind'),
+  pollBotBind: (taskId: string, key: string) =>
+    request<{ ok: true; status: 'pending' | 'expired' | 'created'; appId?: string }>('POST', '/bot/bind/poll', { taskId, key }),
   events: (limit = 50, before?: number) =>
     request<{ ok: true; events: EventRecord[] }>('GET', `/events?limit=${limit}${before ? `&before=${before}` : ''}`),
   clearEvents: () => request<{ ok: true }>('DELETE', '/events'),

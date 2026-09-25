@@ -9,6 +9,15 @@ export {
   type TokenProviderOptions,
 } from './token.js'
 export { QQBotClient, DEFAULT_BASE_URL, type QQBotClientOptions } from './client.js'
+export {
+  createBindTask,
+  pollBindResult,
+  decryptBindSecret,
+  DEFAULT_BIND_HOST,
+  type BindTask,
+  type BindResult,
+  type BindOptions,
+} from './bind.js'
 export { createGroupApi } from './group.js'
 export {
   OpCode,

@@ -57,7 +57,9 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
   `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
   secret 时再写 `CF_BUILDS_TOKEN`
 - QQ 凭证：无 UI 模式配了 secrets `QQ_APPID`/`QQ_APP_SECRET`、或网页向导表单里填了的话，部署后
-  调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，与管理面板同一条路径）
+  调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，与管理面板同一条路径）。还没有机器人时，向导表单和
+  面板设置页都能**扫码创建**：手机 QQ 扫码确认即新建一个机器人，AppID/AppSecret 自动带入（协议同 AstrBot）。
+  回调地址扫码给不了，仍要到 QQ 开放平台手填一次
 
 > R2 在新账户上需要先到后台激活一次（免费额度内不扣费），API 替代不了；向导会在前置检查里提醒。
 

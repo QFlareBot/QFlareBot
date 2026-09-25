@@ -13,6 +13,8 @@
  * API（全部 JSON）：
  *   GET  /api/init                   页面初始数据（默认值、token 预填链接）
  *   POST /api/verify                 { token, accountId? } 验证主 token + 权限试探
+ *   POST /api/qq-bind/start          扫码创建 QQ 机器人：建绑定任务，返回二维码 SVG（密钥留在本进程）
+ *   POST /api/qq-bind/poll           轮询一次；扫码完成后凭证留在本进程，部署时自动存进 KV
  *   POST /api/provision              表单提交，启动引导（异步）
  *   GET  /api/progress               进度轮询
  *   GET  /api/builds-status          仓库是否已连接 Workers Builds
@@ -26,13 +28,16 @@ import { readFile, writeFile, chmod } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { renderSVG } from 'uqr'
 import {
   adminTokenProblem,
   BootstrapError,
   BUILD_COMMAND,
   cfFetch,
+  createQQBindTask,
   DEPLOY_COMMAND,
   listAccounts,
+  pollQQBindResult,
   probePermissions,
   renderSummary,
   runBootstrap,
@@ -57,6 +62,8 @@ const state = {
   accounts: [],
   workerName: env.BOOT_WORKER_NAME?.trim() || 'qqbot',
   provision: null, // { lines: [], done, ok, error, result }
+  qqBind: null, // 进行中的扫码任务 { taskId, key }
+  qqBound: null, // 扫码拿到的凭证 { appId, secret }，不下发给浏览器
   completed: false,
   completeTimer: null,
   lastActivity: Date.now(),
@@ -100,6 +107,15 @@ function readBody(req) {
     })
     req.on('error', reject)
   })
+}
+
+/** 表单手填优先；AppSecret 留空且 AppID 与扫码结果一致（或也留空）时用扫码拿到的凭证 */
+function resolveQQ(body) {
+  const appId = typeof body.qqAppId === 'string' ? body.qqAppId.trim() : ''
+  const secret = typeof body.qqSecret === 'string' ? body.qqSecret.trim() : ''
+  if (appId && secret) return { appId, secret }
+  if (!secret && state.qqBound && (!appId || appId === state.qqBound.appId)) return state.qqBound
+  return undefined
 }
 
 function json(res, status, body) {
@@ -302,6 +318,33 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/qq-bind/start') {
+      try {
+        const { taskId, key, qrUrl } = await createQQBindTask()
+        state.qqBind = { taskId, key }
+        json(res, 200, { ok: true, qrUrl, svg: renderSVG(qrUrl, { border: 1 }) })
+      } catch (err) {
+        json(res, 502, { error: err.message })
+      }
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/qq-bind/poll') {
+      if (!state.qqBind) return json(res, 400, { error: '先获取二维码' })
+      try {
+        const r = await pollQQBindResult(state.qqBind.taskId, state.qqBind.key)
+        if (r.status !== 'created') return json(res, 200, { ok: true, status: r.status })
+        mask(r.secret)
+        state.qqBound = { appId: r.appId, secret: r.secret }
+        state.qqBind = null
+        log(`扫码创建 QQ 机器人成功：AppID ${r.appId}`)
+        json(res, 200, { ok: true, status: 'created', appId: r.appId })
+      } catch (err) {
+        json(res, 502, { error: err.message })
+      }
+      return
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/provision') {
       if (!state.token) return json(res, 400, { error: '先完成 token 验证' })
       if (state.provision && !state.provision.done) return json(res, 409, { error: '引导已在进行中' })
@@ -324,7 +367,7 @@ const server = createServer(async (req, res) => {
         kvName: body.kvName?.trim() || undefined,
         d1Name: body.d1Name?.trim() || undefined,
         r2Name: body.r2Name?.trim() || undefined,
-        qq: body.qqAppId && body.qqSecret ? { appId: body.qqAppId.trim(), secret: body.qqSecret.trim() } : undefined,
+        qq: resolveQQ(body),
         buildsToken: null, // 构建 token 在连接仓库后的收尾步骤写入
         adminToken,
         repoRoot,

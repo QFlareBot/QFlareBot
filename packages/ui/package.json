@@ -21,6 +21,7 @@
   "dependencies": {
     "@qqbot/ui-bridge": "workspace:*",
     "lucide-vue-next": "^0.544.0",
+    "uqr": "^0.1.3",
     "vue": "^3.5.21",
     "vue-router": "^4.5.1"
   },

@@ -1,4 +1,4 @@
-import { QQBotClient, createTokenProvider, type WebhookPayload } from '@qqbot/api'
+import { QQBotClient, createBindTask, createTokenProvider, pollBindResult, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
@@ -113,6 +113,34 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
   }
 }
 
+/** 向 QQ 换 token 验证后存进 KV；成功返回 null，失败返回给面板的错误文案 */
+async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: string, secret: string): Promise<string | null> {
+  try {
+    await createTokenProvider({ appId, secret, fetchImpl: deps.options.fetchImpl }).get()
+  } catch (err) {
+    return `QQ 开放平台鉴权失败：${(err as Error).message}`
+  }
+  await writeBotConfig(scope.env, { appId, secret })
+  // 顺手拉一次机器人资料存进快照，运行时经 session.botName/botAvatar 下发，零额外 API。
+  // 拉取失败不影响凭证保存，只是资料为空。
+  try {
+    const client = new QQBotClient({ appId, secret, fetchImpl: deps.options.fetchImpl })
+    const profile = await client.me()
+    const snapshot = await readSnapshot(scope.env, true)
+    await writeSnapshot(scope.env, {
+      ...snapshot,
+      bot: {
+        name: typeof profile.username === 'string' ? profile.username : '',
+        avatar: typeof profile.avatar === 'string' ? profile.avatar : '',
+      },
+    })
+  } catch (err) {
+    deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 将为空', { error: (err as Error).message })
+  }
+  deps.logger.info('机器人凭证已更新', { appId })
+  return null
+}
+
 /**
  * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
  * POST /admin/login                 用管理密钥换 7 天会话令牌
@@ -122,6 +150,8 @@ function fakePayload(body: Record<string, unknown>): WebhookPayload {
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority
  * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
  * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）
+ * POST /admin/bot/bind              扫码创建机器人：建绑定任务，返回 { taskId, key, qrUrl }
+ * POST /admin/bot/bind/poll         { taskId, key } 轮询一次；扫码完成即解密凭证、验证并保存（同 PUT /admin/bot）
  * GET  /admin/events?limit&before   最近事件的分发摘要
  * DELETE /admin/events              清空事件记录
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
@@ -286,30 +316,35 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const appId = body?.appId?.trim()
     const secret = body?.secret?.trim()
     if (!appId || !secret) return error('appId 与 secret 不能为空', 400)
-    try {
-      await createTokenProvider({ appId, secret, fetchImpl: deps.options.fetchImpl }).get()
-    } catch (err) {
-      return error(`QQ 开放平台鉴权失败：${(err as Error).message}`, 400)
-    }
-    await writeBotConfig(scope.env, { appId, secret })
-    // 顺手拉一次机器人资料存进快照，运行时经 session.botName/botAvatar 下发，零额外 API。
-    // 拉取失败不影响凭证保存，只是资料为空。
-    try {
-      const client = new QQBotClient({ appId, secret, fetchImpl: deps.options.fetchImpl })
-      const profile = await client.me()
-      const snapshot = await readSnapshot(scope.env, true)
-      await writeSnapshot(scope.env, {
-        ...snapshot,
-        bot: {
-          name: typeof profile.username === 'string' ? profile.username : '',
-          avatar: typeof profile.avatar === 'string' ? profile.avatar : '',
-        },
-      })
-    } catch (err) {
-      deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 将为空', { error: (err as Error).message })
-    }
-    deps.logger.info('机器人凭证已更新', { appId })
+    const problem = await saveBotCredentials(scope, deps, appId, secret)
+    if (problem) return error(problem, 400)
     return json({ ok: true, appId })
+  }
+
+  // 扫码创建：密钥交给面板保管、轮询时带回，Worker 不存任何中间状态（同 AstrBot）
+  if (sub === '/bot/bind' && method === 'POST') {
+    try {
+      return json({ ok: true, ...(await createBindTask({ fetchImpl: deps.options.fetchImpl })) })
+    } catch (err) {
+      return error(`创建扫码任务失败：${(err as Error).message}`, 502)
+    }
+  }
+
+  if (sub === '/bot/bind/poll' && method === 'POST') {
+    const body = await readJson<{ taskId?: string; key?: string }>(request)
+    const taskId = body?.taskId?.trim()
+    const key = body?.key?.trim()
+    if (!taskId || !key) return error('需要 taskId 与 key', 400)
+    let result
+    try {
+      result = await pollBindResult(taskId, key, { fetchImpl: deps.options.fetchImpl })
+    } catch (err) {
+      return error((err as Error).message, 502)
+    }
+    if (result.status !== 'created') return json({ ok: true, status: result.status })
+    const problem = await saveBotCredentials(scope, deps, result.appId, result.secret)
+    if (problem) return error(problem, 400)
+    return json({ ok: true, status: 'created', appId: result.appId })
   }
 
   if (sub === '/send' && method === 'POST') {

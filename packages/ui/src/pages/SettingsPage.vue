@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { renderSVG } from 'uqr'
 import { api } from '../api/client.js'
 import PageHeader from '../components/PageHeader.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
+import QSelect from '../components/ui/QSelect.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
 import { useStatus } from '../composables/useStatus.js'
@@ -36,6 +38,55 @@ async function saveBot() {
     botError.value = (e as Error).message
   } finally {
     savingBot.value = false
+  }
+}
+
+// —— 扫码创建机器人（协议同 AstrBot）：手机 QQ 扫码即新建机器人，凭证由 Worker 解密验证后直接保存 ——
+
+type BindState = 'idle' | 'starting' | 'pending' | 'expired' | 'created' | 'error'
+const bindState = ref<BindState>('idle')
+const bindQr = ref('')
+const bindError = ref('')
+const origin = location.origin
+let bindTimer: ReturnType<typeof setTimeout> | undefined
+
+function stopBind() {
+  clearTimeout(bindTimer)
+  bindTimer = undefined
+}
+onBeforeUnmount(stopBind)
+
+async function startBind() {
+  stopBind()
+  bindState.value = 'starting'
+  bindError.value = ''
+  bindQr.value = ''
+  try {
+    const task = await api.startBotBind()
+    bindQr.value = renderSVG(task.qrUrl, { border: 1 })
+    bindState.value = 'pending'
+    const poll = async () => {
+      try {
+        const res = await api.pollBotBind(task.taskId, task.key)
+        if (res.status === 'pending') {
+          bindTimer = setTimeout(poll, 2000)
+          return
+        }
+        bindState.value = res.status
+        if (res.status === 'created') {
+          appId.value = res.appId ?? ''
+          await refresh()
+          push('机器人已创建，凭证已保存并验证通过', 'success')
+        }
+      } catch (e) {
+        bindState.value = 'error'
+        bindError.value = (e as Error).message
+      }
+    }
+    bindTimer = setTimeout(poll, 2000)
+  } catch (e) {
+    bindState.value = 'error'
+    bindError.value = (e as Error).message
   }
 }
 
@@ -208,8 +259,37 @@ async function saveMenu() {
           <QField id="secret" label="AppSecret" required :error="botError" hint="只在保存时发送一次，面板不会回显">
             <template #default="{ describedBy, invalid }"><QInput id="secret" v-model="secret" type="password" mono autocomplete="off" :described-by="describedBy" :invalid="invalid" /></template>
           </QField>
-          <div><QButton type="submit" variant="primary" :loading="savingBot" :disabled="status?.bot?.source === 'secret'">保存并验证</QButton></div>
+          <div class="flex gap-2">
+            <QButton type="submit" variant="primary" :loading="savingBot" :disabled="status?.bot?.source === 'secret'">保存并验证</QButton>
+            <QButton :loading="bindState === 'starting'" :disabled="status?.bot?.source === 'secret' || bindState === 'pending'" @click="startBind">扫码创建机器人</QButton>
+          </div>
         </form>
+        <div v-if="bindState !== 'idle'" class="mt-4 flex items-start gap-4 rounded-md border border-border p-3">
+          <!-- eslint-disable-next-line vue/no-v-html -- SVG 由 uqr 本地生成 -->
+          <div v-if="bindQr && bindState !== 'created'" class="size-36 shrink-0 rounded-md bg-white p-1" :class="{ 'opacity-30': bindState === 'expired' }" v-html="bindQr" />
+          <div class="flex flex-col gap-2 text-sm">
+            <p v-if="bindState === 'starting'" class="text-fg-muted">正在获取二维码…</p>
+            <template v-else-if="bindState === 'pending'">
+              <p class="font-medium text-fg">用手机 QQ 扫码</p>
+              <p class="text-xs text-fg-muted">扫码确认后会新建一个 QQ 机器人，AppID 与 AppSecret 自动保存，不用手填。二维码约 3 分钟内有效。</p>
+            </template>
+            <template v-else-if="bindState === 'expired'">
+              <p class="text-fg">二维码已过期</p>
+              <div><QButton size="sm" @click="startBind">刷新二维码</QButton></div>
+            </template>
+            <template v-else-if="bindState === 'created'">
+              <p class="font-medium text-fg">机器人已创建，凭证已保存</p>
+              <p class="text-xs text-fg-muted">
+                还差一步：到 <a class="underline" href="https://q.qq.com" target="_blank" rel="noopener">QQ 开放平台</a> 的机器人管理里，把回调地址填成
+                <code class="font-mono">{{ origin }}{{ status?.webhookPath ?? '/webhook' }}</code>
+              </p>
+            </template>
+            <template v-else>
+              <p class="text-danger">{{ bindError }}</p>
+              <div><QButton size="sm" @click="startBind">重试</QButton></div>
+            </template>
+          </div>
+        </div>
       </QCard>
 
       <div class="flex flex-col gap-4">

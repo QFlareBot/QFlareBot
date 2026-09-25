@@ -828,6 +828,48 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
       bot: { name: '测试机器人', avatar: 'https://thirdqq.qlogo.cn/bot/640' },
     })
   })
+
+  it('扫码创建：建任务 → 轮询等待 → 完成后解密、验证并保存凭证', async () => {
+    const qq = createQQFetch()
+    let bindKey = ''
+    let polls = 0
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/lite/create_bind_task')) {
+        bindKey = JSON.parse(String(init?.body)).key
+        return new Response(JSON.stringify({ retcode: 0, data: { task_id: 'task-1' } }))
+      }
+      if (url.endsWith('/lite/poll_bind_result')) {
+        if (++polls === 1) return new Response(JSON.stringify({ retcode: 0, data: { status: 1 } }))
+        // 按 q.qq.com 的格式加密：base64(nonce ‖ 密文 ‖ tag)
+        const key = await crypto.subtle.importKey('raw', Uint8Array.from(atob(bindKey), (c) => c.charCodeAt(0)), 'AES-GCM', false, ['encrypt'])
+        const iv = crypto.getRandomValues(new Uint8Array(12))
+        const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(TEST_SECRET)))
+        const encrypted = btoa(String.fromCharCode(...iv, ...sealed))
+        return new Response(JSON.stringify({ retcode: 0, data: { status: 2, bot_appid: '456', bot_encrypt_secret: encrypted, user_openid: 'U1' } }))
+      }
+      return qq.fetchImpl(input, init)
+    }
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv()
+    const call = (path: string, body?: unknown) =>
+      runtime.fetch!(
+        new Request(`${BASE}/admin${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        }),
+        env,
+        createExecutionContext(),
+      )
+
+    const task = (await (await call('/bot/bind')).json()) as { taskId: string; key: string; qrUrl: string }
+    expect(task).toMatchObject({ taskId: 'task-1', key: bindKey, qrUrl: expect.stringContaining('connect.html?task_id=task-1') })
+
+    expect(await (await call('/bot/bind/poll', { taskId: task.taskId, key: task.key })).json()).toEqual({ ok: true, status: 'pending' })
+    expect(await (await call('/bot/bind/poll', { taskId: task.taskId, key: task.key })).json()).toEqual({ ok: true, status: 'created', appId: '456' })
+    expect(JSON.parse(env.KV.store.get('rt:bot')!)).toEqual({ appId: '456', secret: TEST_SECRET })
+  })
 })
 
 describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {

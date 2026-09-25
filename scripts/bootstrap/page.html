@@ -40,6 +40,12 @@
   .cmd .k { flex: 0 0 9em; font-size: 13px; color: #9aa0a6; }
   .cmd code { flex: 1; min-width: 0; padding: 6px 8px; word-break: break-all; }
   .cmd button { margin: 0; padding: 5px 12px; font-size: 13px; flex-shrink: 0; }
+  .qq-bind { display: flex; gap: 14px; align-items: center; margin-top: 10px; }
+  .qq-bind .qr { flex: 0 0 150px; height: 150px; background: #fff; border-radius: 8px; padding: 4px; }
+  .qq-bind .qr:empty { display: none; }
+  .qq-bind .qr svg { width: 100%; height: 100%; display: block; }
+  .qq-bind .qr.expired { opacity: .3; }
+  .qq-bind .msg { margin-top: 0; }
   pre.log { background: #0b0d11; border: 1px solid #232833; border-radius: 8px; padding: 12px;
             font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0; }
 </style>
@@ -92,9 +98,14 @@
     <input id="f-r2" placeholder="qqbot-artifacts">
     <label>管理面板密码 ADMIN_TOKEN（<b>必填</b>，至少 12 个字符）——自己定、自己记：引导不会代为生成，也不会在任何地方回显</label>
     <input id="f-admin-token" placeholder="至少 12 个字符" type="password" minlength="12" autocomplete="new-password">
-    <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）</label>
+    <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）——没有机器人可以直接扫码创建</label>
     <input id="f-qq-appid" placeholder="AppID">
     <input id="f-qq-secret" placeholder="AppSecret" type="password">
+    <button id="qq-bind-btn" class="ghost">扫码创建 QQ 机器人</button>
+    <div id="qq-bind" class="qq-bind hidden">
+      <div id="qq-bind-qr" class="qr"></div>
+      <div id="qq-bind-msg" class="msg"></div>
+    </div>
     <button id="start-btn">开始部署</button>
     <div id="form-msg" class="msg hidden"></div>
   </section>
@@ -223,6 +234,48 @@ $('verify-again-btn').onclick = async () => {
     say('verify-msg', `✅ Token 有效，已选择账户 (${res.accountId})，权限齐全`, 'ok')
     show('step-form')
   } catch (err) { say('verify-msg', `❌ ${err.message}`, 'err') }
+}
+
+// 扫码创建 QQ 机器人：凭证只留在向导进程里，部署时自动存进 KV
+let qqBindTimer = null
+$('qq-bind-btn').onclick = async () => {
+  clearTimeout(qqBindTimer)
+  $('qq-bind-btn').disabled = true
+  show('qq-bind')
+  $('qq-bind-qr').innerHTML = ''
+  $('qq-bind-qr').classList.remove('expired')
+  say('qq-bind-msg', '正在获取二维码…')
+  try {
+    const { svg } = await api('/api/qq-bind/start', {})
+    $('qq-bind-qr').innerHTML = svg
+    say('qq-bind-msg', '用手机 QQ 扫码，确认后会新建一个 QQ 机器人，AppID 与 AppSecret 自动带入。\n二维码约 3 分钟内有效。')
+    const poll = async () => {
+      try {
+        const r = await api('/api/qq-bind/poll', {})
+        if (r.status === 'pending') { qqBindTimer = setTimeout(poll, 2000); return }
+        $('qq-bind-btn').disabled = false
+        if (r.status === 'expired') {
+          $('qq-bind-qr').classList.add('expired')
+          $('qq-bind-btn').textContent = '刷新二维码'
+          say('qq-bind-msg', '二维码已过期，点上面的按钮刷新', 'err')
+          return
+        }
+        $('qq-bind-qr').innerHTML = ''
+        $('f-qq-appid').value = r.appId
+        $('f-qq-secret').value = ''
+        $('f-qq-secret').placeholder = 'AppSecret 已通过扫码获取，留空即可'
+        $('qq-bind-btn').textContent = '重新扫码创建'
+        say('qq-bind-msg', `✅ 机器人已创建（AppID ${r.appId}），部署时会自动保存凭证`, 'ok')
+      } catch (err) {
+        $('qq-bind-btn').disabled = false
+        say('qq-bind-msg', `❌ ${err.message}`, 'err')
+      }
+    }
+    qqBindTimer = setTimeout(poll, 2000)
+  } catch (err) {
+    $('qq-bind-btn').disabled = false
+    say('qq-bind-msg', `❌ ${err.message}`, 'err')
+  }
 }
 
 $('start-btn').onclick = async () => {

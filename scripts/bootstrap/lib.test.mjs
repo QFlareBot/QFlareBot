@@ -5,8 +5,10 @@ import {
   BootstrapError,
   buildsConnectUrl,
   buildsTokenUrl,
+  createQQBindTask,
   listWorkerSecretNames,
   MANIFEST_PLUGINS_TABLE,
+  pollQQBindResult,
   readInstalledPlugins,
   renderSummary,
   resolveBuildToken,
@@ -200,5 +202,37 @@ describe('renderSummary：地址与密钥', () => {
     const md = renderSummary({ ...base, adminToken: 'secret-admin-pass' }, { redactSecrets: false })
     expect(md).not.toContain('secret-admin-pass')
     expect(md).toContain('ADMIN_TOKEN')
+  })
+})
+
+describe('扫码创建 QQ 机器人', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  /** 按 q.qq.com 的格式加密：base64(nonce ‖ 密文 ‖ tag) */
+  async function encrypt(secret, key) {
+    const cryptoKey = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64'), 'AES-GCM', false, ['encrypt'])
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(secret))
+    return Buffer.concat([iv, new Uint8Array(sealed)]).toString('base64')
+  }
+
+  it('建任务 → 等待 → 完成并解密', async () => {
+    const qq = (data) => new Response(JSON.stringify({ retcode: 0, data }))
+    const calls = stubFetch(qq({ task_id: 't1' }), qq({ status: 1 }))
+    const task = await createQQBindTask()
+    expect(calls[0]).toMatchObject({ url: 'https://q.qq.com/lite/create_bind_task', body: { key: task.key } })
+    expect(Buffer.from(task.key, 'base64')).toHaveLength(32)
+    expect(task.qrUrl).toBe('https://q.qq.com/qqbot/openclaw/connect.html?task_id=t1&_wv=2')
+    expect(await pollQQBindResult('t1', task.key)).toEqual({ status: 'pending' })
+    expect(calls[1]).toMatchObject({ url: 'https://q.qq.com/lite/poll_bind_result', body: { task_id: 't1' } })
+
+    stubFetch(qq({ status: 2, bot_appid: '1905677019', bot_encrypt_secret: await encrypt('gCsecretRJ', task.key), user_openid: 'U1' }))
+    expect(await pollQQBindResult('t1', task.key)).toEqual({ status: 'created', appId: '1905677019', secret: 'gCsecretRJ', userOpenid: 'U1' })
+  })
+
+  it('过期与平台报错', async () => {
+    stubFetch(new Response(JSON.stringify({ retcode: 0, data: { status: 3 } })), new Response(JSON.stringify({ retcode: 1, msg: '频率过快' })))
+    expect(await pollQQBindResult('t1', 'k')).toEqual({ status: 'expired' })
+    await expect(pollQQBindResult('t1', 'k')).rejects.toThrow('频率过快')
   })
 })
