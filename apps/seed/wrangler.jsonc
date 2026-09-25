@@ -27,8 +27,8 @@
   // 依赖），构建机拉 /admin/build-manifest 走的就是它。绑了自定义域名之后可以关——设构建
   // 环境变量 CF_WORKERS_DEV=0，同时把 MANIFEST_URL 改成你的域名。
   "workers_dev": true,
-  // 自定义域名示例（引导工作流按 CF_CUSTOM_DOMAIN 写入；国内 QQ Webhook 刚需）：
-  // "routes": [{ "pattern": "bot.example.com", "custom_domain": true }],
+  // 自定义域名不在这里声明，到 Cloudflare 后台 Worker → Settings → Domains & Routes 自己绑。
+  // 这里一旦写了 routes，每次 wrangler deploy 都按它整体替换，后台另绑的域名会被摘掉。
   // 切流量前的健康检查打的是 <版本号前 8 位>-<name>.<子域>.workers.dev/healthz，
   // 由下面这个开关控制，与 workers_dev 无关（workers_dev: false 时预览地址照样可用，已实测）。
   // 关掉它预览地址就是 404，健康检查必然失败、永远切不了流量。

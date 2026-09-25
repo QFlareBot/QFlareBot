@@ -78,7 +78,6 @@ export async function handleBuildConfig(request: Request, scope: RequestScope): 
       kvId: typeof scope.env.CF_KV_ID === 'string' && scope.env.CF_KV_ID.length > 0 ? scope.env.CF_KV_ID : null,
       d1Id: typeof scope.env.CF_D1_ID === 'string' && scope.env.CF_D1_ID.length > 0 ? scope.env.CF_D1_ID : null,
       r2Name: typeof scope.env.CF_R2_NAME === 'string' && scope.env.CF_R2_NAME.length > 0 ? scope.env.CF_R2_NAME : null,
-      domain: typeof scope.env.CF_CUSTOM_DOMAIN === 'string' && scope.env.CF_CUSTOM_DOMAIN.length > 0 ? scope.env.CF_CUSTOM_DOMAIN : null,
       defaultDomain:
         typeof scope.env.CF_DEFAULT_DOMAIN === 'string' && scope.env.CF_DEFAULT_DOMAIN.length > 0
           ? scope.env.CF_DEFAULT_DOMAIN
@@ -432,8 +431,9 @@ async function ensureTriggerConfigured(
   scope: RequestScope,
   deps: AdminDeps,
 ): Promise<void> {
-  const domain = scope.env.CF_DEFAULT_DOMAIN || scope.env.CF_CUSTOM_DOMAIN
+  // 只用默认域名：它直连 Cloudflare 边缘、不依赖用户的 DNS。
   // 拿不到自己的对外地址就别乱写——写进去一个错的 MANIFEST_URL 比不写更难查
+  const domain = scope.env.CF_DEFAULT_DOMAIN
   if (!domain || !scope.env.BUILD_TOKEN) return
   try {
     if (await scope.env.KV.get(Keys.cfTriggerConfigured)) return

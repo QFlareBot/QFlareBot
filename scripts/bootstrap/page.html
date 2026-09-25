@@ -86,8 +86,6 @@
     <input id="f-worker" placeholder="qqbot">
     <label>R2 桶名（留空 = &lt;Worker名&gt;-artifacts）</label>
     <input id="f-r2" placeholder="qqbot-artifacts">
-    <label>自定义域名（可选；留空走默认域名部署，部署后可在 CF 控制台随时一键绑定）</label>
-    <input id="f-domain" placeholder="bot.example.com">
     <label>管理面板密码 ADMIN_TOKEN（可选；留空将自动生成随机密钥）</label>
     <input id="f-admin-token" placeholder="留空自动生成（建议自己设置以便记忆）" type="password">
     <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）</label>
@@ -157,14 +155,13 @@ async function api(path, body) {
   return data
 }
 
-let init = { repo: '', defaults: { workerName: 'qqbot', r2Name: '', domain: '', accountId: '' } }
+let init = { repo: '', defaults: { workerName: 'qqbot', r2Name: '', accountId: '' } }
 try {
   init = await api('/api/init')
   if (init.repo) $('repo').textContent = init.repo
   if (init.setupTokenUrl) $('setup-token-link').href = init.setupTokenUrl
   if (init.defaults?.workerName) $('f-worker').value = init.defaults.workerName
   if (init.defaults?.r2Name) $('f-r2').value = init.defaults.r2Name
-  if (init.defaults?.domain) $('f-domain').value = init.defaults.domain
 } catch (err) {
   console.warn('向导后端 API 尚未就绪或由本地文件打开：', err)
   if (location.protocol === 'file:') {
@@ -214,7 +211,6 @@ $('start-btn').onclick = async () => {
       workerName: $('f-worker').value.trim(),
       kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2 和域名
       r2Name: $('f-r2').value.trim(),
-      domain: $('f-domain').value.trim(),
       adminToken: $('f-admin-token').value.trim() || undefined,
       qqAppId: $('f-qq-appid').value.trim(),
       qqSecret: $('f-qq-secret').value.trim(),
@@ -260,20 +256,13 @@ function pollProgress() {
           ['回调地址（QQ 开放平台）', r.webhookUrl],
           ['构建清单地址（MANIFEST_URL）', r.manifestUrl],
         ]
-        if (r.defaultDomain && r.defaultDomain !== r.domain) {
-          rows.push(['默认域名（构建直连）', r.defaultDomain])
-        }
         rows.push(['ADMIN_TOKEN', isCustom ? '已设为您自定义的密码' : r.adminToken])
         $('result-table').innerHTML = rows
           .map(([k, v]) => `<tr><td>${k}</td><td><code>${v}</code></td></tr>`)
           .join('')
 
-        if (!r.domain) {
-          const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
-          $('domains-guide').innerHTML = `💡 <b>国内 QQ Webhook 提示</b>：国内网络访问 <code>*.workers.dev</code> 易受阻断。建议前往 <a href="${domainsUrl}" target="_blank" rel="noopener" style="color: #8ab4f8; text-decoration: underline;">Cloudflare 域名设置页 ↗</a> 添加自定义域名（如 <code>bot.yourdomain.com</code>）。绑定后回调地址填 <code>https://你的域名/webhook</code>。`
-        } else {
-          $('domains-guide').classList.add('hidden')
-        }
+        const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
+        $('domains-guide').innerHTML = `💡 <b>自定义域名（可选）</b>：回调地址默认就是上面的 workers.dev 地址。如果 QQ 开放平台验证回调失败（国内网络访问 <code>*.workers.dev</code> 可能不稳定），或者想用自己的域名，到 <a href="${domainsUrl}" target="_blank" rel="noopener" style="color: #8ab4f8; text-decoration: underline;">Cloudflare 域名设置页 ↗</a> 的 Custom Domains 添加一个（如 <code>bot.yourdomain.com</code>），回调地址改填 <code>https://你的域名/webhook</code>。之后的部署都不会改动你绑的域名。`
 
         // 预填链接由引导结果直接带出（dash 的 permissionGroupKeys 是固定短 key，不需要现查）
         $('builds-token-link').href = r.buildsTokenUrl

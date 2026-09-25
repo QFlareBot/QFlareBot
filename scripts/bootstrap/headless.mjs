@@ -7,11 +7,10 @@
  *   CLOUDFLARE_API_TOKEN     必填，GitHub secret
  *   CLOUDFLARE_BUILDS_TOKEN  可选，GitHub secret（写为 Worker 的 CF_BUILDS_TOKEN）
  *   BUILD_TOKEN              可选，GitHub secret（写为 Worker 的 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）；
- *                            不配的话构建机只能拿面板主密钥当清单令牌
+ *                            不配时首次自动生成，重跑沿用 Worker 上已有的值（不轮换）
  *   CLOUDFLARE_ACCOUNT_ID    可选，多账户时必填
  *   QQ_APPID / QQ_APP_SECRET 可选，GitHub secret；配了则部署后存进 KV
  *   BOOT_WORKER_NAME / BOOT_KV_NAME / BOOT_D1_NAME / BOOT_R2_NAME  可选资源名（none=跳过该资源）
- *   BOOT_DOMAIN              可选自定义域名
  *
  * QQ 凭证走 GitHub secret 而不是 workflow 输入：dispatch 输入会显示在 run 页面，secret 不会。
  */
@@ -52,7 +51,6 @@ try {
     kvName: opt('BOOT_KV_NAME'),
     d1Name: opt('BOOT_D1_NAME'),
     r2Name: opt('BOOT_R2_NAME'),
-    domain: opt('BOOT_DOMAIN'),
     qq: env.QQ_APPID && env.QQ_APP_SECRET ? { appId: env.QQ_APPID, secret: env.QQ_APP_SECRET } : undefined,
     buildsToken: opt('CLOUDFLARE_BUILDS_TOKEN'),
     buildToken: opt('BUILD_TOKEN'),

@@ -2,7 +2,7 @@
 /**
  * 自部署脚本（源码优先模型，见 docs/design.md 与 seed README）：
  *
- *   prepare  拉取构建清单（MANIFEST_URL，失败回退仓库内置清单）→ 合并插件集
+ *   prepare  拉取构建清单（MANIFEST_URL，或引导传来的 MANIFEST_FILE；拉不到默认硬失败）→ 合并插件集
  *            → git: 源码按 commit 下载、esbuild 就地构建、校验声明清单 → 写 manifest.resolved.json
  *            → 调 qqbot-project 生成 dist/ 与 wrangler.generated.jsonc
  *   deploy   有 CLOUDFLARE_API_TOKEN 时走 Versions API：上传 → 预览地址健康检查 → 切流量；
@@ -22,7 +22,7 @@ import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { buildPlugin } from '@qqbot/plugin-cli'
 import { CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
-import { classifyDeployError, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
+import { classifyDeployError, envFromRemoteConfig, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
@@ -47,6 +47,19 @@ function stableStringify(value) {
  * @returns {{ skipped: true } | { ok: true, plugins: unknown[], hash: string, pendingBuild: unknown } | { ok: false, error: string }}
  */
 async function fetchRemoteManifest() {
+  // 引导脚本直接从 D1 读出插件集写成文件交过来：那时它手里有能读 D1 的主 token，
+  // 却不一定有线上 Worker 的鉴权（向导重跑时管理密钥可能是新生成的）
+  const file = process.env.MANIFEST_FILE
+  if (file) {
+    try {
+      const data = JSON.parse(await readFile(file, 'utf8'))
+      if (!Array.isArray(data.plugins)) throw new Error('文件缺少 plugins 数组')
+      console.log(`已从 ${path.basename(file)} 取得 ${data.plugins.length} 个已安装插件`)
+      return { ok: true, plugins: data.plugins, hash: '', pendingBuild: null }
+    } catch (err) {
+      return { ok: false, error: `读取 MANIFEST_FILE 失败：${err.message}` }
+    }
+  }
   const url = process.env.MANIFEST_URL
   if (!url) return { skipped: true }
   try {
@@ -62,7 +75,7 @@ async function fetchRemoteManifest() {
   }
 }
 
-/** 拉取线上 Worker 的基础设施绑定（KV/D1/R2 ID 及自定义域名）；失败则保持环境现状 */
+/** 拉取线上 Worker 的基础设施绑定（Worker 名、KV/D1/R2 标识）；失败则保持环境现状 */
 async function fetchRemoteConfig() {
   const url = process.env.MANIFEST_URL
   if (!url) return null
@@ -151,14 +164,7 @@ async function buildGitPlugin(entry) {
 
 async function prepare() {
   const remoteConfig = await fetchRemoteConfig()
-  if (remoteConfig) {
-    if (remoteConfig.workerName && !process.env.CF_WORKER_NAME) process.env.CF_WORKER_NAME = remoteConfig.workerName
-    if (remoteConfig.kvId && !process.env.CF_KV_ID) process.env.CF_KV_ID = remoteConfig.kvId
-    if (remoteConfig.d1Id && !process.env.CF_D1_ID) process.env.CF_D1_ID = remoteConfig.d1Id
-    if (remoteConfig.r2Name && !process.env.CF_R2_NAME) process.env.CF_R2_NAME = remoteConfig.r2Name
-    if (remoteConfig.domain && !process.env.CF_CUSTOM_DOMAIN) process.env.CF_CUSTOM_DOMAIN = remoteConfig.domain
-    if (remoteConfig.defaultDomain && !process.env.CF_DEFAULT_DOMAIN) process.env.CF_DEFAULT_DOMAIN = remoteConfig.defaultDomain
-  }
+  Object.assign(process.env, envFromRemoteConfig(remoteConfig))
 
   const base = JSON.parse(await readFile(path.join(appDir, 'qqbot.manifest.json'), 'utf8'))
   const remote = await fetchRemoteManifest()
@@ -244,10 +250,10 @@ async function collectModules(dir, prefix = '') {
 /**
  * 跑 wrangler deploy，并把它与 Versions API 的关键差异说清楚。
  *
- * Versions API 只上传代码与绑定，**不碰脚本级设置**；wrangler deploy 会把 routes、
- * workers_dev、triggers.crons 一并同步成配置文件里的样子。而这份配置是从环境变量拼出来的，
- * 少一个变量线上就掉一块——最典型的是 CF_CUSTOM_DOMAIN 没配时生成配置里没有 routes，
- * 线上绑着的自定义域名会被摘掉，QQ 回调地址随之失效，而构建还是报成功。
+ * Versions API 只上传代码与绑定，**不碰脚本级设置**；wrangler deploy 会把 workers_dev、
+ * triggers.crons 同步成配置文件里的样子（CF_WORKERS_DEV=0 关掉的 workers.dev 会被重新打开，
+ * 如果构建环境里那个变量丢了）。routes 例外：配置里不声明时 wrangler 完全不碰域名，
+ * 用户在后台绑的自定义域名保持原样——模板与投影都刻意不声明它（见 generateWranglerConfig）。
  * 这里不拦（拦了会让人连退路都没有），但必须让它在构建日志里显眼。
  */
 function runWranglerDeploy(generated, reason) {
@@ -257,7 +263,7 @@ function runWranglerDeploy(generated, reason) {
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       `⚠️  降级为 wrangler deploy：${reason}`,
       '   wrangler 会按生成配置同步脚本级设置，本次将把线上改成：',
-      `     routes       ${generated.routes?.length ? generated.routes.map((r) => r.pattern).join('、') : '（无——线上若绑了自定义域名会被摘掉）'}`,
+      `     routes       ${generated.routes?.length ? `${generated.routes.map((r) => r.pattern).join('、')}（整体替换，后台另绑的会被摘掉）` : '（未声明——线上的自定义域名保持不动）'}`,
       `     workers_dev  ${generated.workers_dev ?? '（未声明，由 wrangler 决定）'}`,
       `     crons        ${generated.triggers?.crons?.join('、') ?? '（无）'}`,
       '   本次部署不经过预览地址健康检查，也不做 secret 保全校验。',
@@ -323,9 +329,9 @@ async function deployPhase() {
   }
 
   if (isInitialBootstrap) {
-    // 引导首次部署本来就该走 wrangler：资源初始化、域名与 Cron 触发器都靠它落地，
-    // 而域名此时由 CF_CUSTOM_DOMAIN 明确带进来，不存在「被摘掉」的情况。
-    console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 进行资源初始化与域名/触发器绑定…')
+    // 引导首次部署本来就该走 wrangler：脚本创建、workers.dev 与 Cron 触发器都靠它落地。
+    // 配置里不声明 routes，重跑引导也不会动用户在后台绑的自定义域名。
+    console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 创建脚本并绑定 workers.dev 与 Cron 触发器…')
     execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
       cwd: appDir,
       stdio: 'inherit',

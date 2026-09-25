@@ -14,7 +14,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 const CF_API = 'https://api.cloudflare.com/client/v4'
@@ -153,6 +154,54 @@ export async function ensureR2(token, accountId, name) {
   return { name, created: true }
 }
 
+/** 已安装插件集所在的 D1 表；表名与列由 lib.test.mjs 断言与 packages/runtime/src/manifestStore.ts 一致 */
+export const MANIFEST_PLUGINS_TABLE = 'rt_manifest_plugins'
+
+/**
+ * 读 D1 里已安装的插件集（与 /admin/build-manifest 读的是同一张表）。
+ *
+ * 引导的部署要是只打包仓库内置清单，重跑一次就会把面板里装的插件从线上抹掉
+ * （数据还在 D1，插件不跑了），要等下一次构建才回来。这里直接读 D1、不走线上 Worker 的
+ * 构建清单端点：主 token 本来就有 D1 权限，线上 Worker 的鉴权引导却不一定拿得到
+ * （向导重跑时管理密钥可能是新生成的）；Worker 删过、D1 还留着的情况也只有这条路读得到。
+ *
+ * 表不存在（新库、从没装过插件）= 空集；其余失败照常抛出，不猜。
+ */
+export async function readInstalledPlugins(token, accountId, databaseId) {
+  const query = async (sql, params = []) => {
+    const result = await cfFetch(token, `/accounts/${accountId}/d1/database/${databaseId}/query`, {
+      method: 'POST',
+      body: { sql, params },
+    })
+    return result?.[0]?.results ?? []
+  }
+  const tables = await query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [MANIFEST_PLUGINS_TABLE])
+  if (!tables.length) return []
+  const rows = await query(`SELECT name, version, source FROM ${MANIFEST_PLUGINS_TABLE} ORDER BY name`)
+  return rows.map((r) => ({ name: r.name, version: r.version, source: r.source }))
+}
+
+/** Worker 上已有的 secret 名（值本来也读不到） */
+export async function listWorkerSecretNames(token, accountId, workerName) {
+  const result = await cfFetch(token, `/accounts/${accountId}/workers/scripts/${encodeURIComponent(workerName)}/secrets`)
+  return (result ?? []).map((s) => s.name)
+}
+
+/**
+ * 这次该给 Worker 写哪个 BUILD_TOKEN。
+ *
+ * 它在构建 trigger 的 MANIFEST_TOKEN 里有一份副本，而 Worker 往 trigger 写只写一次（KV 打标）。
+ * 所以 Worker 上已经有了就**沿用、不轮换**：重跑换掉它，trigger 那份不会跟着变，之后每次构建
+ * 拉清单都 401、硬失败。显式给了（BUILD_TOKEN secret）才覆盖——那是用户自己在对齐两边。
+ *
+ * @returns {{ value: string, reused: false } | { value: null, reused: true }}
+ */
+export function resolveBuildToken({ explicit, existingSecretNames }) {
+  if (explicit) return { value: explicit, reused: false }
+  if (existingSecretNames.includes('BUILD_TOKEN')) return { value: null, reused: true }
+  return { value: randomBytes(32).toString('base64url'), reused: false }
+}
+
 /** workers.dev 子域（拼面板/回调地址用） */
 export async function getWorkersSubdomain(token, accountId) {
   const result = await cfFetch(token, `/accounts/${accountId}/workers/subdomain`)
@@ -176,7 +225,15 @@ function runAsync(cmd, args, { cwd, env = {} } = {}) {
   })
 }
 
-export async function buildAndDeploy({ repoRoot, token, accountId, workerName, bindings = {} }) {
+/**
+ * installedPlugins：D1 里已安装的插件集，写成文件经 MANIFEST_FILE 交给 prepare，与内置清单合并构建。
+ * undefined = 这次没有 D1，只用内置清单。
+ */
+export async function buildAndDeploy({ repoRoot, token, accountId, workerName, bindings = {}, installedPlugins }) {
+  const manifestFile = installedPlugins
+    ? path.join(os.tmpdir(), `qqbot-installed-plugins-${randomBytes(6).toString('hex')}.json`)
+    : undefined
+  if (manifestFile) await writeFile(manifestFile, JSON.stringify({ plugins: installedPlugins }))
   const env = {
     CLOUDFLARE_API_TOKEN: token,
     CLOUDFLARE_ACCOUNT_ID: accountId,
@@ -184,11 +241,15 @@ export async function buildAndDeploy({ repoRoot, token, accountId, workerName, b
     ...(bindings.kvId ? { CF_KV_ID: bindings.kvId } : {}),
     ...(bindings.d1Id ? { CF_D1_ID: bindings.d1Id } : {}),
     ...(bindings.r2Name ? { CF_R2_NAME: bindings.r2Name } : {}),
-    ...(bindings.domain ? { CF_CUSTOM_DOMAIN: bindings.domain } : {}),
+    ...(manifestFile ? { MANIFEST_FILE: manifestFile } : {}),
     INITIAL_BOOTSTRAP: 'true',
   }
-  await runAsync('pnpm', ['install', '--frozen-lockfile'], { cwd: repoRoot })
-  await runAsync('pnpm', ['--filter', '@qqbot/seed', 'run', 'deploy:manifest'], { cwd: repoRoot, env })
+  try {
+    await runAsync('pnpm', ['install', '--frozen-lockfile'], { cwd: repoRoot })
+    await runAsync('pnpm', ['--filter', '@qqbot/seed', 'run', 'deploy:manifest'], { cwd: repoRoot, env })
+  } finally {
+    if (manifestFile) await rm(manifestFile, { force: true })
+  }
 }
 
 /** 部署后写 Worker secrets（wrangler secret bulk，stdin 传 JSON）；token 仅用于 wrangler 鉴权 */
@@ -281,14 +342,12 @@ export function workerDomainsUrl(accountId, workerName) {
 /** 把引导结果渲染成 Markdown 汇总（GITHUB_STEP_SUMMARY / 向导完成页共用） */
 export function renderSummary(result, { redactSecrets = false } = {}) {
   const {
-    baseUrl,
-    defaultDomain,
-    domain,
     panelUrl,
     webhookUrl,
     manifestUrl,
     adminToken,
     buildToken,
+    buildTokenReused,
     resources,
     buildsTokenWritten,
     triggerConfigured,
@@ -305,9 +364,6 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   lines.push(`| 管理面板 | ${panelUrl} |`)
   lines.push(`| 回调地址（填到 QQ 开放平台） | \`${webhookUrl}\` |`)
   lines.push(`| 构建机拉清单地址（MANIFEST_URL） | \`${manifestUrl}\` |`)
-  if (defaultDomain && defaultDomain !== domain) {
-    lines.push(`| 默认域名（构建直连） | \`${defaultDomain}\` |`)
-  }
   if (resources.kv) lines.push(`| KV | ${resources.kv.name}${resources.kv.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.d1) lines.push(`| D1 | ${resources.d1.name}${resources.d1.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.r2) lines.push(`| R2 | ${resources.r2.name}${resources.r2.created ? '（新建）' : '（复用已有）'} |`)
@@ -351,9 +407,20 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     lines.push('   # 环境变量（Settings → Builds → Environment variables）')
     lines.push(`   MANIFEST_URL=${manifestUrl}`)
     // Worker 侧叫 BUILD_TOKEN、构建机侧叫 MANIFEST_TOKEN，是同一个值——名字不一致最容易配错
-    lines.push(`   MANIFEST_TOKEN=${redactSecrets ? '<引导自动生成的 BUILD_TOKEN，见下>' : buildToken}`)
+    const manifestToken = buildTokenReused
+      ? '<与 Worker 上已有的 BUILD_TOKEN 同值，见下>'
+      : redactSecrets
+        ? '<引导自动生成的 BUILD_TOKEN，见下>'
+        : buildToken
+    lines.push(`   MANIFEST_TOKEN=${manifestToken}`)
     lines.push('   ```')
-    if (redactSecrets) {
+    if (buildTokenReused) {
+      lines.push('')
+      lines.push(
+        '   🔑 Worker 上已有 `BUILD_TOKEN`，本次沿用、没有轮换——构建机侧已经填好的 `MANIFEST_TOKEN` 保持不动即可。' +
+          '还没填过的话：`wrangler secret put BUILD_TOKEN` 重设一个随机长字符串，再把 `MANIFEST_TOKEN` 填成同一个值。',
+      )
+    } else if (redactSecrets) {
       lines.push('')
       lines.push(
         '   🔑 `BUILD_TOKEN` 由引导自动生成并写入 Worker，为避免公开日志泄露没有打印在这里。' +
@@ -370,15 +437,14 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     lines.push('   **尚未配置 `CF_BUILDS_TOKEN`**（Worker 触发重建用）：创建一个 user token（权限：Workers Builds Configuration Edit + Workers Scripts Read，账户范围限本账户），`wrangler secret put CF_BUILDS_TOKEN` 写入，或重跑引导时带上。配置后到面板装一个插件即可验证重建链路。')
   }
   lines.push('')
-  if (!domain) {
-    lines.push(`2. **绑定自定义域名**（国内 QQ 开放平台 Webhook 刚需）：`)
-    lines.push(`   由于国内网络无法稳定直连 \`*.workers.dev\`，请打开 [Cloudflare 域名设置页](${workerDomainsUrl(accountId, workerName)})，在 **Custom Domains** 中添加你的二级域名（如 \`bot.yourdomain.com\`）。`)
-    lines.push(`   绑定后，QQ 开放平台的回调地址即为：\`https://你的域名/webhook\`。`)
-    lines.push('')
-    lines.push(`3. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填好${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
-  } else {
-    lines.push(`2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 \`${webhookUrl}\`${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
-  }
+  lines.push(`2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 \`${webhookUrl}\`${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
+  lines.push('')
+  // 域名由用户自己选、自己绑：引导不接收域名，部署也不声明 routes，绑上之后不会被任何部署路径改动
+  lines.push(
+    `3. **自定义域名（可选）**：如果 QQ 开放平台验证回调失败（国内网络访问 \`*.workers.dev\` 可能不稳定），或者想用自己的域名，` +
+      `打开 [Cloudflare 域名设置页](${workerDomainsUrl(accountId, workerName)})，在 **Custom Domains** 里添加一个（如 \`bot.yourdomain.com\`），` +
+      '回调地址改填 `https://你的域名/webhook`。之后的部署都不会改动你绑的域名。',
+  )
   lines.push('')
   if (warnings.length) {
     lines.push('### ⚠️ 提醒')
@@ -386,7 +452,7 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     for (const w of warnings) lines.push(`- ${w}`)
     lines.push('')
   }
-  lines.push('> 幂等：本工作流可随时重跑。重跑会复用同名资源；重跑时填了新的自定义域名会切换域名。')
+  lines.push('> 幂等：本工作流可随时重跑。重跑会复用同名资源，带上 D1 里已安装的插件，沿用已有的 BUILD_TOKEN。')
   lines.push('')
   return lines.join('\n')
 }
@@ -405,9 +471,9 @@ export function appendStepSummary(markdown) {
  *   accountId    可选；多账户时必填
  *   workerName   Worker/KV/D1 名（默认 qqbot）；r2Name 默认 `${workerName}-artifacts`
  *   kvName/d1Name/r2Name  覆盖各自名字；'none' = 跳过该资源（不绑定）；未填 = 默认名
- *   domain       可选自定义域名
  *   qq           可选 { appId, secret }，提供则部署后存进 KV
  *   buildsToken  可选，提供则写为 CF_BUILDS_TOKEN secret
+ *   buildToken   可选，提供则写为 BUILD_TOKEN；不提供时 Worker 上已有就沿用，没有才生成
  *   repoRoot     仓库根目录
  *   onStep       可选 (name, state: 'run'|'ok'|'warn'|'fail', detail?) => void
  */
@@ -419,7 +485,6 @@ export async function runBootstrap(opts) {
     kvName,
     d1Name,
     r2Name,
-    domain,
     qq,
     buildsToken,
     buildToken,
@@ -489,24 +554,31 @@ export async function runBootstrap(opts) {
     kvId: kv.id,
     d1Id: d1?.id,
     r2Name: r2?.name,
-    domain,
   }
 
-  await step('构建并部署 Worker', () => buildAndDeploy({ repoRoot, token, accountId, workerName, bindings }))
+  // 已安装插件跟着一起构建，否则重跑引导会把面板里装的插件从线上抹掉（见 readInstalledPlugins）
+  const installedPlugins = d1
+    ? await step('读取已安装插件（D1）', () => readInstalledPlugins(token, accountId, d1.id))
+    : undefined
+
+  await step('构建并部署 Worker', () => buildAndDeploy({ repoRoot, token, accountId, workerName, bindings, installedPlugins }))
 
   const subdomain = await step('查询 workers.dev 子域', () => getWorkersSubdomain(token, accountId))
   const defaultDomain = subdomain ? `${workerName}.${subdomain}.workers.dev` : ''
-  const defaultBaseUrl = defaultDomain ? `https://${defaultDomain}` : ''
-  const baseUrl = domain ? `https://${domain}` : defaultBaseUrl
-  if (!baseUrl) throw new BootstrapError('拿不到 workers.dev 子域，且未配置自定义域名')
-
-  // 构建机拉清单地址：优先采用稳定默认域名（直连 Cloudflare 内部边缘网络，零外部 DNS 依赖）
-  const manifestUrl = `${defaultBaseUrl || baseUrl}/admin/build-manifest`
+  if (!defaultDomain) {
+    throw new BootstrapError('拿不到账户的 workers.dev 子域', {
+      hint: '到 Cloudflare 后台 Workers & Pages 页面领取一次 workers.dev 子域后重跑',
+    })
+  }
+  // 面板、回调、构建机拉清单都走默认域名：直连 Cloudflare 边缘，零外部 DNS 依赖
+  const baseUrl = `https://${defaultDomain}`
+  const manifestUrl = `${baseUrl}/admin/build-manifest`
 
   const adminToken = customAdminToken || randomBytes(32).toString('base64url')
-  // 构建机拉清单的专用令牌一律自动生成：以前它是可选项，不配就退回「把 ADMIN_TOKEN 当
-  // MANIFEST_TOKEN 用」——等于默认把面板登录凭证发给构建环境。没有理由把这个留给用户决定。
-  const resolvedBuildToken = buildToken || randomBytes(32).toString('base64url')
+  // 构建机拉清单的专用令牌不留给用户决定：以前它是可选项，不配就退回「把 ADMIN_TOKEN 当
+  // MANIFEST_TOKEN 用」——等于默认把面板登录凭证发给构建环境。首次自动生成，重跑沿用（见 resolveBuildToken）
+  const existingSecrets = await step('查询 Worker 已有密钥', () => listWorkerSecretNames(token, accountId, workerName))
+  const buildTokenPlan = resolveBuildToken({ explicit: buildToken, existingSecretNames: existingSecrets })
   await step('写入 Worker 密钥与资源配置', () => {
     writeSecrets({
       repoRoot,
@@ -521,10 +593,8 @@ export async function runBootstrap(opts) {
         CF_KV_ID: kv.id,
         CF_D1_ID: d1?.id || '',
         CF_R2_NAME: r2?.name || '',
-        CF_CUSTOM_DOMAIN: domain || '',
-        // 构建机拉清单用的专用令牌（Worker 侧叫 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）。
-        // 不配的话构建机只能拿面板主密钥当 MANIFEST_TOKEN——那等于把面板登录凭证交给构建环境。
-        BUILD_TOKEN: resolvedBuildToken,
+        // 构建机拉清单用的专用令牌（Worker 侧叫 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）；沿用时不写
+        ...(buildTokenPlan.value ? { BUILD_TOKEN: buildTokenPlan.value } : {}),
         ...(buildsToken ? { CF_BUILDS_TOKEN: buildsToken } : {}),
       },
     })
@@ -539,13 +609,13 @@ export async function runBootstrap(opts) {
     workerName,
     baseUrl,
     defaultDomain,
-    domain: domain || null,
     panelUrl: `${baseUrl}/`,
     webhookUrl: `${baseUrl}/webhook`,
     manifestUrl,
     adminToken,
-    /** 构建机侧的 MANIFEST_TOKEN 用它，不是面板主密钥 */
-    buildToken: resolvedBuildToken,
+    /** 构建机侧的 MANIFEST_TOKEN 用它，不是面板主密钥；沿用 Worker 上已有值时为 null（值读不到） */
+    buildToken: buildTokenPlan.value,
+    buildTokenReused: buildTokenPlan.reused,
     /** 构建 token 的预填创建链接（向导第 ④ 步那个按钮） */
     buildsTokenUrl: buildsTokenUrl(accountId, `${workerName}-builds`),
     resources: {

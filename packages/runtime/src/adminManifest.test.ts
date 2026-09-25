@@ -159,7 +159,6 @@ describe('GET /admin/build-config', () => {
       CF_KV_ID: 'kv-12345',
       CF_D1_ID: 'd1-67890',
       CF_R2_NAME: 'r2-bucket',
-      CF_CUSTOM_DOMAIN: 'bot.example.com',
     })
     expect((await call('/admin/build-config')).status).toBe(401)
 
@@ -172,7 +171,6 @@ describe('GET /admin/build-config', () => {
         kvId: string | null
         d1Id: string | null
         r2Name: string | null
-        domain: string | null
         defaultDomain: string | null
         hasD1: boolean
         hasR2: boolean
@@ -184,7 +182,6 @@ describe('GET /admin/build-config', () => {
       kvId: 'kv-12345',
       d1Id: 'd1-67890',
       r2Name: 'r2-bucket',
-      domain: 'bot.example.com',
       defaultDomain: null,
       hasD1: true,
       hasR2: true,
@@ -208,7 +205,6 @@ describe('GET /admin/build-config', () => {
         kvId: string | null
         d1Id: string | null
         r2Name: string | null
-        domain: string | null
         defaultDomain: string | null
         hasD1: boolean
         hasR2: boolean
@@ -219,7 +215,6 @@ describe('GET /admin/build-config', () => {
       kvId: null,
       d1Id: null,
       r2Name: null,
-      domain: null,
       defaultDomain: null,
       hasD1: true,
       hasR2: true,

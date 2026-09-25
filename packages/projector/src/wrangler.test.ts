@@ -196,7 +196,8 @@ describe('generateWranglerConfig', () => {
     expect(twice.migrations).toEqual(once.migrations)
   })
 
-  it('自动注入推导得到的资源 ID 与自定义域名 routes', () => {
+  it('自动注入推导得到的资源 ID；不注入 routes，哪怕环境里有 CF_CUSTOM_DOMAIN', () => {
+    // 声明了 routes 的配置会让 wrangler 整体替换域名，把用户在后台绑的摘掉
     process.env.CF_CUSTOM_DOMAIN = 'bot.test.com'
     try {
       const templateBase = {
@@ -219,7 +220,7 @@ describe('generateWranglerConfig', () => {
       expect(out.kv_namespaces?.[0]?.id).toBe('injected-kv-id')
       expect(out.d1_databases?.[0]?.database_id).toBe('injected-d1-id')
       expect(out.r2_buckets?.[0]?.bucket_name).toBe('injected-r2-bucket')
-      expect(out.routes).toEqual([{ pattern: 'bot.test.com', custom_domain: true }])
+      expect(out).not.toHaveProperty('routes')
       expect(out.workers_dev).toBe(true)
     } finally {
       delete process.env.CF_CUSTOM_DOMAIN

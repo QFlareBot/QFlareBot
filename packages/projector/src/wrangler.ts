@@ -196,7 +196,7 @@ export function generateWranglerConfig(opts: {
     }
   }
 
-  // 动态补齐缺省的资源绑定 ID 与自定义域名；未指定的可选资源安全剥离避免校验失败
+  // 动态补齐缺省的资源绑定 ID；未指定的可选资源安全剥离避免校验失败
   // 显式跳过（CF_*=none）优先级最高：它表达的是「这个资源不存在」，模板里硬编码的值不能把它顶掉
   const skipKv = isSkipped('CF_KV_ID')
   const skipD1 = isSkipped('CF_D1_ID')
@@ -247,10 +247,9 @@ export function generateWranglerConfig(opts: {
     delete config.r2_buckets
   }
 
-  const customDomain = process.env.CF_CUSTOM_DOMAIN?.trim()
-  if (customDomain) {
-    config.routes = [{ pattern: customDomain, custom_domain: true }]
-  }
+  // 自定义域名不在这里注入，交给用户在 Cloudflare 后台绑：wrangler deploy 只在配置声明了
+  // routes 时才碰域名，而一旦声明就按它**整体替换**（replace_state）——注入一个，
+  // 用户在后台另绑的全被摘掉。不声明，所有部署路径都不动线上的域名。
 
   // 引导出来的新 Worker 需要 workers.dev（MANIFEST_URL 走默认域名，零外部 DNS 依赖），
   // 但绑了自定义域名之后没有理由继续把面板与 /webhook 暴露在 workers.dev 上。

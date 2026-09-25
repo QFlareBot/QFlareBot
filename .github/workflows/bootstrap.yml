@@ -33,10 +33,6 @@ on:
         description: 'R2 桶名（留空=<Worker名>-artifacts；none=跳过 R2）'
         required: false
         default: ''
-      custom_domain:
-        description: '自定义域名（可选；留空走默认域名部署，部署后可在 CF 控制台随时绑定）'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -74,14 +70,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_BUILDS_TOKEN: ${{ secrets.CLOUDFLARE_BUILDS_TOKEN }}
           # 可选：构建机拉清单用的专用令牌（Worker 侧 BUILD_TOKEN = 构建机侧 MANIFEST_TOKEN）。
-          # 不配的话汇总里会让你把面板主密钥填给构建环境——能用，但不该长期这样。
+          # 不配时首次自动生成，重跑沿用 Worker 上已有的值；配了则以它为准（想轮换时用）。
           BUILD_TOKEN: ${{ secrets.BUILD_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
           BOOT_WORKER_NAME: ${{ inputs.worker_name }}
           BOOT_KV_NAME: ${{ inputs.kv_name }}
           BOOT_D1_NAME: ${{ inputs.d1_name }}
           BOOT_R2_NAME: ${{ inputs.r2_name }}
-          BOOT_DOMAIN: ${{ inputs.custom_domain }}
           # 敏感凭证只能走 secret：dispatch 输入会直接公开显示在 run 页面
           QQ_APPID: ${{ secrets.QQ_APPID }}
           QQ_APP_SECRET: ${{ secrets.QQ_APP_SECRET }}
@@ -96,6 +91,5 @@ jobs:
           BOOT_KV_NAME: ${{ inputs.kv_name }}
           BOOT_D1_NAME: ${{ inputs.d1_name }}
           BOOT_R2_NAME: ${{ inputs.r2_name }}
-          BOOT_DOMAIN: ${{ inputs.custom_domain }}
           REPO: ${{ github.repository }}
         run: node scripts/bootstrap/wizard.mjs

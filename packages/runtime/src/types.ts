@@ -33,7 +33,6 @@ export interface RuntimeEnv {
   CF_KV_ID?: string
   CF_D1_ID?: string
   CF_R2_NAME?: string
-  CF_CUSTOM_DOMAIN?: string
   CF_DEFAULT_DOMAIN?: string
   [binding: string]: unknown
 }

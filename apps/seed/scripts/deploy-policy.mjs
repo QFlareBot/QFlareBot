@@ -15,6 +15,28 @@ export function unresolvedBindings(projection) {
 }
 
 /**
+ * `/admin/build-config` 的回答 → 本进程要补的环境变量。只补缺，构建环境里显式设置的优先。
+ *
+ * `hasD1` / `hasR2` 为假时补 `none` 哨兵。CF_* 缺失分不清「资源没绑」与「绑着但 secret 没写」，
+ * 投影只能照「没解析出来」处理，部署护栏随即拒绝——R2 未激活降级、D1 选了 none 的部署
+ * 会因此**每一次**构建都被拒。判据同 manifestPolicy：只信 Worker 侧 `!!env.X` 的如实回答，
+ * 旧版 Worker 没有这两个字段 → undefined → 不补，照旧交给护栏，方向是安全的。
+ */
+export function envFromRemoteConfig(remoteConfig, env = process.env) {
+  if (!remoteConfig) return {}
+  const out = {}
+  const fill = (name, value) => {
+    if (value && !env[name]) out[name] = value
+  }
+  fill('CF_WORKER_NAME', remoteConfig.workerName)
+  fill('CF_KV_ID', remoteConfig.kvId)
+  fill('CF_D1_ID', remoteConfig.d1Id || (remoteConfig.hasD1 === false ? 'none' : undefined))
+  fill('CF_R2_NAME', remoteConfig.r2Name || (remoteConfig.hasR2 === false ? 'none' : undefined))
+  fill('CF_DEFAULT_DOMAIN', remoteConfig.defaultDomain)
+  return out
+}
+
+/**
  * 拉不到构建清单时该怎么办。
  *
  * 默认硬失败：继续构建只会打包仓库内置清单，D1 里装的插件会从 Worker 上静默消失

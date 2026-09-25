@@ -22,6 +22,11 @@
      secret 会直接失败并在日志里给出配置指引。
 3. 工作流结束后照 Summary 里的清单收尾：QQ 开放平台填回调地址、连接仓库（向导会引导）。
 
+**域名由你自己选、自己绑。** 引导只部署到默认的 `<Worker名>.<子域>.workers.dev`，不接收也不绑定自定义域名。
+回调地址先填默认域名；QQ 开放平台验证不通过（国内网络访问 `*.workers.dev` 可能不稳定）或想换成自己的域名时，
+到 Cloudflare 后台 Worker → Settings → Domains & Routes 的 Custom Domains 添加一个，回调地址改填
+`https://你的域名/webhook`。之后的部署（重跑引导、自部署构建）都不会改动你绑的域名。
+
 Token 权限清单（预填链接已带；手动创建照此勾选）：
 
 | 权限组 | 级别 |
@@ -41,13 +46,14 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 - 验证 token 与权限；单账户自动推导账户 ID（多账户要求填 `account_id` 输入）
 - **幂等创建/复用**同名 KV / D1 / R2（名字可在 workflow 输入里改；R2 未激活时自动降级为
   不绑定，只在后台激活 R2 后重跑即可）
-- 构建 + `wrangler deploy` 首次部署
-- 资源 id、Worker 名、自定义域名**不进 Git**：经 `wrangler secret bulk` 写入 Worker Secrets，
+- 读取 D1 里已安装的插件，与内置清单一起构建 + `wrangler deploy`——重跑引导不会把面板里装的插件
+  从线上抹掉
+- 资源 id、Worker 名**不进 Git**：经 `wrangler secret bulk` 写入 Worker Secrets，
   并通过 `GET /admin/build-config` 构建端点动态下发给构建机（K/V、D1 必须有 id：自部署走的
   Versions API 不认名字，缺 id 报 10021）
 - 写入 Worker 密钥：`ADMIN_TOKEN`（无 UI 模式取自你的 GitHub secret；网页向导模式在页面里
   自填或自动生成并展示）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
-  `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`、`CF_CUSTOM_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
+  `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
   secret 时再写 `CF_BUILDS_TOKEN`
 - QQ 凭证：无 UI 模式配了 secrets `QQ_APPID`/`QQ_APP_SECRET`、或网页向导表单里填了的话，部署后
   调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，与管理面板同一条路径）
@@ -121,7 +127,7 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
    | `CF_WORKER_TAG` / `CF_TRIGGER_UUID` | **可选**。省略时运行时按 `vars.WORKER_NAME` 自发现并缓存进 KV（要求仓库已连接 Workers Builds；重连仓库导致缓存失效会自动重发现）。想写死也可以：tag 是 `GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错），trigger UUID 来自 `GET /accounts/{account_id}/builds/workers/{tag}/triggers` |
    | `CF_BUILD_BRANCH` | 可选，默认 `main` |
-   | `BUILD_TOKEN` | 构建机拉清单的专用令牌，引导**总是**自动生成并写入——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**。两边的对齐由引导代劳（自动写 trigger 环境变量），不用自己搬。想换值：`wrangler secret put BUILD_TOKEN` 后同步改构建环境变量 |
+   | `BUILD_TOKEN` | 构建机拉清单的专用令牌，引导首次自动生成并写入，**重跑沿用 Worker 上已有的值、不轮换**（trigger 里那份不会跟着变，换了构建就 401）——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**。两边的对齐由引导代劳（自动写 trigger 环境变量），不用自己搬。想换值：`wrangler secret put BUILD_TOKEN` 后同步改构建环境变量，或重跑无 UI 引导时配 `BUILD_TOKEN` secret |
 
    `vars.WORKER_NAME` 在 `wrangler.jsonc` 里（引导工作流按 Worker 名同步维护），自发现靠它定位自己。
 
@@ -131,8 +137,8 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 - **声明了 Durable Object 的插件在安装这一步就被拦下。** DO 的 `migrations` 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个持久状态、造不出来，所以投影只校验不合成。校验发生在构建阶段——不拦的话插件已经写进 D1 才炸，而且是**每一次**构建都炸（包括之后装别的插件），直到有人想到卸载它。运行时读不到仓库里的 `wrangler.jsonc`，判断不了那条 migrations 加没加，所以把要加的内容原样给出，由用户确认后重装。
 - `deploy` 阶段直接用构建产物走 Versions API：上传版本 → 预览地址 `/healthz` 健康检查 → 切 100% 流量，健康检查失败不切（含 Durable Object 的 Worker 无预览 URL，平台限制下跳过）。
 - 部署目标取 `wrangler.generated.jsonc` 的 `name`，不是模板的——`CF_WORKER_NAME` 只在 `prepare` 进程里被 `/admin/build-config` 注入，而构建机的 build 与 deploy 是两条独立命令、两个进程。
-- 绑定没解析出来（`dist/projection.json` 的 `bindings` 里有 `unresolved`）一律拒绝部署。判据是投影记下的解析状态而不是元数据里的占位符：D1/R2 没解析出来时是**整个绑定不出现**，扫占位符只拦得住 KV。
-- 降级到 `wrangler deploy` 时会打一段醒目警告并列出本次会同步的脚本级设置（routes / workers_dev / crons）——Versions API 不碰这些，wrangler 会按配置改，`CF_CUSTOM_DOMAIN` 缺失时线上自定义域名会被摘掉。
+- 绑定没解析出来（`dist/projection.json` 的 `bindings` 里有 `unresolved`）一律拒绝部署。判据是投影记下的解析状态而不是元数据里的占位符：D1/R2 没解析出来时是**整个绑定不出现**，扫占位符只拦得住 KV。Worker 如实回答没绑的资源（`/admin/build-config` 的 `hasD1` / `hasR2` 为假，比如 R2 未激活被降级）按显式跳过（`CF_*=none`）处理，不算没解析出来。
+- 降级到 `wrangler deploy` 时会打一段醒目警告并列出本次会同步的脚本级设置（routes / workers_dev / crons）——Versions API 不碰这些，wrangler 会按配置改。自定义域名例外：模板与生成配置都不声明 routes，wrangler 在这种情况下完全不碰域名（一旦声明，它会按配置**整体替换**，后台另绑的会被摘掉）。
 - 构建机拉不到构建清单时**硬失败**（见上文），只有「这次部署确实没有 D1」（`/admin/build-config` 的 `hasD1` 为假）或显式 `MANIFEST_FALLBACK=1` 才会回退到仓库内置清单。
 - 回滚三选一：Cloudflare 后台版本回滚；D1 恢复清单快照 + 重新触发构建；git revert 内置清单 + 重建。
 

@@ -241,7 +241,6 @@ const server = createServer(async (req, res) => {
           kvName: env.BOOT_KV_NAME ?? '',
           d1Name: env.BOOT_D1_NAME ?? '',
           r2Name: env.BOOT_R2_NAME ?? '',
-          domain: env.BOOT_DOMAIN ?? '',
           accountId: state.accountId ?? '',
         },
         setupTokenUrl: SETUP_TOKEN_URL,
@@ -295,7 +294,6 @@ const server = createServer(async (req, res) => {
         kvName: body.kvName?.trim() || undefined,
         d1Name: body.d1Name?.trim() || undefined,
         r2Name: body.r2Name?.trim() || undefined,
-        domain: body.domain?.trim() || undefined,
         qq: body.qqAppId && body.qqSecret ? { appId: body.qqAppId.trim(), secret: body.qqSecret.trim() } : undefined,
         buildsToken: null, // 构建 token 在连接仓库后的收尾步骤写入
         adminToken: adminToken || undefined,
@@ -373,14 +371,22 @@ const server = createServer(async (req, res) => {
           return items[0].trigger_uuid ?? items[0].uuid ?? items[0].id
         }
         const triggerUuid = await verify()
-        writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, workerName: state.workerName, secrets: { CF_BUILDS_TOKEN: buildsToken } })
-        buildsTokenWritten = true
+
+        // 引导沿用了 Worker 上已有的 BUILD_TOKEN 时手里没有它的值，写不了 trigger 的 MANIFEST_TOKEN。
+        // 这里两边都握在手里，就地换一个新值：先写 trigger，成功了才写 Worker；
+        // trigger 没写成就两边都不动，原来的值仍然是对齐的
+        const { result } = state.provision
+        const rotatedBuildToken = result.buildToken ? null : randomBytes(32).toString('base64url')
+        mask(rotatedBuildToken)
 
         // 写构建配置失败不算引导失败：Worker 已经部署好、凭证也写进去了，
         // 用户照 Summary 里的兜底清单手填四项同样能跑，没必要把整个引导推倒。
         if (triggerUuid) {
           try {
-            await configureTrigger(buildsToken, state.accountId, triggerUuid, state.provision.result)
+            await configureTrigger(buildsToken, state.accountId, triggerUuid, {
+              manifestUrl: result.manifestUrl,
+              buildToken: result.buildToken ?? rotatedBuildToken,
+            })
             triggerConfigured = true
             log('构建配置（命令与清单环境变量）已写入 trigger')
           } catch (err) {
@@ -390,6 +396,18 @@ const server = createServer(async (req, res) => {
         } else {
           triggerError = '拿不到 trigger uuid'
         }
+
+        const rotated = rotatedBuildToken && triggerConfigured
+        writeSecrets({
+          repoRoot,
+          token: state.token,
+          accountId: state.accountId,
+          workerName: state.workerName,
+          secrets: { CF_BUILDS_TOKEN: buildsToken, ...(rotated ? { BUILD_TOKEN: rotatedBuildToken } : {}) },
+        })
+        buildsTokenWritten = true
+        // 记下来：重复点「完成」时直接复用，不会再换一次
+        if (rotated) Object.assign(result, { buildToken: rotatedBuildToken, buildTokenReused: false })
       }
       const summary = renderSummary({
         ...state.provision.result,

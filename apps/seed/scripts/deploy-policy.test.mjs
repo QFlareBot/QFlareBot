@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDeployError, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
+import { classifyDeployError, envFromRemoteConfig, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
 
 describe('unresolvedBindings', () => {
   it('挑出 unresolved，skipped 不算——CF_*=none 是「这个资源不存在」，不是没解析出来', () => {
@@ -16,6 +16,62 @@ describe('unresolvedBindings', () => {
 
   it('旧产物没有 bindings 字段 → null，调用方据此拒绝部署而不是当成"没问题"', () => {
     expect(unresolvedBindings({ metadata: {} })).toBeNull()
+  })
+})
+
+describe('envFromRemoteConfig', () => {
+  const full = {
+    workerName: 'mybot',
+    kvId: 'kv-1',
+    d1Id: 'd1-1',
+    r2Name: 'mybot-artifacts',
+    defaultDomain: 'mybot.sub.workers.dev',
+    hasD1: true,
+    hasR2: true,
+  }
+
+  it('把 build-config 的回答映射成 CF_* 环境变量', () => {
+    expect(envFromRemoteConfig(full, {})).toEqual({
+      CF_WORKER_NAME: 'mybot',
+      CF_KV_ID: 'kv-1',
+      CF_D1_ID: 'd1-1',
+      CF_R2_NAME: 'mybot-artifacts',
+      CF_DEFAULT_DOMAIN: 'mybot.sub.workers.dev',
+    })
+  })
+
+  it('构建环境里显式设置的优先，不覆盖', () => {
+    const env = envFromRemoteConfig(full, { CF_KV_ID: 'mine', CF_R2_NAME: 'none' })
+    expect(env).not.toHaveProperty('CF_KV_ID')
+    expect(env).not.toHaveProperty('CF_R2_NAME')
+    expect(env.CF_D1_ID).toBe('d1-1')
+  })
+
+  it('R2 未激活被降级（hasR2 为假、没有桶名）→ CF_R2_NAME=none，部署护栏按跳过放行', () => {
+    // 不补的话模板里的 r2_buckets[0] 解析成 unresolved，每一次构建都被护栏拒绝
+    const env = envFromRemoteConfig({ ...full, r2Name: null, hasR2: false }, {})
+    expect(env.CF_R2_NAME).toBe('none')
+  })
+
+  it('D1 选了 none（hasD1 为假）→ CF_D1_ID=none，与 manifestPolicy 的 no-d1 分支配套', () => {
+    const env = envFromRemoteConfig({ ...full, d1Id: null, hasD1: false }, {})
+    expect(env.CF_D1_ID).toBe('none')
+  })
+
+  it('绑着但 secret 没写（id 为 null 而 has* 为真）→ 不补，交给护栏拒绝', () => {
+    // 这时补 none 会把真实存在的绑定从新版本里剥掉，env.DB / env.R2 当场消失
+    const env = envFromRemoteConfig({ ...full, d1Id: null, r2Name: null }, {})
+    expect(env).not.toHaveProperty('CF_D1_ID')
+    expect(env).not.toHaveProperty('CF_R2_NAME')
+  })
+
+  it('旧版 Worker 没有 has* 字段 → 不猜', () => {
+    const env = envFromRemoteConfig({ kvId: 'kv-1', d1Id: null, r2Name: null }, {})
+    expect(env).toEqual({ CF_KV_ID: 'kv-1' })
+  })
+
+  it('拿不到 build-config → 什么都不补', () => {
+    expect(envFromRemoteConfig(null, {})).toEqual({})
   })
 })
 
