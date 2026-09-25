@@ -7,6 +7,7 @@ import {
   readInstalledPlugins,
   renderSummary,
   resolveBuildToken,
+  verifyToken,
 } from './lib.mjs'
 
 const ok = (result) => new Response(JSON.stringify({ success: true, errors: [], result }))
@@ -29,6 +30,19 @@ function stubFetch(...responses) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('verifyToken', () => {
+  it('GET /user/tokens/verify——POST 会被拒（7001 Method POST not available）', async () => {
+    const calls = stubFetch(ok({ id: 'tok-1', status: 'active' }))
+    await expect(verifyToken('tok')).resolves.toEqual({ id: 'tok-1' })
+    expect(calls[0]).toMatchObject({ url: 'https://api.cloudflare.com/client/v4/user/tokens/verify', method: 'GET' })
+  })
+
+  it('状态不是 active → 报错', async () => {
+    stubFetch(ok({ id: 'tok-1', status: 'disabled' }))
+    await expect(verifyToken('tok')).rejects.toBeInstanceOf(BootstrapError)
+  })
 })
 
 describe('resolveBuildToken', () => {

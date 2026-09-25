@@ -61,9 +61,9 @@ export async function cfFetch(token, apiPath, { method = 'GET', body } = {}) {
   return envelope.result
 }
 
-/** 验证 token 本身有效且激活 */
+/** 验证 token 本身有效且激活（这个端点只收 GET，POST 会报 7001） */
 export async function verifyToken(token) {
-  const result = await cfFetch(token, '/user/tokens/verify', { method: 'POST' })
+  const result = await cfFetch(token, '/user/tokens/verify')
   if (result?.status !== 'active') {
     throw new BootstrapError(`Token 状态不是 active：${result?.status ?? '未知'}`)
   }
