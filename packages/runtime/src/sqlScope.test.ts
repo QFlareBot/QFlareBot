@@ -3,7 +3,8 @@
  * 框架就枚举不出一个插件建过哪些表。
  */
 import { describe, expect, it } from 'vitest'
-import { prefixesCollide, scopeSql, tablePrefix } from './sqlScope.js'
+import { createScopedDB } from './scoped.js'
+import { flattenForExec, prefixesCollide, scopeSql, tablePrefix } from './sqlScope.js'
 
 const P = tablePrefix('hello')
 const scope = (sql: string) => scopeSql(sql, P)
@@ -168,5 +169,79 @@ describe('占位符本身的错误给出可读提示', () => {
 
   it('占位名里有非法字符', () => {
     expect(() => scope('SELECT * FROM {no-tes}')).toThrow(/不合法/)
+  })
+})
+
+/** 把连续空白归一，只比较语句本身 */
+const squash = (sql: string) => sql.replace(/\s+/g, ' ').trim()
+
+describe('flattenForExec：交给 D1 exec 之前压成一行', () => {
+  it('多行 DDL 压成一行，多条语句与分号原样保留', () => {
+    const flat = flattenForExec(`
+      CREATE TABLE IF NOT EXISTS t (
+        a TEXT NOT NULL,
+        PRIMARY KEY (a)
+      );\r
+      CREATE INDEX IF NOT EXISTS t_a ON t(a);
+    `)
+    expect(flat).not.toMatch(/[\r\n]/)
+    expect(squash(flat)).toBe('CREATE TABLE IF NOT EXISTS t ( a TEXT NOT NULL, PRIMARY KEY (a) ); CREATE INDEX IF NOT EXISTS t_a ON t(a);')
+  })
+
+  it('去掉注释：压成一行后 -- 会把后面的语句全吞掉', () => {
+    const flat = flattenForExec('CREATE TABLE t (a TEXT) -- 备注\n; /* 块\n注释 */ CREATE TABLE u (b TEXT); -- 结尾注释')
+    expect(squash(flat)).toBe('CREATE TABLE t (a TEXT) ; CREATE TABLE u (b TEXT);')
+  })
+
+  it('引号里的内容原样保留：-- 和 ; 不当注释 / 分隔，转义引号认得出', () => {
+    const sql = `INSERT INTO t (v, w) VALUES ('a -- b; c', 'it''s /* x */') ; SELECT "col--x", [odd;name], \`q\`\`q\` FROM t`
+    expect(flattenForExec(sql)).toBe(sql)
+  })
+
+  it('引号里有换行：直接报可读的错，不留给 D1 报 incomplete input', () => {
+    expect(() => flattenForExec("INSERT INTO t (v) VALUES ('第一行\n第二行')")).toThrow(/引号内不能换行/)
+    expect(() => flattenForExec('CREATE TABLE "a\nb" (x)')).toThrow(/引号内不能换行/)
+  })
+
+  it('没配对的引号原样交给 D1 去报语法错误', () => {
+    expect(flattenForExec("SELECT 'oops\nFROM t")).toBe("SELECT 'oops\nFROM t")
+  })
+})
+
+describe('ctx.db.exec', () => {
+  function recordingD1() {
+    const seen: string[] = []
+    const d1 = {
+      async exec(sql: string) {
+        seen.push(sql)
+        return { count: 0, duration: 0 }
+      },
+    } as unknown as D1Database
+    return { d1, seen }
+  }
+
+  it('交给 D1 的是展开了表前缀、压成一行的 SQL（wifepicker 那种多行建表不再断在第一行）', async () => {
+    const { d1, seen } = recordingD1()
+    await createScopedDB(d1, 'hello').exec(`
+      CREATE TABLE IF NOT EXISTS {notes} (
+        id TEXT PRIMARY KEY, -- 主键
+        ts INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS {notes_ts} ON {notes}(ts);
+    `)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).not.toMatch(/[\r\n]/)
+    expect(squash(seen[0]!)).toBe(
+      'CREATE TABLE IF NOT EXISTS p_hello_notes ( id TEXT PRIMARY KEY, ts INTEGER NOT NULL ); CREATE INDEX IF NOT EXISTS p_hello_notes_ts ON p_hello_notes(ts);',
+    )
+  })
+
+  it('只有注释或空白：不调用 D1（D1 对空 SQL 会报错）', async () => {
+    const { d1, seen } = recordingD1()
+    const db = createScopedDB(d1, 'hello')
+    await db.exec('-- 以后再建表\n')
+    await db.exec('   ')
+    expect(seen).toEqual([])
   })
 })

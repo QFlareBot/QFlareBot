@@ -201,3 +201,63 @@ export function scopeSql(sql: string, prefix: string): string {
 
   return out
 }
+
+/**
+ * 交给 D1 `exec()` 之前把 SQL 压成一行。
+ *
+ * D1 的 exec 按 `\n` 拆语句（文档原话：queries separated by `\n`）。插件用模板字符串写的
+ * 多行 CREATE TABLE，第一行就是半截语句，报 `incomplete input` 且后面的全不执行——表一张都建不出来。
+ * 同一行里用 `;` 分隔的多条语句它照常执行，所以把字符串以外的换行换成空格就行。
+ * 运行时自己建表一直先把换行压成空格（events.ts、dedupe.ts），插件走的 ctx.db.exec 以前漏了这一步。
+ *
+ * 注释一并去掉：压成一行后 `--` 会把后面所有语句吞掉。引号里的换行动不得（改了就改了值），
+ * 而 D1 碰到它一样会从中间拆开，所以直接报一个看得懂的错，不留给 D1 报 incomplete input。
+ */
+export function flattenForExec(sql: string): string {
+  let out = ''
+  let i = 0
+  while (i < sql.length) {
+    const c = sql[i]!
+    if (c === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i)
+      i = nl < 0 ? sql.length : nl + 1
+      out += ' '
+      continue
+    }
+    if (c === '/' && sql[i + 1] === '*') {
+      const close = sql.indexOf('*/', i + 2)
+      i = close < 0 ? sql.length : close + 2
+      out += ' '
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`' || c === '[') {
+      const end = quotedEnd(sql, i)
+      // 没配对的引号是语法错误，原样交给 D1 去报
+      if (end < 0) return out + sql.slice(i)
+      const quoted = sql.slice(i, end)
+      if (/[\r\n]/.test(quoted)) {
+        throw new Error(
+          `ctx.db.exec 的 SQL 里，引号内不能换行：${quoted.slice(0, 40)}…——D1 的 exec 按行拆语句，这类值请用 ctx.db.run() 绑定参数写入`,
+        )
+      }
+      out += quoted
+      i = end
+      continue
+    }
+    out += c === '\n' || c === '\r' ? ' ' : c
+    i++
+  }
+  return out
+}
+
+/** start 处是开引号，返回配对引号之后的位置；没配对返回 -1。'' "" `` 是转义，[ ] 没有转义 */
+function quotedEnd(sql: string, start: number): number {
+  const close = sql[start] === '[' ? ']' : sql[start]!
+  let j = start + 1
+  while (j < sql.length) {
+    if (sql[j] !== close) j++
+    else if (close !== ']' && sql[j + 1] === close) j += 2
+    else return j + 1
+  }
+  return -1
+}

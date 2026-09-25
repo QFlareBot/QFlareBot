@@ -193,12 +193,18 @@ commands: {
 
 ```ts
 hooks: {
-  async onInstall({ ctx }) {
-    await ctx.db.exec('CREATE TABLE IF NOT EXISTS {notes} (user_id TEXT PRIMARY KEY, note TEXT, ts INTEGER NOT NULL)')
+  // 钩子的参数就是 ctx 本身，不是 { ctx }
+  async onInstall(ctx) {
+    await ctx.db.exec(`
+      CREATE TABLE IF NOT EXISTS {notes} (user_id TEXT PRIMARY KEY, note TEXT, ts INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS {notes_ts} ON {notes}(ts);
+    `)
   },
-  async onBoot({ ctx }) { /* 每个 isolate 一次的轻量初始化 */ },
+  async onBoot(ctx) { /* 每个 isolate 一次的轻量初始化 */ },
 },
 ```
+
+`exec` 可以一次写多条语句、随意换行和写 `--` 注释：D1 的 `exec` 本身按行拆语句，跨行的 `CREATE TABLE` 会从第一行断掉，框架交给 D1 之前会先压成一行。唯一的限制是**引号里不能换行**（压行会改掉值，框架会直接报错），带换行的数据用 `run()` 绑定参数写入。
 
 D1 的 `{表名}` 不是语法糖，是硬规则：SQL 里出现不带本插件前缀的表名会**直接抛错**，`sqlite_master`、加引号、加库名限定都拦，`ATTACH` / `PRAGMA` 整条拒绝。字符串字面量和注释里的内容不受影响，往库里塞 JSON 不会被误伤。
 

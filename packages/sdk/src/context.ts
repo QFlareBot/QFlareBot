@@ -77,7 +77,10 @@ export interface ScopedR2 {
 export interface ScopedDB {
   /** @deprecated 直接在 SQL 里写 `{表名}` 占位即可，不必手动拼前缀 */
   table(name: string): string
-  /** 建表等 DDL，可含多条语句；不接受绑定参数 */
+  /**
+   * 建表等 DDL，可含多条语句、可以换行（框架压成一行再交给 D1——D1 的 exec 按行拆语句）；
+   * 不接受绑定参数，引号里不能换行（带换行的值用 run() 绑定参数写入）
+   */
   exec(sql: string): Promise<void>
   run(sql: string, ...params: unknown[]): Promise<{ changes: number }>
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T[]>

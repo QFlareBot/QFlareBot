@@ -7,7 +7,7 @@
  * 前缀不只是防撞名：框架凭它才知道某个插件建过哪些键 / 表 / 对象，卸载时才清得掉（见 purge.ts）。
  */
 import type { ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
-import { scopeSql, tablePrefix } from './sqlScope.js'
+import { flattenForExec, scopeSql, tablePrefix } from './sqlScope.js'
 
 /** 插件数据的键前缀。卸载时按它枚举并清理，见 purge.ts */
 export const kvPrefix = (plugin: string): string => `p:${plugin}:`
@@ -112,7 +112,9 @@ export function createScopedDB(db: D1Database | undefined, name: string): Scoped
   return {
     table: (n) => prefix + n,
     async exec(sql) {
-      await db.exec(scope(sql))
+      // D1 的 exec 按行拆语句，多行 DDL 不压成一行会从第一行就断掉，见 flattenForExec
+      const flat = flattenForExec(scope(sql))
+      if (flat.trim()) await db.exec(flat)
     },
     async run(sql, ...params) {
       const result = await db.prepare(scope(sql)).bind(...params).run()
