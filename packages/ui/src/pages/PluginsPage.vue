@@ -168,18 +168,39 @@ const installing = ref(false)
  */
 const preview = ref<InstallPreview | null>(null)
 
-/** GitHub 链接 / owner/repo → 解析 ref 的最新 commit；git: 原样交给后端校验 */
-async function resolveSource(raw: string): Promise<string> {
+/**
+ * GitHub 链接 / owner/repo → 解析 ref 的最新 commit；git: 原样交给后端校验。
+ * notice：链接写了默认分支以外的分支时给的提醒——装的是那个分支，以后更新却跟默认分支走，不说一声就是悄悄换代码
+ */
+async function resolveSource(raw: string): Promise<{ source: string; notice?: string }> {
   const s = raw.trim().replace(/\.git$/, '').replace(/\/+$/, '')
-  if (s.startsWith('git:')) return s
+  if (s.startsWith('git:')) return { source: s }
   let m = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:\/tree\/([^/\s]+)?([^#\s]*))?(?:[?#].*)?$/i.exec(s)
   if (!m) m = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(s)
   if (!m) throw new Error('无法识别的来源。支持 GitHub 链接、owner/repo 或 git:owner/repo@commit[#子目录]')
   // 没写分支就跟默认分支走（GitHub API 认 HEAD），与检查更新用的 commits.atom 一致；写死 main 的话默认分支叫 master 的仓库会 422
   const [, owner, repo, ref = 'HEAD', sub = ''] = m
   if (!owner || !repo) throw new Error('无法识别的来源。支持 GitHub 链接、owner/repo 或 git:owner/repo@commit[#子目录]')
-  const sha = /^[0-9a-f]{7,40}$/i.test(ref) ? ref : await resolveSha(owner, repo, ref)
-  return `git:${owner}/${repo}@${sha}${sub ? `#${sub.replace(/^\//, '')}` : ''}`
+  const isSha = /^[0-9a-f]{7,40}$/i.test(ref)
+  const branch = isSha || ref === 'HEAD' ? null : ref
+  const [sha, defaultBranch] = await Promise.all([isSha ? ref : resolveSha(owner, repo, ref), branch ? defaultBranchOf(owner, repo) : null])
+  const source = `git:${owner}/${repo}@${sha}${sub ? `#${sub.replace(/^\//, '')}` : ''}`
+  // monorepo 的子目录链接几乎都带 /tree/<默认分支>/，那种不提醒，否则每次都是噪音
+  if (!branch || branch === defaultBranch) return { source }
+  const follows = defaultBranch ? `默认分支 ${defaultBranch}` : `仓库的默认分支（${branch} 就是默认分支的话可以忽略）`
+  return { source, notice: `链接指定了分支 ${branch}：这次装的是它的最新提交，但以后检查更新、一键更新都会跟${follows}走，不会跟 ${branch}` }
+}
+
+/** 仓库默认分支；查不到返回 null——不挡安装，只影响提醒措辞 */
+async function defaultBranchOf(owner: string, repo: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: { accept: 'application/vnd.github+json' } })
+    if (!res.ok) return null
+    const data = (await res.json()) as { default_branch?: unknown }
+    return typeof data.default_branch === 'string' ? data.default_branch : null
+  } catch {
+    return null
+  }
 }
 
 async function resolveSha(owner: string, repo: string, ref: string): Promise<string> {
@@ -200,7 +221,9 @@ async function startInstall() {
   if (!raw || installing.value) return
   installing.value = true
   try {
-    preview.value = await api.previewInstall(await resolveSource(raw))
+    const { source, notice } = await resolveSource(raw)
+    const result = await api.previewInstall(source)
+    preview.value = notice ? { ...result, warnings: [...result.warnings, notice] } : result
   } catch (e) {
     push((e as Error).message, 'error')
   } finally {
