@@ -36,6 +36,10 @@
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid #555; border-top-color: #7ab8ff;
           border-radius: 50%; animation: r 1s linear infinite; vertical-align: -2px; margin-right: 6px; }
   @keyframes r { to { transform: rotate(360deg); } }
+  .cmd { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .cmd .k { flex: 0 0 9em; font-size: 13px; color: #9aa0a6; }
+  .cmd code { flex: 1; min-width: 0; padding: 6px 8px; word-break: break-all; }
+  .cmd button { margin: 0; padding: 5px 12px; font-size: 13px; flex-shrink: 0; }
   pre.log { background: #0b0d11; border: 1px solid #232833; border-radius: 8px; padding: 12px;
             font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0; }
 </style>
@@ -107,13 +111,16 @@
     <h2>④ 创建构建 Token & 连接仓库（装/卸插件自动重建的前置）</h2>
     <ol class="hint">
       <li><b>第 1 步：创建构建 Token</b>：点击下方按钮打开 Cloudflare 页面（权限已预填），创建后粘贴到下方输入框；</li>
-      <li><b>第 2 步：连接仓库</b>：打开 Workers Builds 设置页 → <b>Connect</b> → 选择这个 fork 仓库，分支选默认分支；</li>
+      <li><b>第 2 步：连接仓库</b>：打开 Worker 设置页，在 <b>Build</b> 一栏点 <b>Connect</b> → 选择这个仓库，分支选默认分支；
+        <b>Build command 与 Deploy command 必须照下面填</b>（表单默认的 <code>npx wrangler deploy</code> 在这个仓库里跑不通），其余保持默认；</li>
       <li>粘贴 Token 后下方会自动开始监听，仓库连好后自动显示验证通过。</li>
-      <li><b>构建命令与清单环境变量不用管</b>：点「完成引导」时会自动写进构建 trigger，Cloudflare 后台一个格子都不用填。</li>
+      <li><b>清单环境变量不用填</b>：<code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 在点「完成引导」时自动写进构建 trigger，顺带把上面两条命令再校正一遍。</li>
     </ol>
+    <div class="cmd"><span class="k">Build command</span><code id="cmd-build"></code><button class="ghost" data-copy="cmd-build">复制</button></div>
+    <div class="cmd"><span class="k">Deploy command</span><code id="cmd-deploy"></code><button class="ghost" data-copy="cmd-deploy">复制</button></div>
     <div style="margin: 12px 0;">
       <a id="builds-token-link" class="btn ghost" target="_blank" rel="noopener">① 打开预填的构建 Token 创建页 ↗</a>
-      <a id="connect-link" class="btn" target="_blank" rel="noopener">② 打开 Workers Builds 设置页 ↗</a>
+      <a id="connect-link" class="btn" target="_blank" rel="noopener">② 打开 Worker 设置页（Build → Connect）↗</a>
     </div>
     <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这两项即可：<b>Workers Builds Configuration (Edit)</b> 与 <b>Workers Scripts (Read)</b>，账户范围选本账户。</div>
     <label>构建 Token（Worker 触发重建用，粘贴后自动检测仓库连接）</label>
@@ -144,6 +151,20 @@ const $ = (id) => document.getElementById(id)
 const show = (id) => $(id).classList.remove('hidden')
 const say = (id, text, cls = '') => { const el = $(id); el.textContent = text; el.className = 'msg ' + cls; el.classList.remove('hidden') }
 
+// 复制按钮：clipboard 不可用（非安全上下文等）时退回选中文本，让用户自己 Ctrl+C
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-copy]')
+  if (!btn) return
+  const el = $(btn.dataset.copy)
+  try {
+    await navigator.clipboard.writeText(el.textContent)
+    btn.textContent = '已复制'
+    setTimeout(() => { btn.textContent = '复制' }, 1500)
+  } catch {
+    getSelection().selectAllChildren(el)
+  }
+})
+
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json().catch(() => ({}))
@@ -162,6 +183,8 @@ try {
   if (init.setupTokenUrl) $('setup-token-link').href = init.setupTokenUrl
   if (init.defaults?.workerName) $('f-worker').value = init.defaults.workerName
   if (init.defaults?.r2Name) $('f-r2').value = init.defaults.r2Name
+  if (init.buildCommand) $('cmd-build').textContent = init.buildCommand
+  if (init.deployCommand) $('cmd-deploy').textContent = init.deployCommand
 } catch (err) {
   console.warn('向导后端 API 尚未就绪或由本地文件打开：', err)
   if (location.protocol === 'file:') {
@@ -250,7 +273,7 @@ function pollProgress() {
           $('admin-token-custom-hint').classList.add('hidden')
           $('admin-token').textContent = r.adminToken
         }
-        $('connect-link').href = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/builds`
+        $('connect-link').href = r.buildsConnectUrl
         const rows = [
           ['管理面板', r.panelUrl],
           ['回调地址（QQ 开放平台）', r.webhookUrl],

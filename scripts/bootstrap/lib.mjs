@@ -329,9 +329,12 @@ export function buildsTokenUrl(accountId, tokenName) {
   return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`
 }
 
-/** Workers Builds 后台的连接页（worker 详情 → Builds） */
+/**
+ * 连接仓库的入口：Worker 设置页（Build 一栏的 Connect）。
+ * 不是 `/production/builds`——那是构建记录页，用户到了那里找不到填构建命令的表单。
+ */
 export function buildsConnectUrl(accountId, workerName) {
-  return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/builds`
+  return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/settings`
 }
 
 /** Worker 的 Domains & Routes / Triggers 设置页 */
@@ -393,7 +396,7 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     )
   } else {
     lines.push(
-      `1. **连接仓库**（装/卸插件触发重建的前置）：打开 [Workers Builds 设置页](${buildsConnectUrl(accountId, workerName)}) → Connect，` +
+      `1. **连接仓库**（装/卸插件触发重建的前置）：打开 [Worker 设置页](${buildsConnectUrl(accountId, workerName)})，在 Build 一栏点 Connect，` +
         '选择本 fork 仓库，分支选默认分支，然后照抄下面四项。' +
         '（网页向导模式会在连接完成后自动写入这四项，不必手抄；这里是无 UI 模式的兜底——' +
         '工作流跑的时候仓库还没连接，trigger 不存在，写不了。）',
@@ -618,6 +621,8 @@ export async function runBootstrap(opts) {
     buildTokenReused: buildTokenPlan.reused,
     /** 构建 token 的预填创建链接（向导第 ④ 步那个按钮） */
     buildsTokenUrl: buildsTokenUrl(accountId, `${workerName}-builds`),
+    /** 连接仓库的入口（向导第 ④ 步第二个按钮） */
+    buildsConnectUrl: buildsConnectUrl(accountId, workerName),
     resources: {
       kv: kv ? { name: kvTarget, id: kv.id, created: kv.created } : null,
       d1: d1 ? { name: d1Target, id: d1.id, created: d1.created } : null,

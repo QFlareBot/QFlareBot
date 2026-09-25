@@ -244,6 +244,9 @@ const server = createServer(async (req, res) => {
           accountId: state.accountId ?? '',
         },
         setupTokenUrl: SETUP_TOKEN_URL,
+        // 连接仓库的表单要照填这两条：默认的 npx wrangler deploy 在这个仓库里跑不通
+        buildCommand: BUILD_COMMAND,
+        deployCommand: DEPLOY_COMMAND,
       })
       return
     }

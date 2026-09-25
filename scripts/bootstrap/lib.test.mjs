@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BootstrapError,
+  buildsConnectUrl,
   listWorkerSecretNames,
   MANIFEST_PLUGINS_TABLE,
   readInstalledPlugins,
@@ -103,6 +104,13 @@ describe('listWorkerSecretNames', () => {
     const calls = stubFetch(ok([{ name: 'ADMIN_TOKEN', type: 'secret_text' }, { name: 'BUILD_TOKEN', type: 'secret_text' }]))
     await expect(listWorkerSecretNames('tok', 'acc', 'my bot')).resolves.toEqual(['ADMIN_TOKEN', 'BUILD_TOKEN'])
     expect(calls[0].url).toBe('https://api.cloudflare.com/client/v4/accounts/acc/workers/scripts/my%20bot/secrets')
+  })
+})
+
+describe('buildsConnectUrl', () => {
+  it('指向 Worker 设置页（Build → Connect），不是构建记录页', () => {
+    // /production/builds 只列构建记录，用户到了那里找不到填构建命令的连接表单
+    expect(buildsConnectUrl('acc', 'my bot')).toBe('https://dash.cloudflare.com/acc/workers/services/view/my%20bot/production/settings')
   })
 })
 
