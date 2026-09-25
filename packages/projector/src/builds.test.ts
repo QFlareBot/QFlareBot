@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BUILDS_PAGE_SIZE, BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, type BuildRecord } from './builds.js'
+import { BUILDS_PAGE_SIZE, BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, productionBranchOf, type BuildRecord } from './builds.js'
 import { CloudflareApiError } from './cloudflare.js'
 
 type Call = { url: string; init: RequestInit }
@@ -122,6 +122,25 @@ describe('CloudflareBuildsApi.getTriggerUuid', () => {
   it('只有预览 trigger 时返回 null', async () => {
     const { api } = fakeApi(() => ok([{ trigger_uuid: 'preview', branch_includes: ['*'] }]))
     expect(await api.getTriggerUuid('t')).toBeNull()
+  })
+})
+
+describe('CloudflareBuildsApi.listTriggers / productionBranchOf', () => {
+  it('收录 uuid 与分支规则，跳过缺 uuid 的条目和非字符串分支', async () => {
+    const { api } = fakeApi(() =>
+      ok({ items: [{ trigger_uuid: 'a', branch_includes: ['master', 3] }, { branch_includes: ['x'] }, { id: 'b' }] }),
+    )
+    expect(await api.listTriggers('t')).toEqual([
+      { uuid: 'a', branchIncludes: ['master'] },
+      { uuid: 'b', branchIncludes: [] },
+    ])
+  })
+
+  it('生产分支取第一个不带通配的名字；取不到返回 null 而不是猜 main', () => {
+    expect(productionBranchOf({ uuid: 'u', branchIncludes: ['release'] })).toBe('release')
+    expect(productionBranchOf({ uuid: 'u', branchIncludes: ['*', 'dev'] })).toBe('dev')
+    expect(productionBranchOf({ uuid: 'u', branchIncludes: ['*'] })).toBeNull()
+    expect(productionBranchOf({ uuid: 'u', branchIncludes: [] })).toBeNull()
   })
 })
 

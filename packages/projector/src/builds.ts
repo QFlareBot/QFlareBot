@@ -48,6 +48,21 @@ export interface TriggerEnvValue {
   is_secret?: boolean
 }
 
+/** trigger 列表里的一项，只收录本项目用到的字段 */
+export interface BuildTrigger {
+  uuid: string
+  /** 连接仓库时设的分支规则：生产 trigger 是具体分支名，预览 trigger 是 "*" 这类通配；字段缺失时为空 */
+  branchIncludes: string[]
+}
+
+/**
+ * trigger 的生产分支：branch_includes 里第一个不带通配的名字。
+ * 取不到（字段缺失，或只有通配）返回 null，由调用方决定回退——别在这里替人猜 main。
+ */
+export function productionBranchOf(trigger: BuildTrigger): string | null {
+  return trigger.branchIncludes.find((b) => b !== '' && !b.includes('*')) ?? null
+}
+
 export interface TriggerBuildOptions {
   /** 构建该分支的当前状态（不 pin 具体 commit） */
   branch: string
@@ -133,6 +148,22 @@ export class CloudflareBuildsApi {
       .map((s) => ({ id: s.id, tag: s.tag }))
   }
 
+  /** 列出某个 Worker 的 Builds trigger；仓库连上 Workers Builds 之前为空 */
+  async listTriggers(workerTag: string): Promise<BuildTrigger[]> {
+    type Raw = { trigger_uuid?: unknown; uuid?: unknown; id?: unknown; branch_includes?: unknown }
+    const result = await this.#request<Raw[] | { items?: Raw[] }>(
+      'GET',
+      `/builds/workers/${encodeURIComponent(workerTag)}/triggers`,
+    )
+    const items = Array.isArray(result) ? result : (result.items ?? [])
+    return items.flatMap((t) => {
+      const uuid = [t.trigger_uuid, t.uuid, t.id].find((v): v is string => typeof v === 'string')
+      if (!uuid) return []
+      const includes = Array.isArray(t.branch_includes) ? t.branch_includes.filter((b): b is string => typeof b === 'string') : []
+      return [{ uuid, branchIncludes: includes }]
+    })
+  }
+
   /**
    * 查某个 Worker 的生产 Builds trigger，返回 trigger_uuid。
    * 仓库连上 Workers Builds 之前该列表为空——所以自发现只能在连接之后成功。
@@ -142,18 +173,8 @@ export class CloudflareBuildsApi {
    * `scripts/bootstrap/lib.mjs` 的 pickProductionTrigger 是同一条规则。
    */
   async getTriggerUuid(workerTag: string): Promise<string | null> {
-    type Trigger = { trigger_uuid?: string; uuid?: string; id?: string; branch_includes?: unknown }
-    const result = await this.#request<Trigger[] | { items?: Trigger[] }>(
-      'GET',
-      `/builds/workers/${encodeURIComponent(workerTag)}/triggers`,
-    )
-    const items = Array.isArray(result) ? result : (result.items ?? [])
-    const production = items.find((t) => {
-      const includes = Array.isArray(t.branch_includes) ? t.branch_includes : []
-      return !includes.length || includes.some((b) => typeof b === 'string' && b !== '' && !b.includes('*'))
-    })
-    const uuid = production?.trigger_uuid ?? production?.uuid ?? production?.id
-    return typeof uuid === 'string' ? uuid : null
+    const production = (await this.listTriggers(workerTag)).find((t) => !t.branchIncludes.length || productionBranchOf(t) !== null)
+    return production?.uuid ?? null
   }
 
   async #request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {

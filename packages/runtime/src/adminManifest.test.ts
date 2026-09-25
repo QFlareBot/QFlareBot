@@ -61,6 +61,9 @@ function createFetchMock(
     if (url.includes('/builds/workers/tag/builds')) {
       return new Response(JSON.stringify({ success: true, result: { items: builds } }), { status: 200 })
     }
+    if (url.endsWith('/builds/workers/tag/triggers')) {
+      return new Response(JSON.stringify({ success: true, result: [{ trigger_uuid: 'trig-1', branch_includes: ['main'] }] }), { status: 200 })
+    }
     // trigger 配置写入（PATCH）：记下来供断言，注意别和上面的 /builds 触发端点混淆
     if (/\/builds\/triggers\/[^/]+(\/environment_variables)?$/.test(url)) {
       triggerWrites.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
@@ -650,6 +653,92 @@ describe('构建目标自发现（省略 CF_WORKER_TAG / CF_TRIGGER_UUID）', ()
     const res = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
     expect(res.status).toBe(200)
     expect(calls.some((u) => u.endsWith('/workers/scripts'))).toBe(false)
+  })
+})
+
+describe('触发构建的分支', () => {
+  const ok = (result: unknown) => new Response(JSON.stringify({ success: true, errors: [], result }), { status: 200 })
+
+  /** triggers 可在两次触发之间改（模拟在 Cloudflare 后台改生产分支）；记下每次触发带的分支 */
+  function branchMock(initial: Array<Record<string, unknown>> | null) {
+    const state = { triggers: initial, branches: [] as string[] }
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workers/scripts')) return ok([{ id: 'qqbot', tag: 'tag' }])
+      if (url.endsWith('/builds/workers/tag/triggers')) {
+        return state.triggers ? ok(state.triggers) : new Response(JSON.stringify({ success: false, errors: [{ code: 1, message: 'boom' }] }), { status: 500 })
+      }
+      if (/\/builds\/triggers\/[^/]+\/builds$/.test(url)) {
+        state.branches.push(JSON.parse(String(init?.body)).branch)
+        return ok({ build_uuid: `build-${state.branches.length}` })
+      }
+      return new Response(`unexpected ${url}`, { status: 500 })
+    }) as typeof fetch
+    return { fetchImpl, state }
+  }
+
+  function branchSetup(fetchImpl: typeof fetch, envOverrides: Record<string, unknown> = {}) {
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({ DB: createManifestD1(), CF_ACCOUNT_ID: 'acc', CF_BUILDS_TOKEN: 'tok', WORKER_NAME: 'qqbot', ...envOverrides })
+    const build = async (body?: unknown) => {
+      const res = await runtime.fetch!(
+        new Request(`${BASE}/admin/builds`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        }),
+        env,
+        createExecutionContext(),
+      )
+      return { status: res.status, body: (await res.json()) as { branch?: string; error?: string } }
+    }
+    return { build, env }
+  }
+
+  it('没配 CF_BUILD_BRANCH：用连接仓库时选的生产分支，不再写死 main', async () => {
+    const { fetchImpl, state } = branchMock([{ trigger_uuid: 'trig-1', branch_includes: ['master'] }])
+    const { build } = branchSetup(fetchImpl)
+    expect((await build()).body.branch).toBe('master')
+    expect(state.branches).toEqual(['master'])
+  })
+
+  it('生产分支现查不缓存：后台改了分支，下一次触发就跟着变（trigger_uuid 不变）', async () => {
+    const { fetchImpl, state } = branchMock([{ trigger_uuid: 'trig-1', branch_includes: ['master'] }])
+    const { build } = branchSetup(fetchImpl)
+    await build()
+    state.triggers = [{ trigger_uuid: 'trig-1', branch_includes: ['release'] }]
+    await build()
+    expect(state.branches).toEqual(['master', 'release'])
+  })
+
+  it('env 写死 trigger 时按这个 trigger 找分支，不被排在前面的预览 trigger 带偏', async () => {
+    const { fetchImpl, state } = branchMock([
+      { trigger_uuid: 'preview', branch_includes: ['*'] },
+      { trigger_uuid: 'trig-1', branch_includes: ['dev'] },
+    ])
+    const { build } = branchSetup(fetchImpl, { CF_WORKER_TAG: 'tag', CF_TRIGGER_UUID: 'trig-1' })
+    await build()
+    expect(state.branches).toEqual(['dev'])
+  })
+
+  it('优先级：请求里指定的 > CF_BUILD_BRANCH > 生产分支', async () => {
+    const { fetchImpl, state } = branchMock([{ trigger_uuid: 'trig-1', branch_includes: ['master'] }])
+    const { build } = branchSetup(fetchImpl, { CF_BUILD_BRANCH: 'pinned' })
+    await build()
+    await build({ branch: 'hotfix' })
+    expect(state.branches).toEqual(['pinned', 'hotfix'])
+  })
+
+  it('查不到分支（接口失败 / 没有具体分支名）：回退 main，构建照常触发', async () => {
+    const failing = branchMock(null)
+    const { build: buildFailing } = branchSetup(failing.fetchImpl, { CF_WORKER_TAG: 'tag', CF_TRIGGER_UUID: 'trig-1' })
+    expect((await buildFailing()).status).toBe(200)
+    expect(failing.state.branches).toEqual(['main'])
+
+    const bare = branchMock([{ trigger_uuid: 'trig-1' }])
+    const { build: buildBare } = branchSetup(bare.fetchImpl)
+    await buildBare()
+    expect(bare.state.branches).toEqual(['main'])
   })
 })
 

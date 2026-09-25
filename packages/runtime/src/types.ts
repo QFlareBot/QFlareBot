@@ -24,7 +24,7 @@ export interface RuntimeEnv {
   CF_WORKER_TAG?: string
   /** Builds trigger 的 UUID（GET /accounts/.../builds/workers/{tag}/triggers）；可省略，见上 */
   CF_TRIGGER_UUID?: string
-  /** 触发构建的分支，默认 main */
+  /** 触发构建的分支；省略时用 Builds trigger 当前的生产分支（每次现查），查不到才用 main */
   CF_BUILD_BRANCH?: string
   /** 本 Worker 的脚本名（= wrangler.jsonc 的 name，引导工作流同步写入 vars）。自发现构建目标用 */
   WORKER_NAME?: string

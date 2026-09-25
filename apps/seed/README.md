@@ -131,7 +131,7 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
    | `CF_ACCOUNT_ID` | Cloudflare 账号 ID |
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
    | `CF_WORKER_TAG` / `CF_TRIGGER_UUID` | **可选**。省略时运行时按 `vars.WORKER_NAME` 自发现并缓存进 KV（要求仓库已连接 Workers Builds；重连仓库导致缓存失效会自动重发现）。想写死也可以：tag 是 `GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错），trigger UUID 来自 `GET /accounts/{account_id}/builds/workers/{tag}/triggers` |
-   | `CF_BUILD_BRANCH` | 可选，默认 `main` |
+   | `CF_BUILD_BRANCH` | 可选。省略时用连接仓库时在 Workers Builds 里选的生产分支（每次触发构建现查，fork 后改了分支名、或在后台改了生产分支都会跟着走），查不到才用 `main`。配了就以它为准 |
    | `BUILD_TOKEN` | 构建机拉清单的专用令牌，引导首次自动生成并写入，**重跑沿用 Worker 上已有的值、不轮换**（trigger 里那份不会跟着变，换了构建就 401）——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**。两边的对齐由引导代劳（自动写 trigger 环境变量），不用自己搬。想换值：`wrangler secret put BUILD_TOKEN` 后同步改构建环境变量，或重跑无 UI 引导时配 `BUILD_TOKEN` secret |
 
    `vars.WORKER_NAME` 在 `wrangler.jsonc` 里（引导工作流按 Worker 名同步维护），自发现靠它定位自己。

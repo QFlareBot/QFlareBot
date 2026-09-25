@@ -1,4 +1,12 @@
-import { BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, doExportName, suggestMigrationTag, type BuildRecord } from '@qqbot/projector'
+import {
+  BUILD_COMMAND,
+  CloudflareBuildsApi,
+  DEPLOY_COMMAND,
+  doExportName,
+  productionBranchOf,
+  suggestMigrationTag,
+  type BuildRecord,
+} from '@qqbot/projector'
 import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
@@ -1019,6 +1027,22 @@ async function resolveBuildTargets(scope: RequestScope, deps: AdminDeps): Promis
   return targets
 }
 
+/**
+ * 这个 trigger 当前的生产分支（连接仓库时选的那个）。每次触发构建都现查、不缓存：
+ * 在 Cloudflare 后台改生产分支不会换 trigger_uuid，缓存了就会一直往旧分支上触发——
+ * 旧分支还在的话，甚至会悄悄构建旧代码。多一次 GET，构建本来就不频繁。
+ * 查不到返回 null，由调用方回退。
+ */
+async function productionBranch(api: CloudflareBuildsApi, targets: BuildTargets, deps: AdminDeps): Promise<string | null> {
+  try {
+    const trigger = (await api.listTriggers(targets.workerTag)).find((t) => t.uuid === targets.triggerUuid)
+    return trigger ? productionBranchOf(trigger) : null
+  } catch (err) {
+    deps.logger.warn('读取构建 trigger 的生产分支失败，按 main 触发', { error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
+}
+
 /** 触发一次 Workers Build 重建当前清单；build 端点与插件一键更新共用 */
 async function triggerProjectionBuild(
   scope: RequestScope,
@@ -1035,7 +1059,9 @@ async function triggerProjectionBuild(
   const hash = await manifestHash(await listManifestPlugins(db))
   const api = buildsApi(scope, deps)
   if (!api) return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN' }
-  const branchName = branch ?? env.CF_BUILD_BRANCH ?? 'main'
+  // 分支：请求里指定的 > CF_BUILD_BRANCH > 连接仓库时选的生产分支 > main。
+  // 以前直接落到 main：fork 后改了分支名、或连接时选了别的分支，引导那次构建没事，之后面板触发的全指错分支
+  const branchFor = async (t: BuildTargets) => branch ?? env.CF_BUILD_BRANCH ?? (await productionBranch(api, t, deps)) ?? 'main'
 
   let targets: BuildTargets | null = null
   try {
@@ -1046,6 +1072,7 @@ async function triggerProjectionBuild(
   }
   if (!targets) return { ok: false, status: 503, error: '自部署未配置：缺少 CF_ACCOUNT_ID / CF_BUILDS_TOKEN' }
 
+  let branchName = await branchFor(targets)
   let buildUuid: string
   try {
     ;({ buildUuid } = await api.triggerBuild(targets.triggerUuid, { branch: branchName }))
@@ -1057,14 +1084,15 @@ async function triggerProjectionBuild(
     const refreshed = await resolveBuildTargets(scope, deps).catch(() => null)
     if (!refreshed || refreshed.triggerUuid === targets.triggerUuid) {
       await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: firstError })
-      return { ok: false, status: 502, error: `触发构建失败：${firstError}` }
+      return { ok: false, status: 502, error: `触发构建失败（分支 ${branchName}）：${firstError}` }
     }
+    branchName = await branchFor(refreshed)
     try {
       ;({ buildUuid } = await api.triggerBuild(refreshed.triggerUuid, { branch: branchName }))
     } catch (err2) {
       const message = err2 instanceof Error ? err2.message : String(err2)
       await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: hash, status: 'failed', error: message })
-      return { ok: false, status: 502, error: `触发构建失败：${message}` }
+      return { ok: false, status: 502, error: `触发构建失败（分支 ${branchName}）：${message}` }
     }
   }
 
