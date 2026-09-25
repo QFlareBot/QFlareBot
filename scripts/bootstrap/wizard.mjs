@@ -2,7 +2,8 @@
 /**
  * 网页引导：起本地 HTTP 服务 + Cloudflare Quick Tunnel，把向导页暴露出去。
  * 用户在 run 页 Summary 里点隧道链接 → 网页上创建/粘贴 token → 建资源 → 部署 →
- * 连接仓库 → 创建构建 token，全程跟着页面走。
+ * 创建构建 token → 连接仓库，全程跟着页面走。连接完成后构建命令与清单环境变量
+ * 由向导经 Builds API 写进 trigger，Cloudflare 后台不需要手填任何格子。
  *
  * 安全边界：
  * - token 只在本进程内存里，收到即输出 ::add-mask::（Actions 日志自动打码）
@@ -15,7 +16,7 @@
  *   POST /api/provision              表单提交，启动引导（异步）
  *   GET  /api/progress               进度轮询
  *   GET  /api/builds-status          仓库是否已连接 Workers Builds
- *   POST /api/complete               { buildsToken? } 写入构建凭证并收尾退出
+ *   POST /api/complete               { buildsToken? } 写入构建凭证、配置构建 trigger 并收尾退出
  */
 
 import { spawn } from 'node:child_process'
@@ -27,7 +28,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BootstrapError,
+  BUILD_COMMAND,
   cfFetch,
+  DEPLOY_COMMAND,
   listAccounts,
   probePermissions,
   renderSummary,
@@ -103,30 +106,28 @@ function json(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-/** 解析 Workers Builds 权限组的 dash key（用于构建 token 预填链接）；失败返回 null */
-async function resolveBuildsPermissionKey(token, accountId) {
-  const endpoints = [`/accounts/${accountId}/rbac/groups`, `/accounts/${accountId}/tokens/permission_groups`]
-  for (const endpoint of endpoints) {
-    try {
-      const groups = await cfFetch(token, endpoint)
-      const items = Array.isArray(groups) ? groups : (groups?.items ?? [])
-      const hit = items.find((g) => typeof g?.key === 'string' && /workers\s*builds/i.test(g?.name ?? g?.label ?? ''))
-      if (hit) return hit.key
-    } catch {
-      // 换下一个端点
-    }
-  }
-  return null
-}
-
-function buildsTokenUrl(accountId, key, tokenName) {
-  const groups = [{ key, type: 'edit' }, { key: 'workers_scripts', type: 'read' }]
-  const params = new URLSearchParams()
-  params.set('permissionGroupKeys', JSON.stringify(groups))
-  params.set('accountId', accountId)
-  params.set('zoneId', 'all')
-  params.set('name', tokenName)
-  return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`
+/**
+ * 仓库连上之后，把构建配置直接写进 trigger。
+ *
+ * Build command / Deploy command / MANIFEST_URL / MANIFEST_TOKEN 这四项以前只出现在
+ * GITHUB_STEP_SUMMARY 的照抄块里——而向导用户这时候早就离开那个页面了，结果是：
+ * 走完向导 → 去面板装插件 → 构建机用默认命令跑 → 失败，面板上只显示「失败」。
+ *
+ * 这里用的正是构建 token 自带的 Workers Builds Configuration (Edit) 权限，
+ * 不需要用户额外授权，也不需要多输入任何东西。
+ */
+async function configureTrigger(buildsToken, accountId, triggerUuid, { manifestUrl, buildToken }) {
+  await cfFetch(buildsToken, `/accounts/${accountId}/builds/triggers/${triggerUuid}`, {
+    method: 'PATCH',
+    body: { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND },
+  })
+  await cfFetch(buildsToken, `/accounts/${accountId}/builds/triggers/${triggerUuid}/environment_variables`, {
+    method: 'PATCH',
+    body: {
+      MANIFEST_URL: { value: manifestUrl, is_secret: false },
+      MANIFEST_TOKEN: { value: buildToken, is_secret: true },
+    },
+  })
 }
 
 // ── 隧道 ─────────────────────────────────────────────────────────────────
@@ -352,25 +353,16 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/builds-token-url') {
-      // 现场解析 Builds 权限组 key，生成预填链接；解析不到给 null（页面退回清单引导）
-      if (!state.token || !state.accountId) return json(res, 400, { error: '先完成引导' })
-      const key = await resolveBuildsPermissionKey(state.token, state.accountId)
-      json(res, 200, {
-        url: key ? buildsTokenUrl(state.accountId, key, `${state.workerName}-builds`) : null,
-        fallback: !key,
-      })
-      return
-    }
-
     if (req.method === 'POST' && url.pathname === '/api/complete') {
       if (!state.provision?.ok) return json(res, 400, { error: '引导尚未成功' })
       const body = await readBody(req)
       let buildsTokenWritten = false
+      let triggerConfigured = false
+      let triggerError = null
       if (body.buildsToken && typeof body.buildsToken === 'string') {
         const buildsToken = body.buildsToken.trim()
         mask(buildsToken)
-        // 用构建 token 实际打一次 trigger 列表，验证它真能触发重建
+        // 用构建 token 实际打一次 trigger 列表，验证它真能触发重建，并留下 trigger uuid
         const verify = async () => {
           const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
           const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
@@ -378,20 +370,37 @@ const server = createServer(async (req, res) => {
           const triggers = await cfFetch(buildsToken, `/accounts/${state.accountId}/builds/workers/${me.tag}/triggers`)
           const items = Array.isArray(triggers) ? triggers : triggers?.items ?? []
           if (!items.length) throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——先完成连接仓库一步')
+          return items[0].trigger_uuid ?? items[0].uuid ?? items[0].id
         }
-        await verify()
+        const triggerUuid = await verify()
         writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, workerName: state.workerName, secrets: { CF_BUILDS_TOKEN: buildsToken } })
         buildsTokenWritten = true
+
+        // 写构建配置失败不算引导失败：Worker 已经部署好、凭证也写进去了，
+        // 用户照 Summary 里的兜底清单手填四项同样能跑，没必要把整个引导推倒。
+        if (triggerUuid) {
+          try {
+            await configureTrigger(buildsToken, state.accountId, triggerUuid, state.provision.result)
+            triggerConfigured = true
+            log('构建配置（命令与清单环境变量）已写入 trigger')
+          } catch (err) {
+            triggerError = err.message
+            log(`写入构建配置失败：${err.message}——Summary 里会给出手填清单`)
+          }
+        } else {
+          triggerError = '拿不到 trigger uuid'
+        }
       }
       const summary = renderSummary({
         ...state.provision.result,
         buildsTokenWritten,
+        triggerConfigured,
       }, { redactSecrets: true })
       if (env.GITHUB_STEP_SUMMARY) {
         await writeFile(env.GITHUB_STEP_SUMMARY, summary + '\n').catch(() => {})
       }
       state.completed = true
-      json(res, 200, { ok: true, summary })
+      json(res, 200, { ok: true, summary, triggerConfigured, triggerError })
       // 不再 3 秒强杀 Runner，留出 10 分钟窗口供用户查看/复制配置，用户也可在页面点击“完成并退出”立即释放 Runner
       if (state.completeTimer) clearTimeout(state.completeTimer)
       state.completeTimer = setTimeout(() => {

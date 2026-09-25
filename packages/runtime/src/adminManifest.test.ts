@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { definePlugin } from '@qqbot/sdk'
+import { BUILD_COMMAND, DEPLOY_COMMAND } from '@qqbot/projector'
 import { createRuntime } from './runtime.js'
 import { resetManifestSchema } from './manifestStore.js'
 import { resetSnapshotCache } from './store.js'
@@ -32,8 +33,19 @@ function declaredManifest(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function createFetchMock(manifests: Record<string, unknown>, builds: Array<Record<string, unknown>> = [], atomSha = 'f6a7b8c9d0000000000000000000000000000000') {
-  return (async (input: string | URL | Request) => {
+/** 本次 fetch mock 记录到的 trigger 配置写入（构建命令 / 构建环境变量） */
+interface TriggerWrite {
+  url: string
+  body: unknown
+}
+
+function createFetchMock(
+  manifests: Record<string, unknown>,
+  builds: Array<Record<string, unknown>> = [],
+  atomSha = 'f6a7b8c9d0000000000000000000000000000000',
+  triggerWrites: TriggerWrite[] = [],
+) {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
     if (url.includes('commits.atom')) {
       const xml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><id>tag:github.com,2008:Repository/1/commit/${atomSha}</id></entry></feed>`
@@ -48,11 +60,17 @@ function createFetchMock(manifests: Record<string, unknown>, builds: Array<Recor
     if (url.includes('/builds/workers/tag/builds')) {
       return new Response(JSON.stringify({ success: true, result: { items: builds } }), { status: 200 })
     }
+    // trigger 配置写入（PATCH）：记下来供断言，注意别和上面的 /builds 触发端点混淆
+    if (/\/builds\/triggers\/[^/]+(\/environment_variables)?$/.test(url)) {
+      triggerWrites.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
+      return new Response(JSON.stringify({ success: true, result: {} }), { status: 200 })
+    }
     return new Response(`unexpected ${url}`, { status: 500 })
   }) as typeof fetch
 }
 
 function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<typeof createRuntime>[0]['plugins'] = []) {
+  const triggerWrites: TriggerWrite[] = []
   const fetchImpl = createFetchMock(
     {
       'raw.githubusercontent.com/me/qqbot-plugin-hello/a1b2c3d4e5/manifest.json': declaredManifest(),
@@ -64,6 +82,8 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       'raw.githubusercontent.com/me/qqbot-plugin-scored/d1e2f3a4b6/manifest.json': declaredManifest({ name: 'my_plugin' }),
     },
     [{ build_uuid: 'build-9', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
+    undefined,
+    triggerWrites,
   )
   const runtime = createRuntime({ plugins, fetchImpl })
   const env = createEnv({
@@ -78,7 +98,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
   const call = (path: string, init: RequestInit = {}) =>
     runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
   const admin = { authorization: `Bearer ${ADMIN}` }
-  return { call, env, admin }
+  return { call, env, admin, triggerWrites }
 }
 
 beforeEach(() => {
@@ -125,12 +145,9 @@ describe('GET /admin/build-manifest', () => {
       headers: jsonHeaders,
       body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
     })
-    // 装完还没触发构建：账本里是一条 pending，buildUuid 为空，哈希与当前清单一致
+    // 安装就地触发了构建，所以这条记录当场就带上 buildUuid，哈希与当前清单一致
     const installed = await manifest()
-    expect(installed.pendingBuild).toMatchObject({ buildUuid: null, hash: installed.hash })
-
-    await call('/admin/builds', { method: 'POST', headers: jsonHeaders })
-    expect((await manifest()).pendingBuild).toMatchObject({ buildUuid: 'build-9' })
+    expect(installed.pendingBuild).toMatchObject({ buildUuid: 'build-9', hash: installed.hash })
   })
 })
 
@@ -155,6 +172,8 @@ describe('GET /admin/build-config', () => {
         r2Name: string | null
         domain: string | null
         defaultDomain: string | null
+        hasD1: boolean
+        hasR2: boolean
       }
     }
     expect(data.ok).toBe(true)
@@ -165,13 +184,18 @@ describe('GET /admin/build-config', () => {
       r2Name: 'r2-bucket',
       domain: 'bot.example.com',
       defaultDomain: null,
+      hasD1: true,
+      hasR2: true,
     })
 
     const viaAdmin = await call('/admin/build-config', { headers: { authorization: `Bearer ${ADMIN}` } })
     expect(viaAdmin.status).toBe(200)
   })
 
-  it('未配置时字段为 null', async () => {
+  it('CF_* 未配置时 id 字段为 null，但 hasD1/hasR2 如实反映绑定', async () => {
+    // 这正是最危险的那种形态：secret 一个没写，资源却实实在在绑着。
+    // 构建机拿 d1Id === null 当「这次部署没有 D1」会误判，于是清单拉不到时静默放行，
+    // D1 里装的插件全部从 Worker 上消失——hasD1 存在就是为了不让它猜。
     const { call } = setup()
     const res = await call('/admin/build-config', { headers: { authorization: `Bearer ${ADMIN}` } })
     expect(res.status).toBe(200)
@@ -184,6 +208,8 @@ describe('GET /admin/build-config', () => {
         r2Name: string | null
         domain: string | null
         defaultDomain: string | null
+        hasD1: boolean
+        hasR2: boolean
       }
     }
     expect(data.bindings).toEqual({
@@ -193,6 +219,8 @@ describe('GET /admin/build-config', () => {
       r2Name: null,
       domain: null,
       defaultDomain: null,
+      hasD1: true,
+      hasR2: true,
     })
   })
 })
@@ -363,6 +391,51 @@ describe('自部署触发与状态同步', () => {
     expect(((await res.json()) as { error: string }).error).toContain('CF_ACCOUNT_ID')
   })
 
+  it('安装就地触发构建——不依赖面板前端补发，curl 装也一样生效', async () => {
+    const { call } = setup()
+    const res = await call('/admin/manifest/plugins', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()) as { build: unknown }).toMatchObject({ build: { buildUuid: 'build-9' } })
+
+    const { builds } = (await (await call('/admin/builds', { headers: { authorization: `Bearer ${ADMIN}` } })).json()) as {
+      builds: Array<{ action: string; buildUuid: string | null }>
+    }
+    // 安装那条被 markPendingBuilding 并进了这次构建，不会留一条永远 pending 的孤儿
+    expect(builds.map((b) => b.action).sort()).toEqual(['build', 'install'])
+    expect(builds.every((b) => b.buildUuid === 'build-9')).toBe(true)
+  })
+
+  it('触发构建时顺手把构建命令与清单环境变量写进 trigger，且只写一次', async () => {
+    const { call, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+
+    const commands = triggerWrites.find((w) => w.url.endsWith('/builds/triggers/trig-1'))
+    expect(commands?.body).toEqual({
+      build_command: BUILD_COMMAND,
+      deploy_command: DEPLOY_COMMAND,
+    })
+    const envVars = triggerWrites.find((w) => w.url.endsWith('/environment_variables'))
+    expect(envVars?.body).toEqual({
+      MANIFEST_URL: { value: 'https://qqbot.workers.dev/admin/build-manifest', is_secret: false },
+      MANIFEST_TOKEN: { value: BUILD_TOKEN, is_secret: true },
+    })
+
+    // 第二次不再写：用户后来在后台的手动调整不该被覆盖回去
+    const before = triggerWrites.length
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(triggerWrites.length).toBe(before)
+  })
+
+  it('拿不到自己的对外地址时不写 trigger——写错的 MANIFEST_URL 比不写更难查', async () => {
+    const { call, triggerWrites } = setup()
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(triggerWrites).toEqual([])
+  })
+
   it('触发构建：pending 记录并入构建，账本同步 success 与 commit', async () => {
     const { call } = setup()
     await call('/admin/manifest/plugins', {
@@ -378,9 +451,10 @@ describe('自部署触发与状态同步', () => {
 
     const list = await call('/admin/builds', { headers: { authorization: `Bearer ${ADMIN}` } })
     const { builds } = (await list.json()) as { builds: Array<{ status: string; commitHash: string | null; action: string }> }
-    expect(builds.length).toBe(2)
+    // install + 它就地触发的 build + 上面这次手动 build
+    expect(builds.length).toBe(3)
     expect(builds.every((b) => b.status === 'ok' && b.commitHash === 'c'.repeat(40))).toBe(true)
-    expect(builds.map((b) => b.action).sort()).toEqual(['build', 'install'])
+    expect(builds.map((b) => b.action).sort()).toEqual(['build', 'build', 'install'])
   })
 
   it('触发失败记入账本并返回 502', async () => {

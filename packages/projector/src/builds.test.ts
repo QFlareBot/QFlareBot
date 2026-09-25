@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CloudflareBuildsApi, type BuildRecord } from './builds.js'
+import { BUILDS_PAGE_SIZE, BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, type BuildRecord } from './builds.js'
 import { CloudflareApiError } from './cloudflare.js'
 
 type Call = { url: string; init: RequestInit }
@@ -55,7 +55,8 @@ describe('CloudflareBuildsApi.listBuilds', () => {
       { build_uuid: 'b2', status: 'failed' },
     ]
     const { api, calls } = fakeApi(({ url }) => {
-      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/workers/bot-tag/builds')
+      // 必须带 per_page：默认页很小，账本里等回填的构建一翻页就会被当成「不存在」而误判为失败
+      expect(url).toBe(`https://api.cloudflare.com/client/v4/accounts/acc123/builds/workers/bot-tag/builds?per_page=${BUILDS_PAGE_SIZE}`)
       return ok({ items: records })
     })
     expect(await api.listBuilds('bot-tag')).toEqual(records)
@@ -106,5 +107,56 @@ describe('CloudflareBuildsApi.getTriggerUuid', () => {
     expect(await api.getTriggerUuid('t')).toBe('u-1')
     const { api: api2 } = fakeApi(() => ok({ items: [{ id: 'i-1' }] }))
     expect(await api2.getTriggerUuid('t')).toBe('i-1')
+  })
+})
+
+describe('trigger 配置写入', () => {
+  it('updateTrigger 走 PATCH，只带传入的字段', async () => {
+    const { api, calls } = fakeApi(({ url }) => {
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/triggers/trig-1')
+      return ok({})
+    })
+    await api.updateTrigger('trig-1', { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND })
+    expect(calls[0]!.init.method).toBe('PATCH')
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      build_command: BUILD_COMMAND,
+      deploy_command: DEPLOY_COMMAND,
+    })
+  })
+
+  it('putTriggerEnv 把清单地址与令牌写进构建环境变量，令牌标记为 secret', async () => {
+    const { api, calls } = fakeApi(({ url }) => {
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/builds/triggers/trig-1/environment_variables')
+      return ok({})
+    })
+    await api.putTriggerEnv('trig-1', {
+      MANIFEST_URL: { value: 'https://bot.example.com/admin/build-manifest', is_secret: false },
+      MANIFEST_TOKEN: { value: 'tok', is_secret: true },
+    })
+    expect(calls[0]!.init.method).toBe('PATCH')
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      MANIFEST_URL: { value: 'https://bot.example.com/admin/build-manifest', is_secret: false },
+      MANIFEST_TOKEN: { value: 'tok', is_secret: true },
+    })
+  })
+
+  it('trigger uuid 做 URL 编码', async () => {
+    const { api } = fakeApi(({ url }) => {
+      expect(url).toContain('/builds/triggers/a%2Fb')
+      return ok({})
+    })
+    await api.updateTrigger('a/b', { build_command: 'x' })
+  })
+})
+
+describe('构建命令常量', () => {
+  // 引导脚本跑在 pnpm build 之前，import 不到构建产物，只能各存一份。
+  // 这条断言是那份副本的唯一约束——少了它，改了命令之后无 UI 引导会继续教用户抄旧的。
+  it('scripts/bootstrap/lib.mjs 里的副本与本包定义一致', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const url = new URL('../../../scripts/bootstrap/lib.mjs', import.meta.url)
+    const source = await readFile(url, 'utf8')
+    expect(source).toContain(`export const BUILD_COMMAND = '${BUILD_COMMAND}'`)
+    expect(source).toContain(`export const DEPLOY_COMMAND = '${DEPLOY_COMMAND}'`)
   })
 })

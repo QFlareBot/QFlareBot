@@ -127,6 +127,8 @@ export interface InstallPluginResult {
   previous?: { version: string }
   hash: string
   install: InstallRecord
+  /** 安装后就地触发的构建；触发失败时带 error（安装本身已生效，重试构建即可） */
+  build: { buildUuid: string } | { error: string }
 }
 
 export interface TriggerBuildResult {

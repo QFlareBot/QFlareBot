@@ -74,14 +74,16 @@ async function install() {
   installing.value = true
   try {
     const source = await resolveSource(raw)
+    // 构建由安装端点就地触发，这里不再补发一次——补发只能覆盖面板这一条路径，
+    // curl / 脚本装完照样什么都不会发生
     const result = await api.installPlugin(source)
     void refresh()
-    try {
-      await api.triggerBuild()
-      push(`已安装 ${result.plugin.name}@${result.plugin.version} 并触发构建，上线后出现在列表里`, 'success')
+    const label = `${result.plugin.name}@${result.plugin.version}`
+    if ('buildUuid' in result.build) {
+      push(`已安装 ${label} 并触发构建，上线后出现在列表里`, 'success')
       sourceInput.value = ''
-    } catch (e) {
-      push(`已安装 ${result.plugin.name}@${result.plugin.version}，但触发构建失败：${(e as Error).message}`, 'warning')
+    } else {
+      push(`已安装 ${label}，但触发构建失败：${result.build.error}`, 'warning')
     }
   } catch (e) {
     push((e as Error).message, 'error')

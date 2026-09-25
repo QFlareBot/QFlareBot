@@ -53,6 +53,29 @@ export interface DerivedBindings {
   warnings: string[]
 }
 
+/** 一个可选资源的解析结果 */
+export type BindingResolution = 'resolved' | 'unresolved' | 'skipped'
+
+/**
+ * 每个资源到底是「解析好了」「没解析出来」还是「被显式跳过（`CF_*=none`）」。
+ *
+ * 部署前的护栏只能靠这份状态判断，不能去扫上传元数据里的占位符字符串：
+ * `buildBindings` 对 D1/R2 的处理是「是占位符就不 push」，没解析出来的绑定在
+ * metadata 里是**不出现**而不是留个 `<provisioned>`——扫字符串只拦得住 KV，
+ * D1/R2 会被静默丢掉（版本上线后 `env.DB` 直接消失）。
+ */
+export function resolveState(bindings: BaseBindings): Record<'kv' | 'd1' | 'r2', BindingResolution> {
+  const one = (value: string | undefined, envName: string): BindingResolution => {
+    if (isSkipped(envName)) return 'skipped'
+    return !value || value === PROVISIONED_PLACEHOLDER ? 'unresolved' : 'resolved'
+  }
+  return {
+    kv: one(bindings.kv?.namespaceId, 'CF_KV_ID'),
+    d1: one(bindings.d1?.databaseId, 'CF_D1_ID'),
+    r2: bindings.r2 ? one(bindings.r2.bucketName, 'CF_R2_NAME') : 'skipped',
+  }
+}
+
 export function deriveBindings(config: WranglerConfig): DerivedBindings {
   const warnings: string[] = []
   const kv = config.kv_namespaces?.[0]
@@ -228,6 +251,12 @@ export function generateWranglerConfig(opts: {
   if (customDomain) {
     config.routes = [{ pattern: customDomain, custom_domain: true }]
   }
+
+  // 引导出来的新 Worker 需要 workers.dev（MANIFEST_URL 走默认域名，零外部 DNS 依赖），
+  // 但绑了自定义域名之后没有理由继续把面板与 /webhook 暴露在 workers.dev 上。
+  // 版本预览地址由 preview_urls 单独控制，与这个开关无关。
+  const workersDev = process.env.CF_WORKERS_DEV?.trim()
+  if (workersDev) config.workers_dev = workersDev !== '0' && workersDev !== 'false'
 
   const baseDoBindings = (base.durable_objects?.bindings ?? []).filter((b) => !b.name.startsWith('P_'))
   const pluginDoBindings = doNames.map((name) => ({ name, class_name: name }))

@@ -7,7 +7,7 @@ import { createHttpFetcher, fetchPluginManifest, parseSource } from './artifacts
 import { parseJsonc } from './jsonc.js'
 import { project } from './project.js'
 import type { DeployManifest, FetchArtifact } from './types.js'
-import { type WranglerConfig, deriveBindings, generateWranglerConfig } from './wrangler.js'
+import { type WranglerConfig, deriveBindings, generateWranglerConfig, resolveState } from './wrangler.js'
 
 const USAGE = `用法：
   qqbot-project build --manifest <manifest.json> --wrangler <wrangler.jsonc> --out <dir>
@@ -90,7 +90,17 @@ async function build(args: { manifest: string; wrangler: string; out: string }):
   }
   await writeFile(
     path.join(outDir, 'projection.json'),
-    JSON.stringify({ hash: projection.hash, integrity: projection.integrity, metadata: projection.metadata }, null, 2),
+    JSON.stringify(
+      {
+        hash: projection.hash,
+        integrity: projection.integrity,
+        metadata: projection.metadata,
+        // 部署阶段的护栏要靠它区分「没解析出来」与「显式跳过」，metadata 里看不出来
+        bindings: resolveState(bindings),
+      },
+      null,
+      2,
+    ),
     'utf8',
   )
 

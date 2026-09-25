@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
 import { parseJsonc, stripJsonComments } from './jsonc.js'
-import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig } from './wrangler.js'
+import type { BaseBindings } from './types.js'
+import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig, resolveState } from './wrangler.js'
 
 describe('jsonc', () => {
   it('去掉行注释、块注释与尾随逗号，保留字符串内容', () => {
@@ -325,5 +326,64 @@ describe('generateWranglerConfig', () => {
     expect(seedTemplate.kv_namespaces?.[0]).toEqual({ binding: 'KV' })
     expect(seedTemplate.r2_buckets?.[0]).toEqual({ binding: 'R2' })
     expect(seedTemplate.d1_databases?.[0]).toEqual({ binding: 'DB', database_name: 'qqbot' })
+  })
+})
+
+describe('resolveState', () => {
+  const base: BaseBindings = {
+    kv: { binding: 'KV', namespaceId: 'kv-1' },
+    d1: { binding: 'DB', databaseId: 'd1-1' },
+    r2: { binding: 'R2', bucketName: 'bucket' },
+  }
+  afterEach(() => {
+    delete process.env.CF_KV_ID
+    delete process.env.CF_D1_ID
+    delete process.env.CF_R2_NAME
+  })
+
+  it('解析好的资源是 resolved', () => {
+    expect(resolveState(base)).toEqual({ kv: 'resolved', d1: 'resolved', r2: 'resolved' })
+  })
+
+  it('占位符是 unresolved——D1/R2 在上传元数据里是"不出现"，只能靠这份状态发现', () => {
+    const state = resolveState({
+      kv: { binding: 'KV', namespaceId: PROVISIONED_PLACEHOLDER },
+      d1: { binding: 'DB', databaseId: PROVISIONED_PLACEHOLDER },
+      r2: { binding: 'R2', bucketName: PROVISIONED_PLACEHOLDER },
+    })
+    expect(state).toEqual({ kv: 'unresolved', d1: 'unresolved', r2: 'unresolved' })
+  })
+
+  it('CF_*=none 是 skipped，不该被当成"没解析出来"拦下部署', () => {
+    process.env.CF_D1_ID = 'none'
+    process.env.CF_R2_NAME = 'none'
+    const state = resolveState({
+      kv: { binding: 'KV', namespaceId: 'kv-1' },
+      d1: { binding: 'DB', databaseId: PROVISIONED_PLACEHOLDER },
+    })
+    expect(state).toEqual({ kv: 'resolved', d1: 'skipped', r2: 'skipped' })
+  })
+})
+
+describe('CF_WORKERS_DEV', () => {
+  afterEach(() => delete process.env.CF_WORKERS_DEV)
+
+  it('未设置时保持模板原值', () => {
+    const config = generateWranglerConfig({
+      base: { name: 'w', workers_dev: true },
+      projection: makeProjection(),
+      mainPath: 'dist/index.js',
+    })
+    expect(config.workers_dev).toBe(true)
+  })
+
+  it('设为 0 可以关掉——绑了自定义域名之后没理由继续把面板暴露在 workers.dev', () => {
+    process.env.CF_WORKERS_DEV = '0'
+    const config = generateWranglerConfig({
+      base: { name: 'w', workers_dev: true },
+      projection: makeProjection(),
+      mainPath: 'dist/index.js',
+    })
+    expect(config.workers_dev).toBe(false)
   })
 })

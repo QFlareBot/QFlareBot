@@ -68,9 +68,14 @@ export {
 
 export {
   CloudflareBuildsApi,
+  BUILDS_PAGE_SIZE,
+  BUILD_COMMAND,
+  DEPLOY_COMMAND,
   type BuildRecord,
   type CloudflareBuildsApiOptions,
   type TriggerBuildOptions,
+  type TriggerConfig,
+  type TriggerEnvValue,
 } from './builds.js'
 
 export {
@@ -87,7 +92,9 @@ export { stripJsonComments, parseJsonc } from './jsonc.js'
 export {
   deriveBindings,
   generateWranglerConfig,
+  resolveState,
   PROVISIONED_PLACEHOLDER,
   type WranglerConfig,
   type DerivedBindings,
+  type BindingResolution,
 } from './wrangler.js'

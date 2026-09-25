@@ -9,6 +9,8 @@ export const Keys = {
   event: (id: string) => `rt:evt:${id}`,
   /** CF_WORKER_TAG / CF_TRIGGER_UUID 自发现结果（env 未配置时才有内容） */
   cfBuildTargets: 'rt:cf_build_targets',
+  /** 已把构建命令与清单环境变量写进 trigger 的标记（只写一次，不覆盖用户后来的手改） */
+  cfTriggerConfigured: 'rt:cf_trigger_configured',
   installed: (name: string) => `rt:installed:${name}`,
 } as const
 

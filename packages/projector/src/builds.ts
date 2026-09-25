@@ -22,6 +22,32 @@ export interface CloudflareBuildsApiOptions {
   baseUrl?: string
 }
 
+/**
+ * 构建机上的构建与部署命令。
+ *
+ * Worker（连上仓库后自动写 trigger）与引导脚本（无 UI 模式打进 Summary 让人照抄）都要用它，
+ * 但两者分属不同的构建世界——Worker 打成 bundle，引导是裸 Node 脚本，没法共享一个模块。
+ * 所以 `scripts/bootstrap/lib.mjs` 里有一份同源副本，由 builds.test.ts 断言两边一致。
+ */
+export const BUILD_COMMAND = 'pnpm build && pnpm --filter @qqbot/seed run manifest:prepare'
+export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
+
+/** listBuilds 默认页大小：够账本里最近这些记录回填，又不至于拉回一大页 */
+export const BUILDS_PAGE_SIZE = 50
+
+/** 可改的 trigger 配置字段（只收录本项目会写的几项，其余不碰） */
+export interface TriggerConfig {
+  build_command?: string
+  deploy_command?: string
+  root_directory?: string
+}
+
+/** 构建环境变量的值；`is_secret` 为真时后台不再回显 */
+export interface TriggerEnvValue {
+  value: string
+  is_secret?: boolean
+}
+
 export interface TriggerBuildOptions {
   /** 构建该分支的当前状态（不 pin 具体 commit） */
   branch: string
@@ -64,13 +90,32 @@ export class CloudflareBuildsApi {
     return { buildUuid }
   }
 
-  /** 列出某个 Worker 的构建记录（新→旧） */
-  async listBuilds(workerTag: string): Promise<BuildRecord[]> {
+  /**
+   * 列出某个 Worker 的构建记录（新→旧）。
+   *
+   * 必须显式给 `per_page`：默认页很小，账本里等着回填的构建一旦翻出返回范围，
+   * 调用方就会把它当成「这个构建不存在」并按失败收敛——而它其实成功了。
+   */
+  async listBuilds(workerTag: string, perPage = BUILDS_PAGE_SIZE): Promise<BuildRecord[]> {
     const result = await this.#request<BuildRecord[] | { items?: BuildRecord[] }>(
       'GET',
-      `/builds/workers/${encodeURIComponent(workerTag)}/builds`,
+      `/builds/workers/${encodeURIComponent(workerTag)}/builds?per_page=${perPage}`,
     )
     return Array.isArray(result) ? result : (result.items ?? [])
+  }
+
+  /**
+   * 改 trigger 的构建配置。仓库连上 Workers Builds 之后，构建命令与部署命令
+   * 由引导直接写进去——这两项以前只出现在文档里让用户手抄。
+   * 需要 token 具备 Workers Builds Configuration (Edit)，触发构建用的就是这个权限。
+   */
+  async updateTrigger(triggerUuid: string, config: TriggerConfig): Promise<void> {
+    await this.#request('PATCH', `/builds/triggers/${encodeURIComponent(triggerUuid)}`, config)
+  }
+
+  /** 写 trigger 的构建环境变量（整体合并，未列出的键保持不变） */
+  async putTriggerEnv(triggerUuid: string, vars: Record<string, TriggerEnvValue>): Promise<void> {
+    await this.#request('PATCH', `/builds/triggers/${encodeURIComponent(triggerUuid)}/environment_variables`, vars)
   }
 
   /**
@@ -102,7 +147,7 @@ export class CloudflareBuildsApi {
     return typeof uuid === 'string' ? uuid : null
   }
 
-  async #request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  async #request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { authorization: `Bearer ${this.#token}` }
     if (body !== undefined) headers['content-type'] = 'application/json'
     const url = `${this.#baseUrl}/accounts/${this.#accountId}${path}`

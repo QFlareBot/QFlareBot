@@ -1,4 +1,4 @@
-import { CloudflareBuildsApi, type BuildRecord } from '@qqbot/projector'
+import { BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, type BuildRecord } from '@qqbot/projector'
 import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
@@ -83,6 +83,12 @@ export async function handleBuildConfig(request: Request, scope: RequestScope): 
         typeof scope.env.CF_DEFAULT_DOMAIN === 'string' && scope.env.CF_DEFAULT_DOMAIN.length > 0
           ? scope.env.CF_DEFAULT_DOMAIN
           : null,
+      // 上面那些 CF_* 是「构建机填绑定要用的 id」，回答不了「这次部署到底绑没绑上」——
+      // secret 没写但资源确实绑着是很常见的状态。构建机靠这两个字段区分
+      // 「面板连不上」与「真的没有 D1」，拿 id 的有无去猜会把前者误判成后者，
+      // 于是清单拉不到时静默放行，D1 里装的插件全部从 Worker 上消失。
+      hasD1: !!scope.env.DB,
+      hasR2: !!scope.env.R2,
     },
     generatedAt: new Date().toISOString(),
   })
@@ -127,7 +133,20 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
   if (!source) return error('需要 source，例如 git:owner/repo@a1b2c3d4e5', 400)
   const out = await installFromSource(source, scope, deps)
   if (!out.ok) return error(out.error, out.status)
-  return json({ ok: true, plugin: out.plugin, ...(out.previous ? { previous: out.previous } : {}), hash: out.hash, install: out.install })
+
+  // 就地触发构建：只改 D1 清单的话，插件根本不在正在运行的 bundle 里——装了等于没装。
+  // 卸载与一键更新一直是这么做的，安装以前漏了，靠面板前端补发一次；
+  // 于是 curl / 脚本装完什么都不会发生，账本留一条 pending 挂到 24h 后被收敛成失败。
+  // 触发失败不回滚安装（清单已经改了，回滚只会更乱），如实报出来让用户重试构建。
+  const build = await triggerProjectionBuild(scope, deps)
+  return json({
+    ok: true,
+    plugin: out.plugin,
+    ...(out.previous ? { previous: out.previous } : {}),
+    hash: out.hash,
+    install: out.install,
+    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
+  })
 }
 
 type InstallOutcome =
@@ -353,6 +372,41 @@ async function readCachedTargets(scope: RequestScope): Promise<BuildTargets | nu
   return null
 }
 
+/**
+ * 把构建命令与清单环境变量写进 trigger。
+ *
+ * 网页向导在用户连完仓库时就写好了；这条路径是给**无 UI 引导**和「后来重连过仓库」兜底的——
+ * 那两种情况下引导跑完时 trigger 还不存在，写不了，用户就只能照 Summary 手抄四项。
+ * 而这四项里最容易配错的恰好是 MANIFEST_TOKEN 与 Worker 侧 BUILD_TOKEN 的对齐，
+ * 两个值本来就在同一个 env 里，没有理由让人肉搬运。
+ *
+ * 只写一次（KV 打标），避免覆盖用户后来在后台的手动调整；失败只记日志不阻断触发构建。
+ */
+async function ensureTriggerConfigured(
+  api: CloudflareBuildsApi,
+  triggerUuid: string,
+  scope: RequestScope,
+  deps: AdminDeps,
+): Promise<void> {
+  const domain = scope.env.CF_DEFAULT_DOMAIN || scope.env.CF_CUSTOM_DOMAIN
+  // 拿不到自己的对外地址就别乱写——写进去一个错的 MANIFEST_URL 比不写更难查
+  if (!domain || !scope.env.BUILD_TOKEN) return
+  try {
+    if (await scope.env.KV.get(Keys.cfTriggerConfigured)) return
+    await api.updateTrigger(triggerUuid, { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND })
+    await api.putTriggerEnv(triggerUuid, {
+      MANIFEST_URL: { value: `https://${domain}/admin/build-manifest`, is_secret: false },
+      MANIFEST_TOKEN: { value: scope.env.BUILD_TOKEN, is_secret: true },
+    })
+    await scope.env.KV.put(Keys.cfTriggerConfigured, new Date().toISOString())
+    deps.logger.info('已写入构建 trigger 配置（构建命令与清单环境变量）')
+  } catch (err) {
+    deps.logger.warn('写入构建 trigger 配置失败，需要到 Cloudflare 后台手动填写', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 async function clearCachedTargets(scope: RequestScope): Promise<void> {
   try {
     await scope.env.KV.delete(Keys.cfBuildTargets)
@@ -370,8 +424,12 @@ async function clearCachedTargets(scope: RequestScope): Promise<void> {
  */
 async function resolveBuildTargets(scope: RequestScope, deps: AdminDeps): Promise<BuildTargets | null> {
   const { CF_WORKER_TAG, CF_TRIGGER_UUID } = scope.env
-  if (CF_WORKER_TAG && CF_TRIGGER_UUID) return { workerTag: CF_WORKER_TAG, triggerUuid: CF_TRIGGER_UUID }
   const api = buildsApi(scope, deps)
+  // 目标写死在 env 里也要补构建配置——写死的是「哪个 trigger」，不是「trigger 里配了什么」
+  if (CF_WORKER_TAG && CF_TRIGGER_UUID) {
+    if (api) await ensureTriggerConfigured(api, CF_TRIGGER_UUID, scope, deps)
+    return { workerTag: CF_WORKER_TAG, triggerUuid: CF_TRIGGER_UUID }
+  }
   if (!api) return null
 
   const cached = await readCachedTargets(scope)
@@ -401,6 +459,7 @@ async function resolveBuildTargets(scope: RequestScope, deps: AdminDeps): Promis
       // 缓存写失败不影响本次
     }
   }
+  await ensureTriggerConfigured(api, targets.triggerUuid, scope, deps)
   return targets
 }
 
@@ -535,7 +594,8 @@ export async function listBuildsStatus(scope: RequestScope, deps: AdminDeps): Pr
       if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
       if (!byUuid.has(row.buildUuid) && Date.now() - row.ts > NOT_FOUND_MS) {
         const message =
-          'Cloudflare 构建列表中找不到该构建：若配置了 CF_WORKER_TAG，请确认它是 workers/scripts 返回的 tag（而不是名字）'
+          'Cloudflare 构建列表中找不到该构建：可能已超出 Builds API 的返回范围（构建太多），' +
+          '也可能是配置了 CF_WORKER_TAG 但填成了 worker 名字（应填 workers/scripts 返回的 tag）'
         await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
         row.status = 'failed'
         row.cfStatus = 'not_found'

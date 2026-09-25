@@ -235,6 +235,39 @@ export async function putBotConfig({ baseUrl, adminToken, appId, secret }) {
 export const SETUP_TOKEN_URL =
   'https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup'
 
+/**
+ * 构建机上的构建与部署命令。向导会经 Builds API 直接写进 trigger；
+ * headless 模式连接仓库时 trigger 还不存在，只能打进 Summary 让人照抄。
+ *
+ * 权威定义在 `packages/projector/src/builds.ts`（Worker 侧自动写 trigger 要用）。
+ * 这里是副本——引导是裸 Node 脚本，跑在 `pnpm build` 之前，import 不到构建产物。
+ * 两边由 `packages/projector/src/builds.test.ts` 断言一致，改一处 CI 会红。
+ */
+export const BUILD_COMMAND = 'pnpm build && pnpm --filter @qqbot/seed run manifest:prepare'
+export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
+
+/**
+ * 构建 token 的预填创建链接。
+ *
+ * `permissionGroupKeys` 用的是 dash 自己那套短 key（跟 SETUP_TOKEN_URL 同一套），
+ * **不是** `/accounts/{id}/tokens/permission_groups` 返回的 UUID。早先这里会去查那个端点
+ * 再取 `key` 字段，两头都不成立：引导 token 没有 API Tokens Read 权限（必然 403），
+ * 而那个端点的返回里也根本没有 `key` 字段——于是解析永远失败，页面永远退回
+ * 「请手动勾选权限」，这个按钮从来没真正工作过。写死即可。
+ */
+export function buildsTokenUrl(accountId, tokenName) {
+  const groups = [
+    { key: 'workers_builds', type: 'edit' },
+    { key: 'workers_scripts', type: 'read' },
+  ]
+  const params = new URLSearchParams()
+  params.set('permissionGroupKeys', JSON.stringify(groups))
+  params.set('accountId', accountId)
+  params.set('zoneId', 'all')
+  params.set('name', tokenName)
+  return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`
+}
+
 /** Workers Builds 后台的连接页（worker 详情 → Builds） */
 export function buildsConnectUrl(accountId, workerName) {
   return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/builds`
@@ -258,6 +291,7 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     buildToken,
     resources,
     buildsTokenWritten,
+    triggerConfigured,
     qqSaved,
     warnings,
     accountId,
@@ -296,35 +330,37 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   lines.push('')
   lines.push('### 下一步')
   lines.push('')
-  lines.push(`1. **连接仓库**（装/卸插件触发重建的前置）：打开 [Workers Builds 设置页](${buildsConnectUrl(accountId, workerName)}) → Connect，选择本 fork 仓库，分支选默认分支，然后照抄：`)
-  lines.push('')
-  lines.push('   ```')
-  lines.push('   # Build command')
-  lines.push('   pnpm build && pnpm --filter @qqbot/seed run manifest:prepare')
-  lines.push('   # Deploy command')
-  lines.push('   pnpm --filter @qqbot/seed run manifest:deploy')
-  lines.push('   # 环境变量（Settings → Builds → Environment variables）')
-  lines.push(`   MANIFEST_URL=${manifestUrl}`)
-  // Worker 侧叫 BUILD_TOKEN、构建机侧叫 MANIFEST_TOKEN，是同一个值——名字不一致最容易配错
-  lines.push(
-    `   MANIFEST_TOKEN=${
-      buildToken
-        ? redactSecrets
-          ? '<你配置的 BUILD_TOKEN（专用令牌）>'
-          : buildToken
-        : redactSecrets
-          ? '<你在部署时填写的 ADMIN_TOKEN>'
-          : adminToken
-    }`,
-  )
-  lines.push('   ```')
-  if (!buildToken) {
-    lines.push('')
+  if (triggerConfigured) {
     lines.push(
-      '   ⚠️ 上面填的是**面板主密钥 ADMIN_TOKEN**——构建环境因此持有面板登录凭证。想换成专用令牌：' +
-        '`wrangler secret put BUILD_TOKEN` 写入一个随机长字符串（Worker 侧只认这个名字），' +
-        '再把构建机侧的 `MANIFEST_TOKEN` 改成同一个值。也可以在 GitHub 仓库配 `BUILD_TOKEN` secret 后重跑引导。',
+      `1. **构建配置已自动写入**：Build command、Deploy command、\`MANIFEST_URL\`、\`MANIFEST_TOKEN\` 都已经通过 Builds API ` +
+        `写进了这个 Worker 的构建 trigger，[后台](${buildsConnectUrl(accountId, workerName)})一个格子都不用填。到面板装一个插件即可验证重建链路。`,
     )
+  } else {
+    lines.push(
+      `1. **连接仓库**（装/卸插件触发重建的前置）：打开 [Workers Builds 设置页](${buildsConnectUrl(accountId, workerName)}) → Connect，` +
+        '选择本 fork 仓库，分支选默认分支，然后照抄下面四项。' +
+        '（网页向导模式会在连接完成后自动写入这四项，不必手抄；这里是无 UI 模式的兜底——' +
+        '工作流跑的时候仓库还没连接，trigger 不存在，写不了。）',
+    )
+    lines.push('')
+    lines.push('   ```')
+    lines.push('   # Build command')
+    lines.push(`   ${BUILD_COMMAND}`)
+    lines.push('   # Deploy command')
+    lines.push(`   ${DEPLOY_COMMAND}`)
+    lines.push('   # 环境变量（Settings → Builds → Environment variables）')
+    lines.push(`   MANIFEST_URL=${manifestUrl}`)
+    // Worker 侧叫 BUILD_TOKEN、构建机侧叫 MANIFEST_TOKEN，是同一个值——名字不一致最容易配错
+    lines.push(`   MANIFEST_TOKEN=${redactSecrets ? '<引导自动生成的 BUILD_TOKEN，见下>' : buildToken}`)
+    lines.push('   ```')
+    if (redactSecrets) {
+      lines.push('')
+      lines.push(
+        '   🔑 `BUILD_TOKEN` 由引导自动生成并写入 Worker，为避免公开日志泄露没有打印在这里。' +
+          '取值：Cloudflare 控制台看不到 secret 明文，直接 `wrangler secret put BUILD_TOKEN` 重设一个随机长字符串，' +
+          '再把构建机侧的 `MANIFEST_TOKEN` 填成同一个值即可。',
+      )
+    }
   }
   if (buildsTokenWritten) {
     lines.push('')
@@ -468,6 +504,9 @@ export async function runBootstrap(opts) {
   const manifestUrl = `${defaultBaseUrl || baseUrl}/admin/build-manifest`
 
   const adminToken = customAdminToken || randomBytes(32).toString('base64url')
+  // 构建机拉清单的专用令牌一律自动生成：以前它是可选项，不配就退回「把 ADMIN_TOKEN 当
+  // MANIFEST_TOKEN 用」——等于默认把面板登录凭证发给构建环境。没有理由把这个留给用户决定。
+  const resolvedBuildToken = buildToken || randomBytes(32).toString('base64url')
   await step('写入 Worker 密钥与资源配置', () => {
     writeSecrets({
       repoRoot,
@@ -485,7 +524,7 @@ export async function runBootstrap(opts) {
         CF_CUSTOM_DOMAIN: domain || '',
         // 构建机拉清单用的专用令牌（Worker 侧叫 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）。
         // 不配的话构建机只能拿面板主密钥当 MANIFEST_TOKEN——那等于把面板登录凭证交给构建环境。
-        ...(buildToken ? { BUILD_TOKEN: buildToken } : {}),
+        BUILD_TOKEN: resolvedBuildToken,
         ...(buildsToken ? { CF_BUILDS_TOKEN: buildsToken } : {}),
       },
     })
@@ -505,8 +544,10 @@ export async function runBootstrap(opts) {
     webhookUrl: `${baseUrl}/webhook`,
     manifestUrl,
     adminToken,
-    /** 配了专用令牌就带出来（构建机侧的 MANIFEST_TOKEN 用它，而不是面板主密钥） */
-    buildToken: buildToken || null,
+    /** 构建机侧的 MANIFEST_TOKEN 用它，不是面板主密钥 */
+    buildToken: resolvedBuildToken,
+    /** 构建 token 的预填创建链接（向导第 ④ 步那个按钮） */
+    buildsTokenUrl: buildsTokenUrl(accountId, `${workerName}-builds`),
     resources: {
       kv: kv ? { name: kvTarget, id: kv.id, created: kv.created } : null,
       d1: d1 ? { name: d1Target, id: d1.id, created: d1.created } : null,

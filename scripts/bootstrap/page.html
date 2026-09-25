@@ -109,14 +109,15 @@
     <h2>④ 创建构建 Token & 连接仓库（装/卸插件自动重建的前置）</h2>
     <ol class="hint">
       <li><b>第 1 步：创建构建 Token</b>：点击下方按钮打开 Cloudflare 页面（权限已预填），创建后粘贴到下方输入框；</li>
-      <li><b>第 2 步：连接仓库</b>：打开 Workers Builds 设置页 → <b>Connect</b> → 选择这个 fork 仓库；</li>
+      <li><b>第 2 步：连接仓库</b>：打开 Workers Builds 设置页 → <b>Connect</b> → 选择这个 fork 仓库，分支选默认分支；</li>
       <li>粘贴 Token 后下方会自动开始监听，仓库连好后自动显示验证通过。</li>
+      <li><b>构建命令与清单环境变量不用管</b>：点「完成引导」时会自动写进构建 trigger，Cloudflare 后台一个格子都不用填。</li>
     </ol>
     <div style="margin: 12px 0;">
       <a id="builds-token-link" class="btn ghost" target="_blank" rel="noopener">① 打开预填的构建 Token 创建页 ↗</a>
       <a id="connect-link" class="btn" target="_blank" rel="noopener">② 打开 Workers Builds 设置页 ↗</a>
     </div>
-    <div id="builds-token-fallback" class="hidden msg">⚠️ 未能解析预填链接，请手动创建：权限勾 <b>Workers Builds Configuration (Edit)</b> 与 <b>Workers Scripts (Read)</b>，账户范围选本账户。</div>
+    <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这两项即可：<b>Workers Builds Configuration (Edit)</b> 与 <b>Workers Scripts (Read)</b>，账户范围选本账户。</div>
     <label>构建 Token（Worker 触发重建用，粘贴后自动检测仓库连接）</label>
     <textarea id="builds-token-input" placeholder="粘贴构建 token（留空可跳过——之后也能在面板补配）"></textarea>
     <div id="builds-status-msg" class="msg hidden"></div>
@@ -132,6 +133,7 @@
     <div id="domains-guide" class="msg" style="margin-top: 12px; line-height: 1.6;"></div>
     <details id="admin-token-wrap"><summary>ADMIN_TOKEN（面板登录密钥）</summary><code id="admin-token"></code></details>
     <div id="admin-token-custom-hint" class="msg hidden" style="margin-top: 8px;">🔑 <b>面板登录密钥</b>：已设为您在表单中填写的自定义密码。</div>
+    <div id="trigger-state" class="msg hidden" style="margin-top: 12px; line-height: 1.6;"></div>
     <div style="margin-top: 24px;">
       <button id="exit-btn" class="btn">完成并安全关闭向导</button>
       <div id="exit-hint" class="hint" style="margin-top: 8px;">为方便您查阅与复制配置，本页面将保持开启 10 分钟。点击上方按钮可立即结束工作流并释放 GitHub Actions Runner。</div>
@@ -273,13 +275,8 @@ function pollProgress() {
           $('domains-guide').classList.add('hidden')
         }
 
-        // 立即尝试获取预填的构建 Token 链接
-        api('/api/builds-token-url', {})
-          .then((link) => {
-            if (link?.url) $('builds-token-link').href = link.url
-            else $('builds-token-fallback').classList.remove('hidden')
-          })
-          .catch(() => $('builds-token-fallback').classList.remove('hidden'))
+        // 预填链接由引导结果直接带出（dash 的 permissionGroupKeys 是固定短 key，不需要现查）
+        $('builds-token-link').href = r.buildsTokenUrl
       }
     } catch { /* 网络抖动，下一轮再试 */ }
   }, 1500)
@@ -317,11 +314,28 @@ $('builds-token-input').oninput = () => {
   }
 }
 
+/**
+ * 构建配置到底写没写进 trigger，如实说给用户。
+ * 没写成的话必须给出手填清单——否则用户回面板装插件只会看到一句「构建失败」。
+ */
+function renderFinishState(done) {
+  const el = $('trigger-state')
+  el.classList.remove('hidden')
+  if (done?.triggerConfigured) {
+    el.className = 'msg ok'
+    el.innerHTML = '✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 都已写进这个 Worker 的构建 trigger。到面板装一个插件即可验证重建链路，Cloudflare 后台无需再配置。'
+  } else {
+    el.className = 'msg'
+    el.innerHTML = `⚠️ <b>构建配置未自动写入</b>${done?.triggerError ? `（${done.triggerError}）` : '（未提供构建 token）'}：在补齐之前，装插件不会触发重建。补法见本次工作流 run 页的 Step Summary，里面有可照抄的四项配置。`
+  }
+}
+
 $('finish-btn').onclick = async () => {
   $('finish-btn').disabled = true
   try {
     const token = $('builds-token-input').value.trim()
-    await api('/api/complete', { buildsToken: token || undefined })
+    const done = await api('/api/complete', { buildsToken: token || undefined })
+    renderFinishState(done)
     if (buildsTimer) clearInterval(buildsTimer)
     show('step-done')
     $('step-done').scrollIntoView({ behavior: 'smooth' })
@@ -331,10 +345,10 @@ $('finish-btn').onclick = async () => {
   }
 }
 $('skip-btn').onclick = async () => {
-  try { await api('/api/complete', {}) } catch { /* 已完成也算收尾 */ }
+  try { renderFinishState(await api('/api/complete', {})) } catch { /* 已完成也算收尾 */ }
   if (buildsTimer) clearInterval(buildsTimer)
   show('step-done')
-  say('builds-msg', '已跳过构建 token——装插件触发重建前需要补配（见完成页提示）。', '')
+  say('builds-msg', '已跳过构建 token——在补配之前，面板上装插件会直接失败（提示"自部署未配置"）。', '')
   $('step-done').scrollIntoView({ behavior: 'smooth' })
 }
 

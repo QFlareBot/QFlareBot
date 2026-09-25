@@ -21,7 +21,7 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { buildPlugin } from '@qqbot/plugin-cli'
-import { CloudflareApiError, CloudflareWorkersApi, PROVISIONED_PLACEHOLDER, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
+import { CloudflareApiError, CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
@@ -167,7 +167,11 @@ async function prepare() {
   // 唯一该容忍的情况是本次部署本来就没有 D1：那时 build-manifest 返回 503 是预期的，
   // 而「没有 D1」这件事由 build-config 的 d1Id === null 明确回答（拿不到这个答案就按"拉不到"处理）。
   if (!remote.ok && !remote.skipped) {
-    if (remoteConfig?.d1Id === null) {
+    // 只认 hasD1 —— 它由 Worker 侧的 `!!env.DB` 如实回答。早先这里看的是 `d1Id === null`，
+    // 而 d1Id 来自 CF_D1_ID secret：secret 没写但 D1 确实绑着的部署会被误判成「没有 D1」，
+    // 于是清单拉不到时静默放行，D1 里装的插件全部从 Worker 上消失。
+    // 旧版 Worker 没有这个字段 → undefined → 不等于 false → 走硬失败，方向是安全的。
+    if (remoteConfig?.hasD1 === false) {
       console.warn(`构建清单不可用（${remote.error}），但本次部署没有 D1，按"无 D1 插件集"继续`)
     } else if (process.env.MANIFEST_FALLBACK === '1') {
       console.warn(
@@ -241,11 +245,47 @@ async function collectModules(dir, prefix = '') {
   return out
 }
 
+/**
+ * 跑 wrangler deploy，并把它与 Versions API 的关键差异说清楚。
+ *
+ * Versions API 只上传代码与绑定，**不碰脚本级设置**；wrangler deploy 会把 routes、
+ * workers_dev、triggers.crons 一并同步成配置文件里的样子。而这份配置是从环境变量拼出来的，
+ * 少一个变量线上就掉一块——最典型的是 CF_CUSTOM_DOMAIN 没配时生成配置里没有 routes，
+ * 线上绑着的自定义域名会被摘掉，QQ 回调地址随之失效，而构建还是报成功。
+ * 这里不拦（拦了会让人连退路都没有），但必须让它在构建日志里显眼。
+ */
+function runWranglerDeploy(generated, reason) {
+  console.warn(
+    [
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `⚠️  降级为 wrangler deploy：${reason}`,
+      '   wrangler 会按生成配置同步脚本级设置，本次将把线上改成：',
+      `     routes       ${generated.routes?.length ? generated.routes.map((r) => r.pattern).join('、') : '（无——线上若绑了自定义域名会被摘掉）'}`,
+      `     workers_dev  ${generated.workers_dev ?? '（未声明，由 wrangler 决定）'}`,
+      `     crons        ${generated.triggers?.crons?.join('、') ?? '（无）'}`,
+      '   本次部署不经过预览地址健康检查，也不做 secret 保全校验。',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+    ].join('\n'),
+  )
+  execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+    cwd: appDir,
+    stdio: 'inherit',
+    env: process.env,
+  })
+}
+
 async function deployPhase() {
   const projection = JSON.parse(await readFile(path.join(appDir, 'dist', 'projection.json'), 'utf8'))
-  const wrangler = parseJsonc(await readFile(path.join(appDir, 'wrangler.jsonc'), 'utf8'))
-  const scriptName = process.env.CF_WORKER_NAME?.trim() || wrangler.name
-  if (!scriptName) throw new Error('缺少 Worker 名称（环境变量 CF_WORKER_NAME 或 wrangler.jsonc 的 name）')
+  // 必须读 prepare 生成的配置而不是模板：CF_WORKER_NAME 只在 prepare 进程里被 /admin/build-config
+  // 注入，而构建机的 build 与 deploy 是两条独立命令、两个进程，env 不传递。读模板会永远拿到
+  // 模板里的默认名，把版本传到同名的另一个 Worker 上（同账号跑第二个 bot 时必然撞车）。
+  const generated = parseJsonc(await readFile(path.join(appDir, 'wrangler.generated.jsonc'), 'utf8'))
+  const scriptName = process.env.CF_WORKER_NAME?.trim() || generated.name
+  if (!scriptName) throw new Error('缺少 Worker 名称（wrangler.generated.jsonc 的 name 或环境变量 CF_WORKER_NAME）')
+  // 打出来：部署到哪个 Worker 是这一步最值得当场核对的事，错了会把版本传到同名的另一个 Worker 上
+  console.log(`部署目标 Worker：${scriptName}`)
 
   const { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID } = process.env
   let accountId = CLOUDFLARE_ACCOUNT_ID
@@ -269,10 +309,18 @@ async function deployPhase() {
   // 而 wrangler 回退会把它当成「新资源」自动预配——静默换掉 KV/D1，插件快照与数据当场失联。
   // 首次引导例外：那时资源由引导流程刚建好，走的正是 wrangler deploy 的资源创建语义。
   if (!isInitialBootstrap) {
-    const unresolved = (projection.metadata.bindings ?? []).filter((b) => Object.values(b).includes(PROVISIONED_PLACEHOLDER))
+    // 看投影记下的解析状态，不要去扫 metadata 里的占位符字符串：buildBindings 对 D1/R2 的处理
+    // 是「是占位符就不 push」，没解析出来的绑定在 metadata 里是不出现而不是留个 <provisioned>，
+    // 扫字符串只拦得住 KV，D1/R2 会被静默丢掉（版本上线后 env.DB 直接消失）。
+    if (!projection.bindings) {
+      throw new Error('dist/projection.json 缺少 bindings 解析状态，无法确认绑定是否齐全——请重新运行 prepare 后再部署')
+    }
+    const unresolved = Object.entries(projection.bindings)
+      .filter(([, state]) => state === 'unresolved')
+      .map(([name]) => name.toUpperCase())
     if (unresolved.length > 0) {
       throw new Error(
-        `基础设施绑定未解析：${unresolved.map((b) => b.name).join('、')} 仍是占位符 ${PROVISIONED_PLACEHOLDER}。` +
+        `基础设施绑定未解析：${unresolved.join('、')}。` +
           '拒绝部署——继续下去会把它们当成新资源自动预配，静默丢掉现有快照与插件数据。' +
           '请确认 MANIFEST_URL 指向的 /admin/build-config 可达，且 Worker 上已写入 CF_KV_ID / CF_D1_ID / CF_R2_NAME。' +
           '若确实是想让 wrangler 自动预配全新资源，请改用 `pnpm --filter @qqbot/seed run deploy`。',
@@ -281,6 +329,8 @@ async function deployPhase() {
   }
 
   if (isInitialBootstrap) {
+    // 引导首次部署本来就该走 wrangler：资源初始化、域名与 Cron 触发器都靠它落地，
+    // 而域名此时由 CF_CUSTOM_DOMAIN 明确带进来，不存在「被摘掉」的情况。
     console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 进行资源初始化与域名/触发器绑定…')
     execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
       cwd: appDir,
@@ -291,12 +341,7 @@ async function deployPhase() {
   }
 
   if (!CLOUDFLARE_API_TOKEN || !accountId) {
-    console.log('未检测到 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，退回 wrangler deploy（无预览健康检查）')
-    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
-      cwd: appDir,
-      stdio: 'inherit',
-      env: process.env,
-    })
+    runWranglerDeploy(generated, '未检测到 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID')
     return
   }
 
@@ -317,16 +362,12 @@ async function deployPhase() {
     const isScriptNotFound = err instanceof CloudflareApiError && err.errors?.some((e) => e.code === 10007)
     const isCredentialProblem = err instanceof CloudflareApiError && (err.status === 401 || err.status === 403)
     if (isScriptNotFound || isCredentialProblem) {
-      console.warn(
+      runWranglerDeploy(
+        generated,
         isScriptNotFound
-          ? `Worker ${scriptName} 尚未在 Cloudflare 创建，自动降级为 wrangler deploy 完成首次创建与配置绑定…`
-          : `Versions API 拒绝了本次调用（HTTP ${err.status}：${err.message}），降级为 wrangler deploy 重试…`,
+          ? `Worker ${scriptName} 尚未在 Cloudflare 创建`
+          : `Versions API 拒绝了本次调用（HTTP ${err.status}：${err.message}）`,
       )
-      execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
-        cwd: appDir,
-        stdio: 'inherit',
-        env: process.env,
-      })
       return
     }
     throw err
