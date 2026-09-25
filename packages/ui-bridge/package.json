@@ -10,16 +10,8 @@
     "./host": "./src/host.ts",
     "./tokens.css": "./src/tokens.css"
   },
-  "files": ["dist", "src/tokens.css"],
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/tokens.css dist/tokens.css",
     "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "publishConfig": {
-    "exports": {
-      ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-      "./host": { "types": "./dist/host.d.ts", "import": "./dist/host.js" },
-      "./tokens.css": "./dist/tokens.css"
-    }
   }
 }

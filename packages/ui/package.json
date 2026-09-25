@@ -10,10 +10,6 @@
       "import": "./dist/ui.js"
     }
   },
-  "files": [
-    "dist/ui.js",
-    "dist/ui.d.ts"
-  ],
   "scripts": {
     "dev": "cp ../ui-bridge/src/tokens.css public/tokens.css && vite",
     "build": "mkdir -p public && cp ../ui-bridge/src/tokens.css public/tokens.css && vite build && node scripts/pack.mjs",

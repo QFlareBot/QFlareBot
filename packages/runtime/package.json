@@ -7,9 +7,6 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -21,13 +18,5 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
-  },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
-      }
-    }
   }
 }

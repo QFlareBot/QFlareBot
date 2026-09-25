@@ -5,9 +5,7 @@
   "license": "MIT",
   "type": "module",
   "keywords": ["qqbot-plugin"],
-  "files": ["dist"],
   "exports": "./src/index.ts",
-  "publishConfig": { "exports": "./dist/plugin.js" },
   "scripts": {
     "build": "qqbot-plugin build",
     "test": "vitest run --root ../.. plugins/t2i",
