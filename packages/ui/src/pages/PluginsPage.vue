@@ -175,7 +175,8 @@ async function resolveSource(raw: string): Promise<string> {
   let m = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:\/tree\/([^/\s]+)?([^#\s]*))?(?:[?#].*)?$/i.exec(s)
   if (!m) m = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(s)
   if (!m) throw new Error('无法识别的来源。支持 GitHub 链接、owner/repo 或 git:owner/repo@commit[#子目录]')
-  const [, owner, repo, ref = 'main', sub = ''] = m
+  // 没写分支就跟默认分支走（GitHub API 认 HEAD），与检查更新用的 commits.atom 一致；写死 main 的话默认分支叫 master 的仓库会 422
+  const [, owner, repo, ref = 'HEAD', sub = ''] = m
   if (!owner || !repo) throw new Error('无法识别的来源。支持 GitHub 链接、owner/repo 或 git:owner/repo@commit[#子目录]')
   const sha = /^[0-9a-f]{7,40}$/i.test(ref) ? ref : await resolveSha(owner, repo, ref)
   return `git:${owner}/${repo}@${sha}${sub ? `#${sub.replace(/^\//, '')}` : ''}`
@@ -185,7 +186,10 @@ async function resolveSha(owner: string, repo: string, ref: string): Promise<str
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`, {
     headers: { accept: 'application/vnd.github+json' },
   })
-  if (!res.ok) throw new Error(`解析 ${ref} 的最新 commit 失败（HTTP ${res.status}）：仓库或分支不存在，或是私有仓库（只支持公开的 GitHub 仓库）`)
+  if (!res.ok) {
+    const what = ref === 'HEAD' ? '默认分支' : `分支 ${ref} `
+    throw new Error(`解析${what}的最新 commit 失败（HTTP ${res.status}）：仓库或分支不存在，或是私有仓库（只支持公开的 GitHub 仓库）`)
+  }
   const data = (await res.json()) as { sha?: string }
   if (!data.sha) throw new Error('GitHub 响应缺少 sha')
   return data.sha
