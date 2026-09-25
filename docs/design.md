@@ -89,7 +89,7 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 
 ## 11. 里程碑（更新）
 
-**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）、插件数据所有权（D1 表名前缀强制、卸载清理、`GET /admin/storage` 存储视图，见第 5 节）。构建日志内嵌与线上 Builds 实测未做。
+**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）、插件数据所有权（D1 表名前缀强制、卸载清理、`GET /admin/storage` 存储视图，见第 5 节）。线上 Builds 已实测跑通（Versions API 上传 → 健康检查 → 切流量，`workers_dev: false` 下预览地址同样可用）。构建日志内嵌未做。
 
 **M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、面板安装页（源码安装 + 构建日志内嵌）、Access 集成指引、Dynamic Workers 脚本引擎插件。
 

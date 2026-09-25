@@ -23,13 +23,14 @@
 
   "observability": { "enabled": true },
 
-  // workers.dev 地址保持开启：构建机拉清单 /admin/build-manifest 走的就是默认域名
-  // （MANIFEST_URL 优先 defaultBaseUrl），配了自定义域名也不关它，预览健康检查同样依赖。
+  // workers.dev 保持开启：引导把 MANIFEST_URL 指向默认域名（直连 Cloudflare 边缘，零外部 DNS
+  // 依赖），构建机拉 /admin/build-manifest 走的就是它。绑了自定义域名之后可以关——设构建
+  // 环境变量 CF_WORKERS_DEV=0，同时把 MANIFEST_URL 改成你的域名。
   "workers_dev": true,
-  // 自定义域名示例（引导工作流会写入；生产建议配置）：
+  // 自定义域名示例（引导工作流按 CF_CUSTOM_DOMAIN 写入；国内 QQ Webhook 刚需）：
   // "routes": [{ "pattern": "bot.example.com", "custom_domain": true }],
-  // 自部署要靠 <版本号>-<name>.<子域>.workers.dev/healthz 做切流量前的健康检查，
-  // 这个开关默认 true，不打开预览地址就是 404，健康检查必然失败、永远切不了流量。
-  // 预览地址只影响构建期健康检查，生产流量走自定义域名，两者互不干扰。
+  // 切流量前的健康检查打的是 <版本号前 8 位>-<name>.<子域>.workers.dev/healthz，
+  // 由下面这个开关控制，与 workers_dev 无关（workers_dev: false 时预览地址照样可用，已实测）。
+  // 关掉它预览地址就是 404，健康检查必然失败、永远切不了流量。
   "preview_urls": true
 }

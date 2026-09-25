@@ -83,29 +83,35 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 触发一次构建 → 构建机拉源码编译并部署**。设置步骤：
 
 1. 仓库推到 GitHub，在 Cloudflare Dashboard 的 Worker → Settings → Builds 里连接仓库（引导工作流会给出直达链接）。
-2. 构建命令与部署命令：
+2. **构建命令与环境变量不用手填。** 仓库一连上，这四项就会经 Builds API 自动写进 trigger：
 
    | 项 | 值 |
    | --- | --- |
    | Build command | `pnpm build && pnpm --filter @qqbot/seed run manifest:prepare` |
    | Deploy command | `pnpm --filter @qqbot/seed run manifest:deploy` |
-   | Branch | `main`（或你的默认分支） |
+   | 环境变量 `MANIFEST_URL` | `https://<默认域名>/admin/build-manifest` |
+   | 环境变量 `MANIFEST_TOKEN` | Worker 侧 `BUILD_TOKEN` 的同值（引导自动生成） |
 
-3. 给 trigger 配置环境变量（Settings → Builds → Environment variables）：
+   写入时机有两处：**网页向导**在你连完仓库、点「完成引导」时写；**无 UI 引导**跑的时候 trigger
+   还不存在（仓库尚未连接），改由 Worker 在第一次触发构建、自发现到 trigger 时补写。
+   只写一次，之后你在后台的手动调整不会被覆盖回去。
+
+3. 可选的构建环境变量：
 
    | 变量 | 说明 |
    | --- | --- |
-   | `MANIFEST_URL` | `https://<你的域名>/admin/build-manifest` |
-   | `MANIFEST_TOKEN` | 拉清单的令牌。**建议配**：与 Worker 侧的 `BUILD_TOKEN` 同值（专用令牌）。不配则回落到 `ADMIN_TOKEN`——那等于把面板主密钥交给构建环境 |
-   | `MANIFEST_FALLBACK` | 可选，默认不设。**只在应急时**设成 `1`：允许清单拉取失败后回退到仓库内置清单 |
+   | `MANIFEST_FALLBACK` | 默认不设。**只在应急时**设成 `1`：允许清单拉取失败后回退到仓库内置清单 |
+   | `CF_WORKERS_DEV` | 设 `0` 关掉 workers.dev。绑了自定义域名之后没必要继续把面板与 `/webhook` 暴露在默认域名上；版本预览地址由 `preview_urls` 单独控制，与它无关 |
 
    > **清单拉不到 = 构建失败**（除非上面那个 `MANIFEST_FALLBACK=1`）。这是故意的：继续构建只会打包
    > 仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在 D1，插件不跑了），而构建却报成功——
    > 这是最难查的一类故障。
    >
-   > 唯一的例外是**本次部署本来就没有 D1**（`CF_D1_ID` 未配）：那时清单端点返回 503 是预期的，
-   > 构建机会读 `/admin/build-config` 的 `d1Id === null` 自行判断并继续。所以别为了绕过报错去设
-   > `MANIFEST_FALLBACK`——先看清楚是「面板连不上」还是「真的没有 D1」。
+   > 唯一的例外是**本次部署本来就没有绑 D1**：那时清单端点返回 503 是预期的，构建机读
+   > `/admin/build-config` 的 `hasD1`（由 Worker 侧的 `!!env.DB` 如实回答）自行判断并继续。
+   > 注意判据是 `hasD1` 而不是 `d1Id`——后者来自 `CF_D1_ID` secret，「secret 没写但 D1 确实绑着」
+   > 会被误判成「没有 D1」，于是面板一抖动就静默把 D1 里装的插件从 Worker 上抹掉。
+   > 所以别为了绕过报错去设 `MANIFEST_FALLBACK`——先看清楚是「面板连不上」还是「真的没有 D1」。
 
 4. 给 Worker 配置触发构建用的凭证（`wrangler secret put`，引导工作流会自动写入）：
 
@@ -115,7 +121,7 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
    | `CF_BUILDS_TOKEN` | **user-scoped** API token（Builds API 不接受 account-scoped），权限：Workers Builds Configuration (Edit) + Workers Scripts (Read) |
    | `CF_WORKER_TAG` / `CF_TRIGGER_UUID` | **可选**。省略时运行时按 `vars.WORKER_NAME` 自发现并缓存进 KV（要求仓库已连接 Workers Builds；重连仓库导致缓存失效会自动重发现）。想写死也可以：tag 是 `GET /accounts/{account_id}/workers/scripts` 返回的 `tag` 字段（`id` 是名字，别拿错），trigger UUID 来自 `GET /accounts/{account_id}/builds/workers/{tag}/triggers` |
    | `CF_BUILD_BRANCH` | 可选，默认 `main` |
-   | `BUILD_TOKEN` | 可选但建议。构建机拉清单的专用令牌——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**（名字不一致最容易配错）。引导工作流配了同名 GitHub secret 会自动写入；也可 `wrangler secret put BUILD_TOKEN` 手动写 |
+   | `BUILD_TOKEN` | 构建机拉清单的专用令牌，引导**总是**自动生成并写入——**Worker 侧叫 `BUILD_TOKEN`，构建机侧叫 `MANIFEST_TOKEN`，是同一个值**。两边的对齐由引导代劳（自动写 trigger 环境变量），不用自己搬。想换值：`wrangler secret put BUILD_TOKEN` 后同步改构建环境变量 |
 
    `vars.WORKER_NAME` 在 `wrangler.jsonc` 里（引导工作流按 Worker 名同步维护），自发现靠它定位自己。
 
@@ -123,7 +129,10 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 
 - `POST /admin/builds` 用 `{"branch":"main"}` 触发构建（构建分支当前状态，无需自己解析最新 commit），返回 `buildUuid` 记入账本；`GET /admin/builds` 轮询状态并回填 commit。
 - `deploy` 阶段直接用构建产物走 Versions API：上传版本 → 预览地址 `/healthz` 健康检查 → 切 100% 流量，健康检查失败不切（含 Durable Object 的 Worker 无预览 URL，平台限制下跳过）。
-- 构建机拉不到构建清单时（Worker 不可达、D1 未绑定），自动回退到仓库内置清单重建。
+- 部署目标取 `wrangler.generated.jsonc` 的 `name`，不是模板的——`CF_WORKER_NAME` 只在 `prepare` 进程里被 `/admin/build-config` 注入，而构建机的 build 与 deploy 是两条独立命令、两个进程。
+- 绑定没解析出来（`dist/projection.json` 的 `bindings` 里有 `unresolved`）一律拒绝部署。判据是投影记下的解析状态而不是元数据里的占位符：D1/R2 没解析出来时是**整个绑定不出现**，扫占位符只拦得住 KV。
+- 降级到 `wrangler deploy` 时会打一段醒目警告并列出本次会同步的脚本级设置（routes / workers_dev / crons）——Versions API 不碰这些，wrangler 会按配置改，`CF_CUSTOM_DOMAIN` 缺失时线上自定义域名会被摘掉。
+- 构建机拉不到构建清单时**硬失败**（见上文），只有「这次部署确实没有 D1」（`/admin/build-config` 的 `hasD1` 为假）或显式 `MANIFEST_FALLBACK=1` 才会回退到仓库内置清单。
 - 回滚三选一：Cloudflare 后台版本回滚；D1 恢复清单快照 + 重新触发构建；git revert 内置清单 + 重建。
 
 ## 管理端点（自部署相关）
