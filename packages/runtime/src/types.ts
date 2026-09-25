@@ -37,10 +37,23 @@ export interface RuntimeEnv {
   [binding: string]: unknown
 }
 
+/**
+ * 插件出处：构建机写进部署清单，投影器带进入口模块。
+ * 面板靠它分清「线上这一份是面板装的还是仓库内置的、钉在哪个 commit」。
+ */
+export interface PluginOrigin {
+  /** d1：面板 / 管理 API 装进 D1 清单的；repo：仓库 qqbot.manifest.json 内置的 */
+  from: 'd1' | 'repo'
+  /** 构建前的原始来源（git: 插件是 git:owner/repo@commit） */
+  source: string
+}
+
 /** 投影器生成的懒加载条目 */
 export interface LazyPluginEntry {
   manifest: Manifest
   load: () => Promise<{ default: unknown }>
+  /** 出处；老部署、本地投影与静态入口没有 */
+  origin?: PluginOrigin
 }
 
 /** 直接传定义（本地开发 / 静态入口）或懒加载条目 */

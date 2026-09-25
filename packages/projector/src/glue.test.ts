@@ -36,6 +36,26 @@ describe('generateGlue', () => {
     expect(glue.startsWith('// 由 @qqbot/projector 生成')).toBe(true)
   })
 
+  it('构建机写了出处的插件把 origin 带进入口，没写的不带', () => {
+    const manifest = makeDeployManifest()
+    manifest.plugins = [
+      makePlugin('bar', { origin: { from: 'd1', source: 'git:me/qqbot-plugin-bar@a1b2c3d4e5' } }),
+      makePlugin('baz'),
+    ]
+    const out = generateGlue({ manifest, hash: HASH })
+    expect(out).toContain(`origin: {"from":"d1","source":"git:me/qqbot-plugin-bar@a1b2c3d4e5"}, load: () => import('./plugins/bar.js')`)
+    const bazLine = out.split('\n').find((l) => l.includes("import('./plugins/baz.js')"))
+    expect(bazLine).not.toContain('origin')
+  })
+
+  it('出处不参与投影哈希：同样的代码不因出处不同算出两个哈希', async () => {
+    const { computeProjectionHash } = await import('./hash.js')
+    const plain = makeDeployManifest()
+    const tagged = makeDeployManifest()
+    tagged.plugins = tagged.plugins.map((p) => ({ ...p, origin: { from: 'repo' as const, source: p.source } }))
+    expect(await computeProjectionHash(tagged)).toBe(await computeProjectionHash(plain))
+  })
+
   it('无 DO 时没有重导出行', () => {
     const manifest = makeDeployManifest()
     manifest.plugins = manifest.plugins.filter((p) => p.name === 'bar')

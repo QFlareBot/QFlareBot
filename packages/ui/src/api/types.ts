@@ -22,6 +22,16 @@ export interface PluginInfo {
   error: string | null
   /** 来自 D1 清单（面板装进来的）才可卸载；仓库内置插件要改 qqbot.manifest.json 重新构建 */
   installed: boolean
+  /** 线上这一份的出处（构建机写入）；老部署为 null */
+  origin: PluginOrigin | null
+  /** 已从 D1 清单移除、线上还在跑：卸载还没生效（重建中或构建失败） */
+  removing: boolean
+  /** 依赖的服务名 */
+  depends: string[]
+  /** 提供的服务名 */
+  services: string[]
+  /** 卸载它会断掉的插件（它们依赖的服务只有它提供） */
+  dependents: string[]
   commands: CommandSpec[]
   events: string[]
   buttons: string[]
@@ -121,14 +131,106 @@ export interface InstallRecord {
   ts: number
 }
 
+/** 插件出处：d1 = 面板装的，repo = 仓库内置的；source 是原始来源（git:owner/repo@commit） */
+export interface PluginOrigin {
+  from: 'd1' | 'repo'
+  source: string
+}
+
+/**
+ * 改完清单之后的构建：触发了、触发失败（改动本身已生效，重试构建即可）、或者不需要
+ * （清单已与线上一致，或按请求暂不构建）
+ */
+export type BuildOutcome = { buildUuid: string } | { error: string } | { skipped: true; reason: string }
+
 export interface InstallPluginResult {
   ok: true
   plugin: { name: string; version: string; source: string }
-  previous?: { version: string }
+  previous?: { version: string; source?: string }
   hash: string
   install: InstallRecord
-  /** 安装后就地触发的构建；触发失败时带 error（安装本身已生效，重试构建即可） */
-  build: { buildUuid: string } | { error: string }
+  build: BuildOutcome
+  /** 能装，但要让人知道的事：换了仓库、命令重名、新增权限…… */
+  warnings?: string[]
+}
+
+/** 预检时的清单摘要 */
+export interface ManifestSummary {
+  name: string
+  version: string
+  displayName?: string
+  description?: string
+  permissions: string[]
+  services: string[]
+  depends: string[]
+  durableObjects: string[]
+  commands: string[]
+}
+
+/** POST /manifest/plugins { dryRun: true }：跑完全部校验、什么都不写 */
+export interface InstallPreview {
+  ok: true
+  dryRun: true
+  plugin: { name: string; version: string; source: string }
+  previous?: { version: string; source: string }
+  manifest: ManifestSummary
+  /** 插件的第三方依赖（包名 → 版本范围）：构建时按插件仓库的 lockfile 安装、打进插件自己的 plugin.js */
+  dependencies?: Record<string, string>
+  warnings: string[]
+  /** 新增了 DO 类：要先往仓库补 migrations，确认后带 acknowledgeDurableObjects 安装 */
+  durableObjects: { required: true; message: string } | null
+}
+
+export interface CheckUpdateResult {
+  ok: true
+  name: string
+  current: string
+  currentVersion?: string
+  latestSha: string
+  latestVersion: string | null
+  upToDate: boolean
+  latestSource?: string
+  /** 新版本新增的权限 */
+  newPermissions?: string[]
+  /** 新版本新增的 DO 类：要先改仓库，不能直接批量更新 */
+  newDurableObjects?: string[]
+}
+
+/** 账本里某个插件最近的一条记录 */
+export interface LedgerSummary {
+  action: InstallRecord['action']
+  status: InstallRecord['status']
+  error: string | null
+  ts: number
+  buildUuid: string | null
+}
+
+/** GET /manifest/plugins 的一项：D1 清单里的插件与线上的对照 */
+export interface ManagedPlugin {
+  name: string
+  version: string
+  source: string
+  addedAt: number
+  updatedAt: number
+  /** deployed 线上就是这一份；differs 线上是另一份；not_deployed 线上根本没有（等构建或构建失败） */
+  state: 'deployed' | 'differs' | 'not_deployed'
+  live: { version: string; source: string | null; from: 'd1' | 'repo' | null } | null
+  /** 构建机回报的构建错误（只对当前 source 有效） */
+  buildError: string | null
+  lastRecord: LedgerSummary | null
+  manifest: ManifestSummary | null
+}
+
+export interface ManagedPluginsResult {
+  ok: true
+  hash: string
+  liveHash: string | null
+  /** D1 清单是否已全部上线；null 表示老部署判断不了 */
+  inSync: boolean | null
+  building: boolean
+  plugins: ManagedPlugin[]
+  /** 线上还在跑、D1 里已经删了：卸载还没生效 */
+  removing: Array<{ name: string; version: string; source: string; lastRecord: LedgerSummary | null }>
 }
 
 export interface TriggerBuildResult {
@@ -163,7 +265,9 @@ export interface UninstallResult {
   ok: true
   removed: { name: string; version: string; source: string }
   /** 卸载后就地触发重建；失败时卸载本身仍然生效（清单已改），需要手动重试构建 */
-  build: { buildUuid: string } | { error: string }
+  build: BuildOutcome
+  /** 例如：还有插件依赖它提供的服务 */
+  warnings?: string[]
   data: {
     purged: boolean
     hook: 'none' | 'ok' | 'failed'

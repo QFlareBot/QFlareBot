@@ -1,5 +1,146 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDeployError, envFromRemoteConfig, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
+import {
+  buildReportUrl,
+  classifyDeployError,
+  describePluginFailures,
+  envFromRemoteConfig,
+  explainBuildError,
+  manifestPolicy,
+  originOf,
+  planDependencyInstall,
+  resolveScriptName,
+  scrubbedEnv,
+  tailLines,
+  unresolvedBindings,
+} from './deploy-policy.mjs'
+
+describe('planDependencyInstall', () => {
+  const files = (...names) => new Set(['package.json', 'src', ...names])
+
+  it('没有第三方依赖就跳过——零依赖插件的构建与以前完全一样', () => {
+    expect(planDependencyInstall({ devDependencies: { '@qqbot/sdk': 'file:../qqbot-workers/packages/sdk' } }, files())).toEqual({ action: 'skip' })
+    expect(planDependencyInstall({}, files())).toEqual({ action: 'skip' })
+    expect(planDependencyInstall(null, files())).toEqual({ action: 'skip' })
+    // 把 SDK 误写进 dependencies 也照旧：它本来就不从 npm 装
+    expect(planDependencyInstall({ dependencies: { '@qqbot/sdk': '^0.1.0' } }, files())).toEqual({ action: 'skip' })
+  })
+
+  it('按 lockfile 选包管理器：只装 dependencies、不跑安装脚本', () => {
+    const pkg = { dependencies: { nanoid: '^5.0.0' } }
+    expect(planDependencyInstall(pkg, files('package-lock.json'))).toEqual({
+      action: 'install',
+      manager: 'npm',
+      command: 'npm',
+      args: ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+      packages: ['nanoid'],
+    })
+    expect(planDependencyInstall(pkg, files('pnpm-lock.yaml'))).toMatchObject({
+      manager: 'pnpm',
+      args: ['install', '--frozen-lockfile', '--prod', '--ignore-scripts'],
+    })
+  })
+
+  it('两种 lockfile 都在时听 packageManager 的，没写就用 npm', () => {
+    const both = files('package-lock.json', 'pnpm-lock.yaml')
+    expect(planDependencyInstall({ dependencies: { a: '1' } }, both)).toMatchObject({ manager: 'npm' })
+    expect(planDependencyInstall({ dependencies: { a: '1' }, packageManager: 'pnpm@10.0.0' }, both)).toMatchObject({ manager: 'pnpm' })
+  })
+
+  it('有依赖却没 lockfile：失败并说清为什么非要不可', () => {
+    const plan = planDependencyInstall({ dependencies: { nanoid: '^5.0.0' } }, files())
+    expect(plan.action).toBe('error')
+    expect(plan.message).toContain('没有提交 lockfile')
+    expect(plan.message).toContain('nanoid')
+  })
+
+  it('yarn / bun 的 lockfile 暂不支持', () => {
+    expect(planDependencyInstall({ dependencies: { a: '1' } }, files('yarn.lock'))).toMatchObject({ action: 'error' })
+    expect(planDependencyInstall({ dependencies: { a: '1' } }, files('bun.lock'))).toMatchObject({ action: 'error' })
+  })
+
+  it('有真依赖、又把框架包写进了 dependencies：装不了（npm 上没有它），提示挪到 devDependencies', () => {
+    const plan = planDependencyInstall({ dependencies: { nanoid: '^5.0.0', '@qqbot/sdk': '^0.1.0' } }, files('package-lock.json'))
+    expect(plan).toMatchObject({ action: 'error' })
+    expect(plan.message).toContain('@qqbot/sdk 请移到 devDependencies')
+  })
+})
+
+describe('scrubbedEnv', () => {
+  it('去掉凭证，留下 PATH、HOME 与 CI 标识', () => {
+    const env = {
+      PATH: '/usr/bin',
+      HOME: '/root',
+      CI: 'true',
+      WORKERS_CI_BUILD_UUID: 'b-1',
+      MANIFEST_URL: 'https://x/admin/build-manifest',
+      MANIFEST_TOKEN: 't',
+      CLOUDFLARE_API_TOKEN: 't',
+      CLOUDFLARE_ACCOUNT_ID: 'a',
+      CF_D1_ID: 'd',
+      NPM_TOKEN: 't',
+      npm_config__authToken: 't',
+      GITHUB_TOKEN: 't',
+      SOME_API_KEY: 'k',
+    }
+    expect(scrubbedEnv(env)).toEqual({ PATH: '/usr/bin', HOME: '/root', CI: 'true', WORKERS_CI_BUILD_UUID: 'b-1' })
+  })
+})
+
+describe('tailLines / explainBuildError', () => {
+  it('只留最后几行非空输出', () => {
+    expect(tailLines('a\n\nb\nc\n', 2)).toBe('b\nc')
+  })
+
+  it('找不到包时补一句：要写进插件自己的 dependencies', () => {
+    const text = explainBuildError('Build failed with 1 error:\nsrc/index.ts:2:21: ERROR: Could not resolve "uqr"')
+    expect(text).toContain('找不到 uqr')
+    expect(text).toContain('dependencies')
+    expect(explainBuildError('别的错误')).toBe('别的错误')
+  })
+})
+
+describe('buildReportUrl', () => {
+  it('从 MANIFEST_URL 推出回报地址，查询串原样保留', () => {
+    expect(buildReportUrl('https://bot.example.workers.dev/admin/build-manifest')).toBe('https://bot.example.workers.dev/admin/build-report')
+    expect(buildReportUrl('https://bot.example/admin/build-manifest?x=1')).toBe('https://bot.example/admin/build-report?x=1')
+  })
+
+  it('推不出来就不报：没配、或者不是 build-manifest 结尾', () => {
+    expect(buildReportUrl(undefined)).toBeNull()
+    expect(buildReportUrl('https://bot.example/some/other')).toBeNull()
+  })
+})
+
+describe('originOf', () => {
+  it('D1 清单里有这个名字就是面板装的，source 留原始来源', () => {
+    const remote = new Set(['weather'])
+    expect(originOf({ name: 'weather', source: 'git:me/weather@a1b2c3d4' }, remote)).toEqual({ from: 'd1', source: 'git:me/weather@a1b2c3d4' })
+    expect(originOf({ name: 'echo', source: 'file:../../plugins/echo/dist/plugin.js' }, remote)).toEqual({
+      from: 'repo',
+      source: 'file:../../plugins/echo/dist/plugin.js',
+    })
+  })
+})
+
+describe('describePluginFailures', () => {
+  it('逐个列出失败的插件，并说明线上保持原样', () => {
+    const text = describePluginFailures([
+      { name: 'a', source: 'git:me/a@a1b2c3d4', error: '声明清单与源码不一致' },
+      { name: 'b', source: 'git:me/b@b2c3d4e5', error: '下载源码失败：HTTP 404' },
+    ])
+    expect(text).toContain('2 个插件构建失败')
+    expect(text).toContain('线上保持上一次成功的版本')
+    expect(text).toContain('  - a（git:me/a@a1b2c3d4）：声明清单与源码不一致')
+    expect(text).toContain('  - b（git:me/b@b2c3d4e5）：下载源码失败：HTTP 404')
+  })
+
+  it('报没报上去说法不同：报不上去（线上是旧版本）时不能说「已回报」', () => {
+    const failures = [{ name: 'a', source: 'git:me/a@a1b2c3d4', error: 'x' }]
+    expect(describePluginFailures(failures, { reported: true })).toContain('已回报给面板')
+    expect(describePluginFailures(failures)).not.toContain('已回报')
+    expect(describePluginFailures(failures)).toContain('DELETE /admin/manifest/plugins/<名字>')
+  })
+})
 
 describe('unresolvedBindings', () => {
   it('挑出 unresolved，skipped 不算——CF_*=none 是「这个资源不存在」，不是没解析出来', () => {

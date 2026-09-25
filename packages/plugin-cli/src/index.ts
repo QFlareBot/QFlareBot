@@ -1,4 +1,4 @@
-export { buildPlugin, type BuildPluginOptions, type BuildPluginResult } from './build.js'
+export { buildPlugin, bundledPackages, type BuildPluginOptions, type BuildPluginResult } from './build.js'
 export {
   expectedPluginName,
   extractPluginManifest,

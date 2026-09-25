@@ -145,21 +145,26 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 - 绑定没解析出来（`dist/projection.json` 的 `bindings` 里有 `unresolved`）一律拒绝部署。判据是投影记下的解析状态而不是元数据里的占位符：D1/R2 没解析出来时是**整个绑定不出现**，扫占位符只拦得住 KV。Worker 如实回答没绑的资源（`/admin/build-config` 的 `hasD1` / `hasR2` 为假，比如 R2 未激活被降级）按显式跳过（`CF_*=none`）处理，不算没解析出来。
 - 降级到 `wrangler deploy` 时会打一段醒目警告并列出本次会同步的脚本级设置（routes / workers_dev / crons）——Versions API 不碰这些，wrangler 会按配置改。自定义域名例外：模板与生成配置都不声明 routes，wrangler 在这种情况下完全不碰域名（一旦声明，它会按配置**整体替换**，后台另绑的会被摘掉）。
 - 构建机拉不到构建清单时**硬失败**（见上文），只有「这次部署确实没有 D1」（`/admin/build-config` 的 `hasD1` 为假）或显式 `MANIFEST_FALLBACK=1` 才会回退到仓库内置清单。
+- **git 插件在机器人仓库外面构建，依赖按插件自己的 lockfile 装**：源码解包到系统临时目录，有第三方依赖的执行 `npm ci --omit=dev --ignore-scripts`（有 `pnpm-lock.yaml` 时用 pnpm），再在去掉了凭证环境变量的子进程里打包、抽清单。没有第三方依赖的插件不走安装；有依赖却没提交 lockfile 的直接失败。插件解析不到机器人仓库里装着的包——要用什么，写进插件自己的 `dependencies`。
+- **有插件构建失败就不部署**，线上保持上一次成功的版本。构建机不在第一个失败处停下，而是把每个 git 插件都试一遍，把「哪个插件、为什么」经 `POST /admin/build-report` 报回面板（线上 Worker 是不认识这个端点的旧版本时只告警），再让构建失败。失败的条目留在 D1 里，之后每次构建都会带上它，所以要在面板插件页「未上线的改动」里卸载或撤销它。
+- 构建机给每个插件记下出处（D1 装的还是仓库内置的、原始 git 来源）写进入口模块，面板据此分清已上线与未上线；出处不参与投影哈希，本地 `pnpm project` 与构建机的哈希照样一致。
 - 回滚三选一：Cloudflare 后台版本回滚；D1 恢复清单快照 + 重新触发构建；git revert 内置清单 + 重建。
 
 ## 管理端点（自部署相关）
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins, pendingBuild }`；`BUILD_TOKEN` 优先，未配置走管理鉴权。`pendingBuild` 是触发这次构建的账本记录，构建机据此对照「触发时」与「实际构建」的清单哈希，不一致只告警 |
-| `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`**并就地触发一次重建**；校验声明清单、撞名、conflicts、depends。插件声明了 Durable Object 时返回 409 `durable_objects_migration_required` 并给出要往 `wrangler.jsonc` 补的 migrations（见下），补完后带 `acknowledgeDurableObjects: true` 重新安装 |
-| `DELETE /admin/manifest/plugins/:name[?purge=true]` | 卸载（移出 D1 清单）**并就地触发一次重建**；响应里的 `build` 是 `{ buildUuid }` 或 `{ error }`——触发失败不回滚卸载，需要手动重试构建。`purge=true` 连插件数据一起清，默认保留 |
+| `GET /admin/build-manifest` | 构建机拉取插件清单 `{ hash, plugins, pendingBuild }`；`BUILD_TOKEN` 优先，未配置走管理鉴权。`pendingBuild` 是触发这次构建的账本记录（构建机带 `x-build-uuid` 头时精确对上，不带时取最近一条进行中的），构建机据此对照「触发时」与「实际构建」的清单哈希，不一致只告警 |
+| `POST /admin/build-report` | 构建机回报失败原因 `{ buildUuid, phase, failures: [{ name, source, error }], error? }`；鉴权同上。错误记到 D1 条目（只记 source 没变的那条）与这次构建的账本上，**不改清单** |
+| `GET /admin/manifest/plugins` | D1 清单里每个插件与线上部署的对照：`deployed` 已上线、`differs` 线上是另一份、`not_deployed` 线上根本没有（等构建或构建失败——这类插件不在 `/admin/status` 里，靠这里才看得到、卸载得了）；`removing` 列出线上还在跑、D1 里已删的（卸载还没生效）；`inSync` 表示 D1 是否已全部上线 |
+| `POST /admin/manifest/plugins` | 安装/升级 `{ source: "git:owner/repo@sha[#子目录]" }`**并就地触发一次重建**；校验声明清单、撞名、conflicts、depends。可选 `dryRun: true` 只预检不写（返回清单摘要、`warnings` 与 DO 提示），`build: false` 只写清单不构建（批量更新：逐个写，最后 `POST /admin/builds` 一次）。同名换仓库、命令重名、覆盖内置插件等只放进 `warnings`，不拦。插件**新增**了 Durable Object 类时返回 409 `durable_objects_migration_required` 并给出要往 `wrangler.jsonc` 补的 migrations（见下），补完后带 `acknowledgeDurableObjects: true` 重新安装；DO 类没变的升级不再拦 |
+| `DELETE /admin/manifest/plugins/:name[?purge=true][&build=false]` | 卸载（移出 D1 清单）**并就地触发一次重建**；响应里的 `build` 是 `{ buildUuid }`、`{ error }` 或 `{ skipped, reason }`——触发失败不回滚卸载，需要手动重试构建；卸载的是从没上线的插件时清单已与线上一致，不触发构建。`purge=true` 连插件数据一起清，默认保留；新版本上线后 Cron 会再收一次尾（删 onInstall 标记、按需再清数据） |
 | `POST /admin/builds` | 触发构建，返回 `buildUuid` |
 | `GET /admin/builds` | 安装/构建账本，顺带同步进行中构建的状态与 commit。Cron 也会自动同步（有进行中记录时最快 3 分钟一次），所以装完插件关掉页面账本照样会收敛 |
 | `GET /admin/storage` | 各插件占用的 KV 键数 / D1 表与行数 / R2 对象数与字节数，以及不属于任何已装插件的孤儿数据 |
 | `DELETE /admin/storage/orphans/:name` | 清掉某个已卸载插件的残留数据（对还装着的插件返回 409） |
 
-面板 → 插件页可以直接粘贴仓库链接安装（自动解析最新 commit）并查看构建记录；以上端点也可用 curl / 任意客户端调用。
+面板 → 插件页可以直接粘贴仓库链接安装（自动解析最新 commit，先预检再确认）、「检查全部更新」后勾选批量更新（只构建一次）、在「未上线的改动」里卸载或撤销构建失败的条目，并查看构建记录；以上端点也可用 curl / 任意客户端调用。
 
 ## 本地清单格式
 

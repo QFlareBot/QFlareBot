@@ -12,7 +12,7 @@ npm install
 
 - `src/index.ts`：插件入口，必须默认导出 `definePlugin(...)`。示例包含一个命令 `/hello`、一个正则 `ping`、一个 `qq.group.robot_added` 事件，以及面板据以渲染配置表单的 `configSchema`。
 - 插件不 import 运行时，所有能力（配置、KV、D1、日志、OpenAPI）都从处理器参数的 `ctx` 上取。
-- 只能 import `@qqbot/sdk` 与普通 npm 包；`cloudflare:workers` 等 Workers 内建模块可以用，构建时会保留为外部依赖。
+- **可以用第三方包**：写进 `dependencies`、**提交 lockfile**（`package-lock.json` 或 `pnpm-lock.yaml`），机器人的构建机按 lockfile 安装、打进 `plugin.js`；有依赖没 lockfile 会构建失败。包必须能在 Workers 里跑（不依赖 Node 内置模块、不用 `eval`）。`@qqbot/sdk` 放 `devDependencies`，其他 `@qqbot/*` 不许 import；`cloudflare:workers` 等 Workers 内建模块可以用，构建时保留为外部依赖。
 - 记得补一个 `LICENSE`，模板不替你选。
 - **提示**：若独立开发插件且 `@qqbot/sdk` 与 `@qqbot/plugin-cli` 尚未发布到 npm 公共源，建议在本项目 monorepo 内以本地工作区方式开发，或通过 `npm link` 进行本地调试。在此之前，模板自带的 CI 会在「预检依赖」一步失败——这是预期行为，依赖可用或换成你自己的 scope 后自动恢复。
 
@@ -50,7 +50,7 @@ npm run build     # 等价于 qqbot-plugin build
 
 产物在 `dist/`：
 
-- `dist/plugin.js`：单文件 ESM，已把 `@qqbot/sdk` 与所有依赖打进去，只保留 `cloudflare:*` 为外部 import；
+- `dist/plugin.js`：单文件 ESM，已把 `@qqbot/sdk` 与第三方依赖打进去，只保留 `cloudflare:*` 为外部 import；
 - `dist/plugin.js.map`：source map；
 - `dist/manifest.json`：从插件定义抽出的纯数据清单（名称、版本、命令、事件、配置 Schema 等），版本取自 `package.json`。
 
@@ -81,7 +81,8 @@ CI（`.github/workflows/ci.yml`）在每次 push 时构建、校验声明清单�
 curl -X POST https://<机器人域名>/admin/manifest/plugins \
   -H "Authorization: Bearer <管理密钥>" -H "content-type: application/json" \
   -d '{"source": "git:me/qqbot-plugin-example@a1b2c3d4e5f6"}'
-curl -X POST https://<机器人域名>/admin/builds -H "Authorization: Bearer <管理密钥>"
 ```
 
-安装后需要触发一次构建才会上线（见 seed README 的自部署设置）。构建时产物会记录 SRI 完整性；声明清单与源码不一致、依赖不满足、与已装插件冲突都会直接拒绝安装或构建失败，而不是静默部署。
+只支持**公开的** GitHub 仓库：安装时匿名读仓库里的 `manifest.json`，构建机也是匿名下载源码。
+
+安装端点写完清单会就地触发一次构建，上线后插件出现在面板里（见 seed README 的自部署设置）；一次装好几个时每个都带 `"build": false`，最后调一次 `POST /admin/builds`，只构建一次。构建时产物会记录 SRI 完整性；声明清单与源码不一致、依赖不满足、与已装插件冲突都会直接拒绝安装或构建失败，而不是静默部署。构建失败时线上保持上一次成功的版本，失败的插件会出现在面板插件页「未上线的改动」里，可以直接卸载。

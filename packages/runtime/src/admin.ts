@@ -3,19 +3,23 @@ import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } fro
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
   checkPluginUpdate,
+  dependentsOf,
   handleBuildConfig,
   handleBuildManifest,
+  handleBuildReport,
   installManifestPlugin,
+  knownManifests,
   listBuildsStatus,
+  listManagedPlugins,
   triggerBuild,
   uninstallManifestPlugin,
   updatePlugin,
 } from './adminManifest.js'
 import { purgeOrphan, storageReport } from './adminStorage.js'
-import { validateConfig } from './configSchema.js'
+import { validateConfig, withConfigDefaults } from './configSchema.js'
 import { clearEvents, eventStats, listEvents } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
-import { listManifestPlugins } from './manifestStore.js'
+import { listManifestPluginRecords, type ManifestPluginRecord } from './manifestStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
 import type { Sender } from './session.js'
@@ -164,10 +168,13 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
  * POST /admin/qq/url-link           生成机器人分享/邀请链接（/v2/generate_url_link 透传）
  * —— 自部署（构建清单存 D1，构建机经 Builds API 重建，见 adminManifest.ts）——
  * GET  /admin/build-manifest        构建机拉取插件清单 { hash, plugins }；鉴权 BUILD_TOKEN 优先，未配置走管理鉴权
- * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）
+ * POST /admin/build-report          构建机回报失败原因（哪个插件、什么错误）；鉴权同上，只记错误不改清单
+ * GET  /admin/manifest/plugins      D1 里的插件与线上部署的对照：已上线 / 线上是另一份 / 根本没上线（可卸载）
+ * POST /admin/manifest/plugins      安装/升级插件 { source: "git:owner/repo@sha[#subdir]" }（校验声明清单、撞名与依赖）；
+ *                                   可选 dryRun: true 只预检不写，build: false 只写 D1 不构建（批量更新）
  * POST /admin/manifest/plugins/:name/check-update  解析上游仓库最新 commit，只查不装
  * POST /admin/manifest/plugins/:name/update        升级到上游最新 commit 并自动触发构建
- * DELETE /admin/manifest/plugins/:name[?purge=true]  卸载插件（移出 D1 清单；purge=true 连数据一起清）
+ * DELETE /admin/manifest/plugins/:name[?purge=true][&build=false]  卸载插件（移出 D1 清单；purge=true 连数据一起清）
  * GET  /admin/storage               各插件的 KV/D1/R2 占用，以及不属于任何已装插件的孤儿数据
  * DELETE /admin/storage/orphans/:name  清掉某个已卸载插件的残留数据
  * POST /admin/builds                触发 Workers Builds 重建（{ branch } 可选），返回 buildUuid
@@ -178,10 +185,11 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   const sub = url.pathname.slice(deps.options.adminPath.length) || '/'
   const method = request.method
 
-  // 构建机拉清单与基础设施配置：BUILD_TOKEN 优先，未配置时与面板同一鉴权（ADMIN_TOKEN 本身可未配置）；
+  // 构建机拉清单、拉基础设施配置、回报失败原因：BUILD_TOKEN 优先，未配置时与面板同一鉴权（ADMIN_TOKEN 本身可未配置）；
   // 放在 ADMIN_TOKEN 存在性检查之前，构建端点不随管理 API 一起关闭
   if (method === 'GET' && sub === '/build-manifest') return handleBuildManifest(request, scope)
   if (method === 'GET' && sub === '/build-config') return handleBuildConfig(request, scope)
+  if (method === 'POST' && sub === '/build-report') return handleBuildReport(request, scope)
 
   const token = scope.env.ADMIN_TOKEN
   if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)
@@ -198,14 +206,17 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const stats = await eventStats(scope.env).catch(() => null)
     // 哪些插件是「装进来的」（D1 清单里有记录）：面板据此决定是否显示卸载入口。
     // 仓库内置插件卸载会被 404 挡掉，给个按钮只会误导。D1 读不到就降级为「都不可卸载」并留日志。
-    const installedNames = scope.env.DB
-      ? await listManifestPlugins(scope.env.DB)
-          .then((list) => new Set(list.map((p) => p.name)))
-          .catch((err: unknown) => {
-            deps.logger.warn('读取已装插件清单失败，面板将不显示卸载入口', { error: (err as Error).message })
-            return new Set<string>()
-          })
-      : new Set<string>()
+    let records: ManifestPluginRecord[] = []
+    let d1Readable = !!scope.env.DB
+    if (scope.env.DB) {
+      records = await listManifestPluginRecords(scope.env.DB).catch((err: unknown) => {
+        deps.logger.warn('读取已装插件清单失败，面板将不显示卸载入口', { error: (err as Error).message })
+        d1Readable = false
+        return []
+      })
+    }
+    const installedNames = new Set(records.map((p) => p.name))
+    const manifests = knownManifests(records, deps.registry)
     return json({
       ok: true,
       runtime: deps.runtimeVersion,
@@ -224,12 +235,21 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
           description: p.manifest.description ?? '',
           enabled: state?.enabled ?? true,
           priority: state?.priority ?? 0,
-          config: state?.config ?? p.manifest.defaultConfig ?? null,
+          // 与处理器里的 ctx.config 同一个规则：升级后新增的配置项回落默认值
+          config: withConfigDefaults(state?.config, p.manifest.defaultConfig) ?? p.manifest.defaultConfig ?? null,
           configSchema: p.manifest.configSchema ?? null,
           permissions: p.manifest.permissions,
           error: p.error?.message ?? null,
           /** 来自 D1 清单（面板装进来的）才能卸载；仓库内置的改 qqbot.manifest.json 重新构建 */
           installed: installedNames.has(p.manifest.name),
+          /** 线上这一份的出处（构建机写入）；老部署为 null */
+          origin: p.origin ?? null,
+          /** 已从 D1 清单移除、线上还在跑：卸载还没生效（重建中或构建失败）。以前这种状态会被误显示成「仓库内置插件」 */
+          removing: d1Readable && p.origin?.from === 'd1' && !installedNames.has(p.manifest.name),
+          depends: Object.keys(p.manifest.depends ?? {}),
+          services: p.manifest.services ?? [],
+          /** 卸载它会断掉的插件：它们依赖的服务只有它提供 */
+          dependents: dependentsOf(p.manifest.name, manifests),
           commands: p.manifest.commands,
           events: p.manifest.events.flatMap((e) => e.event),
           buttons: p.manifest.buttons.map((b) => b.id),
@@ -254,6 +274,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     }
   }
 
+  if (sub === '/manifest/plugins' && method === 'GET') return listManagedPlugins(scope, deps)
   if (sub === '/manifest/plugins' && method === 'POST') return installManifestPlugin(request, scope, deps)
   const checkUpdate = matchPath('/manifest/plugins/:name/check-update', sub)
   if (checkUpdate && method === 'POST') return checkPluginUpdate(checkUpdate.name!, scope, deps)
@@ -262,7 +283,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   const manifestRemove = matchPath('/manifest/plugins/:name', sub)
   if (manifestRemove && method === 'DELETE') {
     const purge = url.searchParams.get('purge') === 'true'
-    return uninstallManifestPlugin(manifestRemove.name!, purge, scope, deps)
+    const build = url.searchParams.get('build') !== 'false'
+    return uninstallManifestPlugin(manifestRemove.name!, purge, scope, deps, { build })
   }
 
   if (sub === '/storage' && method === 'GET') return storageReport(scope, deps)

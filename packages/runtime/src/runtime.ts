@@ -1,5 +1,5 @@
 import { handleAdmin } from './admin.js'
-import { syncBuildLedgerOnSchedule } from './adminManifest.js'
+import { processPendingCleanups, syncBuildLedgerOnSchedule } from './adminManifest.js'
 import { serveAsset } from './assets.js'
 import { cronMatches } from './cron.js'
 import { pruneSeenEvents } from './dedupe.js'
@@ -100,7 +100,11 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
       // 构建账本的状态回填以前只在有人打开面板时发生——装完插件关掉页面，账本就永远停在
       // 「构建中」，24h 后还会被卡死收敛误标成失败。这里自己收敛（内部有节流与 in-flight 判空，
       // 没有进行中的构建时不产生任何网络请求）。安全模式下也要跑：它与插件无关。
-      execCtx.waitUntil(syncBuildLedgerOnSchedule(scope, { registry, options: resolved, logger, runtimeVersion: RUNTIME_VERSION }))
+      const adminDeps = { registry, options: resolved, logger, runtimeVersion: RUNTIME_VERSION }
+      execCtx.waitUntil(syncBuildLedgerOnSchedule(scope, adminDeps))
+      // 卸载的后半段：插件真的不在这份部署里了才删标记、按需再清数据（见 processPendingCleanups）。
+      // 同样与插件无关，安全模式下也要跑
+      execCtx.waitUntil(processPendingCleanups(scope, adminDeps))
 
       if (scope.snapshot.safeMode) return
       const now = new Date(event.scheduledTime)

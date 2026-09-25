@@ -2,7 +2,7 @@
 import { ArrowLeft, PanelsTopLeft } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, ApiError } from '../api/client.js'
+import { api, ApiError, describeBuild } from '../api/client.js'
 import PageHeader from '../components/PageHeader.vue'
 import SchemaForm from '../components/SchemaForm.vue'
 import QBadge from '../components/ui/QBadge.vue'
@@ -95,8 +95,11 @@ async function uninstall() {
   if (!plugin.value) return
   const name = plugin.value.name
   const purge = purgeOnUninstall.value
-  const tail = purge ? '，并清空它的 KV / D1 / R2 数据（不可恢复）' : '（数据保留，之后可在「存储」页单独清掉）'
-  if (!confirm(`确定卸载 ${name}？它会从插件清单移除并触发一次重建${tail}`)) return
+  const tail = purge ? '，并清空它的 KV / D1 / R2 数据与面板里的配置（不可恢复）' : '（数据保留，之后可在「存储」页单独清掉）'
+  // 依赖它提供的服务的插件：卸载后它们调用 ctx.service 会报错
+  const dependents = plugin.value.dependents ?? []
+  const warn = dependents.length ? `\n\n注意：${dependents.join('、')} 依赖它提供的服务，卸载后这些插件调用会报错。` : ''
+  if (!confirm(`确定卸载 ${name}？它会从插件清单移除并触发一次重建${tail}${warn}`)) return
 
   removing.value = true
   try {
@@ -104,11 +107,9 @@ async function uninstall() {
     if (res.data.hook === 'failed') {
       push(`已卸载，但插件的 onUninstall 报错：${res.data.hookError ?? '未知原因'}`, 'warning')
     }
-    if ('buildUuid' in res.build) {
-      push(`${name} 已卸载并触发重建，完成后从列表消失`, 'success')
-    } else {
-      push(`${name} 已卸载，但触发构建失败：${res.build.error}`, 'warning')
-    }
+    const { text, level } = describeBuild(`${name} 已卸载`, res.build)
+    push('buildUuid' in res.build ? `${text}，完成后从列表消失` : text, level)
+    if (res.warnings?.length) push(`提醒：${res.warnings.join('；')}`, 'warning')
     await router.push('/plugins')
   } catch (e) {
     push(`卸载失败：${(e as Error).message}`, 'error')
@@ -187,15 +188,23 @@ async function uninstall() {
 
           <QCard v-if="plugin.installed" title="卸载" description="从插件清单移除并触发一次重建；重建完成前它仍在运行">
             <div class="flex flex-col gap-3 text-sm">
+              <p v-if="plugin.dependents?.length" class="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
+                {{ plugin.dependents.join('、') }} 依赖它提供的服务，卸载后这些插件调用会报错。
+              </p>
               <label class="flex cursor-pointer items-start gap-2">
                 <input v-model="purgeOnUninstall" type="checkbox" class="mt-0.5" />
                 <span>
                   同时清空它的数据
-                  <span class="block text-xs text-fg-muted">KV / D1 / R2 一并删除，不可恢复；不勾选则数据保留，之后可在「存储」页清掉</span>
+                  <span class="block text-xs text-fg-muted">KV / D1 / R2 与面板里的配置一并删除，不可恢复；不勾选则数据保留，之后可在「存储」页清掉</span>
                 </span>
               </label>
               <div><QButton variant="danger" :loading="removing" @click="uninstall">卸载插件</QButton></div>
             </div>
+          </QCard>
+          <QCard v-else-if="plugin.removing" title="卸载" description="卸载还没生效">
+            <p class="text-xs text-fg-muted">
+              它已经从插件清单移除，等这次重建完成后下线；在那之前仍在运行。构建失败的话，可以到插件页「未上线的改动」里重新构建，或者撤销卸载。
+            </p>
           </QCard>
           <QCard v-else title="卸载" description="这是仓库内置插件">
             <p class="text-xs text-fg-muted">它在仓库的 <code class="font-mono">qqbot.manifest.json</code> 里，从那里移除后重新构建即可下架。</p>

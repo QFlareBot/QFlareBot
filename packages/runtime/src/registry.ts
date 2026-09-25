@@ -1,9 +1,11 @@
 import { extractManifest, type Manifest, type PluginDefinition } from '@qqbot/sdk'
 import { createLogger, errorInfo } from './logger.js'
-import type { LazyPluginEntry, PluginEntry } from './types.js'
+import type { LazyPluginEntry, PluginEntry, PluginOrigin } from './types.js'
 
 export interface RegisteredPlugin {
   readonly manifest: Manifest
+  /** 出处（构建机写入）；老部署与静态入口没有，调用方按「出处未知」处理 */
+  readonly origin?: PluginOrigin
   /** 求值失败时的错误；有值则本插件被跳过 */
   error?: { message: string; stack?: string }
   /** 懒加载定义；每个 isolate 只求值一次 */
@@ -12,6 +14,13 @@ export interface RegisteredPlugin {
 
 function isLazyEntry(entry: PluginEntry): entry is LazyPluginEntry {
   return 'manifest' in entry && typeof (entry as LazyPluginEntry).load === 'function'
+}
+
+/** 入口模块是生成的，但形状不对也不能让注册表跟着坏：认不出来就当没有 */
+function originOf(entry: PluginEntry): PluginOrigin | undefined {
+  if (!isLazyEntry(entry) || !entry.origin) return undefined
+  const { from, source } = entry.origin
+  return (from === 'd1' || from === 'repo') && typeof source === 'string' ? { from, source } : undefined
 }
 
 function isDefinition(value: unknown): value is PluginDefinition<unknown> {
@@ -40,8 +49,10 @@ export class PluginRegistry {
     }
 
     let cached: Promise<PluginDefinition<unknown> | null> | null = null
+    const origin = originOf(entry)
     const plugin: RegisteredPlugin = {
       manifest,
+      ...(origin ? { origin } : {}),
       load: () => {
         cached ??= this.evaluate(entry, plugin)
         return cached

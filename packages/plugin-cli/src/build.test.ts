@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildPlugin } from './build.js'
+import { buildPlugin, bundledPackages } from './build.js'
 import { expectedPluginName, extractPluginManifest, ManifestValidationError } from './manifest.js'
 
 // 临时插件里的 `@qqbot/sdk` 直接指向 SDK 源码，不依赖 dist 或 node_modules
@@ -115,6 +115,69 @@ describe('buildPlugin', () => {
     await writePlugin(`export const plugin = { name: 'demo' }`)
     await expect(buildPlugin({ cwd: dir, alias })).rejects.toThrow('入口必须默认导出 definePlugin')
     expect(await exists(path.join(dir, 'dist'))).toBe(false)
+  })
+})
+
+describe('第三方依赖', () => {
+  /** 在临时插件目录里放一个假的 npm 包 */
+  async function fakePackage(name: string, code = 'export const pad = (s) => ` ${s}`\n'): Promise<void> {
+    const pkgDir = path.join(dir, 'node_modules', ...name.split('/'))
+    await mkdir(pkgDir, { recursive: true })
+    await writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({ name, version: '1.0.0', type: 'module', main: 'index.js' }))
+    await writeFile(path.join(pkgDir, 'index.js'), code)
+  }
+
+  it('第三方包照常打进 plugin.js，并把包名报出来', async () => {
+    await writePlugin(`
+import { definePlugin } from '@qqbot/sdk'
+import { pad } from 'left-pad'
+export default definePlugin({ name: 'demo', commands: { p: () => pad('x') } })
+`)
+    await fakePackage('left-pad')
+    const result = await buildPlugin({ cwd: dir, alias })
+    expect(result.thirdPartyPackages).toEqual(['left-pad'])
+    // 打进去了，不是留成外部 import（这个插件没用 DO，连 cloudflare:workers 都摇掉了）
+    const code = await readFile(result.outFile, 'utf8')
+    expect(code).toContain('` ${s}`')
+    expect(importSpecifiers(code)).toEqual([])
+  })
+
+  it('只 import 类型不算：被 esbuild 摇掉，不进产物', async () => {
+    await writePlugin(`
+import { definePlugin } from '@qqbot/sdk'
+import type { Pad } from 'left-pad'
+const nothing: Pad | null = null
+export default definePlugin({ name: 'demo', commands: { p: () => String(nothing) } })
+`)
+    await fakePackage('left-pad')
+    expect((await buildPlugin({ cwd: dir, alias })).thirdPartyPackages).toEqual([])
+  })
+
+  it('SDK 本身不算第三方', async () => {
+    await writePlugin(PLUGIN_SOURCE)
+    expect((await buildPlugin({ cwd: dir, alias })).thirdPartyPackages).toEqual([])
+  })
+
+  it('框架内部的包不许打进插件：会带进第二份运行时', async () => {
+    await writePlugin(`
+import { definePlugin } from '@qqbot/sdk'
+import { createRuntime } from '@qqbot/runtime'
+export default definePlugin({ name: 'demo', commands: { p: () => String(typeof createRuntime) } })
+`)
+    await fakePackage('@qqbot/runtime', 'export const createRuntime = () => ({})\n')
+    await expect(buildPlugin({ cwd: dir, alias })).rejects.toThrow('插件不能 import 框架内部的包 @qqbot/runtime')
+  })
+})
+
+describe('bundledPackages', () => {
+  it('认得出普通、scoped 与 pnpm 布局的包名；框架自己的包不列', () => {
+    const inputs = {
+      'src/index.ts': {},
+      'node_modules/left-pad/index.js': {},
+      'node_modules/.pnpm/@scope+x@1.0.0/node_modules/@scope/x/dist/a.js': {},
+      '../node_modules/@qqbot/sdk/dist/index.js': {},
+    }
+    expect(bundledPackages({ inputs, outputs: {} } as never)).toEqual(['@scope/x', 'left-pad'])
   })
 })
 

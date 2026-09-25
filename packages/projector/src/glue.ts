@@ -82,8 +82,10 @@ export function generateGlue(opts: { manifest: DeployManifest; hash: string }): 
 
   lines.push('const plugins = [')
   for (const p of plugins) {
+    // 出处只在构建机写了的时候才带：老清单与本地投影没有，运行时按「出处未知」处理
+    const origin = p.origin ? `, origin: ${JSON.stringify({ from: p.origin.from, source: p.origin.source })}` : ''
     lines.push(
-      `  { manifest: ${JSON.stringify(p.manifest)}, load: () => import('./${pluginModulePath(p.name)}') },`,
+      `  { manifest: ${JSON.stringify(p.manifest)}${origin}, load: () => import('./${pluginModulePath(p.name)}') },`,
     )
   }
   const runtimeArgs = opts.manifest.ui ? 'plugins, projection: PROJECTION, ui' : 'plugins, projection: PROJECTION'

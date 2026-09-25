@@ -1,7 +1,11 @@
 import type {
+  BuildOutcome,
+  CheckUpdateResult,
   EventRecord,
   InstallPluginResult,
+  InstallPreview,
   InstallRecord,
+  ManagedPluginsResult,
   Snapshot,
   Status,
   StorageReport,
@@ -90,17 +94,19 @@ export const api = {
   createUrlLink: (body: Record<string, unknown>) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/url-link', body),
   qqMenu: () => request<{ ok: boolean; status: number; data: unknown }>('GET', '/qq/menu'),
   saveQQMenu: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('PUT', '/qq/menu', body),
-  installPlugin: (source: string, acknowledgeDurableObjects = false) =>
-    request<InstallPluginResult>(
-      'POST',
-      '/manifest/plugins',
-      acknowledgeDurableObjects ? { source, acknowledgeDurableObjects } : { source },
-    ),
+  /** build: false 只写清单不构建（批量更新时逐个写，最后调一次 triggerBuild） */
+  installPlugin: (source: string, opts: { acknowledgeDurableObjects?: boolean; build?: boolean } = {}) =>
+    request<InstallPluginResult>('POST', '/manifest/plugins', {
+      source,
+      ...(opts.acknowledgeDurableObjects ? { acknowledgeDurableObjects: true } : {}),
+      ...(opts.build === false ? { build: false } : {}),
+    }),
+  /** 只预检不写：清单摘要、权限、警告与 DO 提示 */
+  previewInstall: (source: string) => request<InstallPreview>('POST', '/manifest/plugins', { source, dryRun: true }),
+  /** D1 清单里的插件与线上的对照：已上线 / 线上是另一份 / 没上线 */
+  managedPlugins: () => request<ManagedPluginsResult>('GET', '/manifest/plugins'),
   checkPluginUpdate: (name: string) =>
-    request<{ ok: true; name: string; current: string; latestSha: string; latestVersion: string | null; upToDate: boolean; latestSource?: string }>(
-      'POST',
-      `/manifest/plugins/${encodeURIComponent(name)}/check-update`,
-    ),
+    request<CheckUpdateResult>('POST', `/manifest/plugins/${encodeURIComponent(name)}/check-update`),
   updatePlugin: (name: string) =>
     request<{
       ok: true
@@ -122,4 +128,11 @@ export const api = {
       'DELETE',
       `/storage/orphans/${encodeURIComponent(name)}`,
     ),
+}
+
+/** 改完清单之后构建的去向，拼成一句 toast：触发了 / 不需要 / 触发失败（改动本身已生效） */
+export function describeBuild(done: string, build: BuildOutcome): { text: string; level: 'success' | 'warning' } {
+  if ('buildUuid' in build) return { text: `${done}，已触发构建`, level: 'success' }
+  if ('skipped' in build) return { text: `${done}（${build.reason}）`, level: 'success' }
+  return { text: `${done}，但触发构建失败：${build.error}`, level: 'warning' }
 }

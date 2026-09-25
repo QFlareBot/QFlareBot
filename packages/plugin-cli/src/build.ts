@@ -17,6 +17,46 @@ export interface BuildPluginResult {
   outFile: string
   /** plugin.js 字节数 */
   size: number
+  /** 打进 plugin.js 的第三方包（来自 node_modules，框架自己的包不算），给作者与构建日志核对用 */
+  thirdPartyPackages: string[]
+}
+
+/**
+ * 打进产物的第三方包：看 esbuild metafile 的输入里有没有来自 node_modules 的文件。
+ * 取最后一段 node_modules/ 之后的包名，pnpm 的 .pnpm/<pkg>@<ver>/node_modules/<pkg>/ 布局也认得出。
+ * 比看 import 语句可靠：只写类型、被 esbuild 摇掉的 import 不会进 inputs，不会误报。
+ * 框架自己的包（@qqbot/*）不列：SDK 是契约本身，其余在解析阶段就被 frameworkGuard 挡下了。
+ */
+export function bundledPackages(metafile: esbuild.Metafile): string[] {
+  const found = new Set<string>()
+  for (const input of Object.keys(metafile.inputs)) {
+    const normalized = input.split('\\').join('/')
+    const at = normalized.lastIndexOf('node_modules/')
+    if (at < 0) continue
+    const [first = '', second = ''] = normalized.slice(at + 'node_modules/'.length).split('/')
+    const name = first.startsWith('@') ? `${first}/${second}` : first
+    if (name && !name.startsWith('@qqbot/')) found.add(name)
+  }
+  return [...found].sort()
+}
+
+/**
+ * 框架内部的包不许打进插件：插件的能力都从 ctx / session 上取（运行时注入），import 了 @qqbot/runtime
+ * 之类会把第二份运行时打进来，状态与主运行时各管各的。@qqbot/sdk（及子路径）是契约本身，照常放行。
+ *
+ * 在解析阶段按 import 路径拦，而不是看打包后的文件路径：工作区里的包是软链接，
+ * 解析出来的真实路径里没有 node_modules，按路径看会漏掉。
+ */
+const frameworkGuard: esbuild.Plugin = {
+  name: 'qqbot-framework-guard',
+  setup(build) {
+    build.onResolve({ filter: /^@qqbot\// }, (args) => {
+      if (args.path === '@qqbot/sdk' || args.path.startsWith('@qqbot/sdk/')) return undefined
+      return {
+        errors: [{ text: `插件不能 import 框架内部的包 ${args.path}：能力都从 ctx / session 上取，只有 @qqbot/sdk 可以打包进插件` }],
+      }
+    })
+  },
 }
 
 function resolveDefaultAlias(custom?: Record<string, string>): Record<string, string> {
@@ -63,6 +103,7 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Bui
     minify: options.minify ?? false,
     metafile: true,
     logLevel: 'warning',
+    plugins: [frameworkGuard],
     ...alias,
   })
 
@@ -73,5 +114,5 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Bui
 
   await writeFile(path.join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   const { size } = await stat(outFile)
-  return { manifest, outFile, size }
+  return { manifest, outFile, size, thirdPartyPackages: bundledPackages(result.metafile) }
 }

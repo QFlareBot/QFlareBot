@@ -62,14 +62,22 @@ npm run sync             # 把 dist/manifest.json 复制到仓库根目录（声
 npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSession / createMockContext
 ```
 
-装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接（等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}` 后再 `POST /admin/builds` 触发构建）。构建机拉源码编译，声明清单与源码不一致会直接失败。
+装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接，先预检（权限、命令重名、要补的 DO migrations 一次列出来），确认后安装并就地触发构建——等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}`（加 `"dryRun": true` 只预检不写）。构建机拉源码编译，声明清单与源码不一致会直接失败。**只支持公开的 GitHub 仓库**：安装时匿名读仓库里的 `manifest.json`，构建机也是匿名下载源码，私有仓库两步都会 404。
 
-安装记录钉在具体 commit 上——推了新代码不会自动生效。面板里点插件的「检查更新 / 更新到 vX.Y.Z」（`POST /admin/manifest/plugins/:name/check-update` 与 `/update`）会解析上游默认分支最新 commit、就地升级并自动触发构建；私有仓库不支持自动解析，更新时手贴新 commit 的 git: 链接。
+安装记录钉在具体 commit 上——推了新代码不会自动生效。更新就是换到上游默认分支的最新提交：面板「已装插件」里点「检查全部更新」，勾选要更新的，点「更新选中」——逐个写进清单、**只触发一次构建**（API 上是每个 `POST /admin/manifest/plugins` 带 `"build": false`，最后 `POST /admin/builds`）。单个插件的 `check-update` / `update` 端点照旧可用。
+
+构建失败时线上保持上一次成功的版本，失败原因回报到面板：插件页「未上线的改动」列出所有写进了清单、却还没在线上生效的安装 / 升级 / 卸载，从没装上的可以直接卸载，升级失败的可以改回线上那一版。
 
 ## 2. 规则
 
 - **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。`cloudflare:workers` 需在处理器内部 `import()`。
-- **不发 npm 包**：插件以源码仓库分发，构建机编译部署，全程不向 npm 发布任何东西。源码里 `import` 第三方库是普通的依赖（构建时一并打进产物），不是发包——目前构建机解析的是**机器人仓库已安装的依赖**：插件要用新库，先在机器人仓库 `pnpm add` 再重建；构建报"未打包的外部依赖"就是这个原因。
+- **不发 npm 包**：插件以源码仓库分发，构建机编译部署，全程不向 npm 发布任何东西。
+- **第三方依赖可以用，但要满足三条**：
+  1. 写进插件自己 `package.json` 的 `dependencies`，并**提交 lockfile**（`package-lock.json` 或 `pnpm-lock.yaml`）。构建机按 lockfile 装（只装 `dependencies`，不跑安装脚本），有依赖没 lockfile 直接构建失败——否则同一个 commit 不同时间会装出不同的代码。
+  2. `@qqbot/sdk` 放 `devDependencies`：构建时一律用机器人仓库那一份。其他 `@qqbot/*` 不许 import，能力都从 `ctx` / `session` 上取。
+  3. 能在 Workers 里运行：不依赖 Node 内置模块（`fs`、`net`、`child_process`……，构建时就会报找不到）、不用 `eval` / `new Function`（运行到那一行才报错）。另外依赖的体积和初始化耗时算在全机器人共享的 CPU 里（见第 9 节），别拿大库做小事；只在浏览器里能加载的包（顶层就碰 `window` 之类）要在处理器里按需 `import()`，因为构建机是在 Node 里执行入口抽清单的。
+
+  构建机只装插件自己声明的依赖，而且在机器人仓库外面构建：以前「先在机器人仓库 `pnpm add` 再重建」的做法不再有效。没有第三方依赖的插件不走安装，与以前一样。
 - **命名**：包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。
 - **版本**：取自 `package.json` 的 `version`。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
@@ -166,7 +174,7 @@ commands: {
 
 - **声明**：`defaultConfig` 出厂默认 + `configSchema`（JSON Schema）。面板按 schema 渲染表单，保存时校验（覆盖 string / number / boolean / 枚举 / 字符串数组与 `required`；复杂对象退化为 JSON 文本框）。
 - **存放**：面板保存写 KV 快照，与部署解耦——改配置不触发构建，即时生效（其他节点最长约 1 分钟）。
-- **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。快照没有该字段时回落 `defaultConfig`。
+- **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。按顶层字段合并：保存过的配置盖在 `defaultConfig` 上，快照里没有的字段回落默认值——所以升级后新增的配置项，保存过配置的用户也拿得到默认值。
 
 配置放"人工可改的设置"；插件的运行数据用下面的存储。
 
@@ -208,6 +216,8 @@ const rows = await ctx.db.all<Note>('SELECT * FROM {notes} WHERE user_id = ? ORD
 卸载会先调用你的 `hooks.onUninstall(ctx, { purgeData })`——趁插件代码还在这次部署里，给你一次收尾机会（前缀之外的东西、外部服务上的资源）。它抛错不会挡住后面的清理。
 
 之后框架按前缀兜底：`purgeData` 为真时删光你的 KV 键、R2 对象和 D1 表。**默认是 false**，数据留着；面板的存储页会把它标成孤儿，可以随时单独清掉。无论清不清数据，`onInstall` 的"已装过"标记都会删掉，所以重装一定会重新建表。
+
+重建完成之前（几分钟）插件代码还在线上跑：冷启动的实例读不到标记会重跑 `onInstall`，把表建回来、把标记写回去。所以框架在**新版本上线、插件确实不在部署里之后**再由定时任务收一次尾——再删一遍标记，选了清数据的再清一遍（连面板里保存的配置一起）。这期间又装回来的话，这次收尾会被取消。
 
 ### 要读别的插件的数据
 
@@ -252,14 +262,14 @@ export default definePlugin({
 
 投影时框架把类以 **`P_<插件名>_<类名>`** 导出到 Worker 主模块（插件名里的非字母数字换成 `_`，所以是 `P_game_Room`），并在导出时挂上作用域工厂 —— `PluginDurableObject` 的构造器就是靠它把裸 env 换掉的。因此 DO 类只能经由投影入口导出，手工在 `wrangler.jsonc` 里导出会在构造时抛错。
 
-**关键一步：安装会被拦下，要先往机器人仓库补一条 migrations。** 面板上装这个插件会返回 409，并把要加的内容原样给出：
+**关键一步：安装会被拦下，要先往机器人仓库补一条 migrations。** 面板预检时会把要加的内容原样给出（直接调安装 API 则返回 409 `durable_objects_migration_required`，内容相同）：
 
 ```jsonc
 // apps/seed/wrangler.jsonc 的 migrations 末尾追加（tag 不能与已有重复）
 { "tag": "p-game-room", "new_sqlite_classes": ["P_game_Room"] }
 ```
 
-提交推送之后，回面板点「已加好 migrations，继续安装」即可。
+提交推送之后，回面板点「已加好 migrations，确认安装」即可（API 上是带 `acknowledgeDurableObjects: true` 重新安装）。只有**新增**的类才会被拦：以后升级时 DO 类没变就直接更新，新版本多了类才要再补一条。
 
 为什么不能自动：`migrations` 是**只追加的历史**，平台记着「上次应用过的 tag」，下次部署拿它在列表里定位、只应用其后的新增项。构建机每次都是全新环境，没有这个状态，造不出正确的历史——所以投影对它只校验、不合成。而校验发生在构建阶段，不在安装这一步拦住的话，插件已经写进 D1 才炸，并且**此后每一次构建都会炸**（包括之后装别的插件），直到有人想起来把它卸载。
 
@@ -332,7 +342,7 @@ Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟
 
 | 字段/方法 | 说明 |
 | --- | --- |
-| `ctx.config` | 面板保存的配置（回落 defaultConfig） |
+| `ctx.config` | 面板保存的配置（缺的顶层字段回落 defaultConfig） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
 | `ctx.durable` | 自己声明的 Durable Object：`get(类名, 实例名)` / `namespace(类名)`，见第 6 节 |
 | `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |

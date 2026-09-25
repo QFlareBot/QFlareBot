@@ -12,6 +12,14 @@ function isPlainObject(value: unknown): value is Json {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * 已保存的配置盖在默认配置上：插件升级后新增的配置项，保存过配置的用户也拿得到默认值。
+ * 只合并顶层、且两边都是普通对象时才合并；其余情况原样返回已保存的（可能是 undefined，由调用方兜底）。
+ */
+export function withConfigDefaults(stored: unknown, defaults: unknown): unknown {
+  return isPlainObject(stored) && isPlainObject(defaults) ? { ...defaults, ...stored } : stored
+}
+
 const TYPE_NAMES: Record<string, string> = {
   string: '字符串',
   number: '数字',

@@ -6,6 +6,7 @@ export type {
   RuntimeOptions,
   PluginEntry,
   LazyPluginEntry,
+  PluginOrigin,
   Snapshot,
   PluginState,
   BotConfig,

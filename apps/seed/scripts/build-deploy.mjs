@@ -3,8 +3,10 @@
  * 自部署脚本（源码优先模型，见 docs/design.md 与 seed README）：
  *
  *   prepare  拉取构建清单（MANIFEST_URL，或引导传来的 MANIFEST_FILE；拉不到默认硬失败）→ 合并插件集
- *            → git: 源码按 commit 下载、esbuild 就地构建、校验声明清单 → 写 manifest.resolved.json
+ *            → git: 源码按 commit 下载到机器人仓库外的临时目录，按插件自己的 lockfile 装依赖（有才装），
+ *              在去掉凭证的子进程里打包、抽清单，与声明清单比对（见 plugin-build.mjs）→ 写 manifest.resolved.json
  *            → 调 qqbot-project 生成 dist/ 与 wrangler.generated.jsonc
+ *            有插件构建失败：全部试完，把原因报回 Worker（/admin/build-report）再失败，线上保持上一次成功的版本
  *   deploy   有 CLOUDFLARE_API_TOKEN 时走 Versions API：上传 → 预览地址健康检查 → 切流量；
  *            无凭证时退回 `wrangler deploy`（本地/CI 未注入凭证的场景）。
  *
@@ -20,13 +22,25 @@ import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { buildPlugin } from '@qqbot/plugin-cli'
 import { CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
-import { classifyDeployError, envFromRemoteConfig, manifestPolicy, resolveScriptName, unresolvedBindings } from './deploy-policy.mjs'
+import {
+  buildReportUrl,
+  classifyDeployError,
+  describePluginFailures,
+  envFromRemoteConfig,
+  manifestPolicy,
+  originOf,
+  resolveScriptName,
+  unresolvedBindings,
+} from './deploy-policy.mjs'
+import { PLUGIN_WORK_DIR, buildPluginIsolated, installPluginDependencies } from './plugin-build.mjs'
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const BUILD_PLUGINS_DIR = path.join(appDir, '.build-plugins')
+/** git 插件的源码解包在机器人仓库外面：只解析得到插件自己声明的依赖（见 plugin-build.mjs） */
+const BUILD_PLUGINS_DIR = PLUGIN_WORK_DIR
 const RESOLVED_MANIFEST = path.join(appDir, 'manifest.resolved.json')
+/** Workers Builds 注入的本次构建 id：拉清单与回报失败时带上，Worker 据此精确对上账本里那条构建记录 */
+const BUILD_UUID = process.env.WORKERS_CI_BUILD_UUID?.trim() || null
 
 const GIT_SOURCE = /^git:([^/\s]+)\/([^#\s@]+)@([0-9a-f]{7,40})(?:#([^#\s]+))?$/
 
@@ -64,6 +78,8 @@ async function fetchRemoteManifest() {
   if (!url) return { skipped: true }
   try {
     const headers = process.env.MANIFEST_TOKEN ? { authorization: `Bearer ${process.env.MANIFEST_TOKEN}` } : {}
+    // 老版本 Worker 不认识这个头，忽略即可；新版本据此返回「触发这次构建的那条记录」而不是去猜
+    if (BUILD_UUID) headers['x-build-uuid'] = BUILD_UUID
     const res = await fetch(url, { headers })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
@@ -73,6 +89,36 @@ async function fetchRemoteManifest() {
   } catch (err) {
     return { ok: false, error: err.message }
   }
+}
+
+/** 已经逐个报过插件失败的错误：顶层不再整体报一次 */
+const reportedErrors = new WeakSet()
+
+/**
+ * 把失败原因报回 Worker（POST /admin/build-report），面板上就能看到「哪个插件、为什么」，
+ * 而不只是一个「失败」。报不上去（线上还是不认识这个端点的旧版本、网络问题）只告警：
+ * 构建本来就要失败了，回报只是附带的，不能让它盖掉真正的错误。
+ *
+ * @returns {Promise<boolean>} 报上去了没有
+ */
+async function reportFailure(payload) {
+  const url = buildReportUrl(process.env.MANIFEST_URL)
+  if (!url) return false
+  try {
+    const headers = { 'content-type': 'application/json' }
+    if (process.env.MANIFEST_TOKEN) headers.authorization = `Bearer ${process.env.MANIFEST_TOKEN}`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...(BUILD_UUID ? { buildUuid: BUILD_UUID } : {}), ...payload }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (res.ok) return true
+    console.warn(`回报失败原因未成功（HTTP ${res.status}）——线上可能还是不认识这个端点的旧版本，不影响本次结果`)
+  } catch (err) {
+    console.warn(`回报失败原因未成功：${err.message}`)
+  }
+  return false
 }
 
 /** 拉取线上 Worker 的基础设施绑定（Worker 名、KV/D1/R2 标识）；失败则保持环境现状 */
@@ -118,47 +164,57 @@ async function extractGitSource(name, source) {
   return pluginDir
 }
 
-/** 就地构建 git: 来源的插件，校验声明清单，返回替换后的清单条目 */
+/** 仓库里提交的声明清单：根目录的 manifest.json 优先，dist/manifest.json 兜底（旧布局） */
+async function readDeclaredManifest(pluginDir) {
+  for (const declaredPath of ['manifest.json', 'dist/manifest.json']) {
+    try {
+      return JSON.parse(await readFile(path.join(pluginDir, declaredPath), 'utf8'))
+    } catch {
+      // 没有或读不了：试下一个位置
+    }
+  }
+  return null
+}
+
+function formatSize(bytes) {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
+}
+
+/**
+ * 构建 git: 来源的插件：装依赖（有才装）→ 子进程里打包并抽清单 → 与声明清单比对。
+ * 返回替换后的清单条目，以及体积与依赖（打进构建日志）。
+ */
 async function buildGitPlugin(entry) {
   const pluginDir = await extractGitSource(entry.name, entry.source)
-  let sdkEntry
-  try {
-    sdkEntry = fileURLToPath(import.meta.resolve('@qqbot/sdk'))
-  } catch {}
-  const { manifest, outFile } = await buildPlugin({
-    cwd: pluginDir,
-    ...(sdkEntry ? { alias: { '@qqbot/sdk': sdkEntry } } : {}),
-  })
+  // 声明清单必须在打包**之前**读：打包会往 dist/ 写新抽出的 manifest.json，
+  // 先打包再读的话，只提交了 dist/manifest.json 的旧布局就成了自己跟自己比，永远一致
+  const declared = await readDeclaredManifest(pluginDir)
+  const packages = await installPluginDependencies(pluginDir)
+  const { manifest, outFile, size } = await buildPluginIsolated(pluginDir)
 
   if (manifest.name !== entry.name) {
     throw new Error(`${entry.name} 的源码声明 name 为 ${manifest.name}——插件源与安装记录不一致，请卸载后重装`)
   }
-  for (const declaredPath of ['manifest.json', 'dist/manifest.json']) {
-    let declared
-    try {
-      declared = JSON.parse(await readFile(path.join(pluginDir, declaredPath), 'utf8'))
-    } catch {
-      continue
-    }
-    if (stableStringify(declared) !== stableStringify(manifest)) {
-      const fields = Object.keys({ ...manifest, ...declared }).filter(
-        (k) => stableStringify(manifest[k]) !== stableStringify(declared[k]),
-      )
-      throw new Error(
-        `${entry.name} 的声明清单与源码不一致（字段：${fields.join('、') || '整体'}）——请重新运行 qqbot-plugin build 并提交新的 manifest.json`,
-      )
-    }
-    break
+  if (declared && stableStringify(declared) !== stableStringify(manifest)) {
+    const fields = Object.keys({ ...manifest, ...declared }).filter((k) => stableStringify(manifest[k]) !== stableStringify(declared[k]))
+    throw new Error(
+      `${entry.name} 的声明清单与源码不一致（字段：${fields.join('、') || '整体'}）——请重新运行 qqbot-plugin build 并提交新的 manifest.json`,
+    )
   }
 
   const code = await readFile(outFile, 'utf8')
   return {
-    name: manifest.name,
-    version: manifest.version,
-    source: `file:${path.relative(appDir, outFile).split(path.sep).join('/')}`,
-    integrity: await computeIntegrity(code),
-    enabled: true,
-    manifest,
+    entry: {
+      name: manifest.name,
+      version: manifest.version,
+      // 产物在机器人仓库外面，写绝对路径（投影读 file: 时按清单目录解析，绝对路径原样用）
+      source: `file:${outFile}`,
+      integrity: await computeIntegrity(code),
+      enabled: true,
+      manifest,
+    },
+    size,
+    packages,
   }
 }
 
@@ -207,16 +263,36 @@ async function prepare() {
     ...remotePlugins.filter((p) => !baseNames.has(p.name)).sort((a, b) => a.name.localeCompare(b.name)),
   ]
 
+  // 上一次构建留下的解包目录（本地反复跑时会攒下来；构建机每次都是新容器）
+  await rm(BUILD_PLUGINS_DIR, { recursive: true, force: true })
   const plugins = []
+  const failures = []
   for (const entry of merged) {
+    // 出处随清单进投影、再进运行时：面板靠它分清「线上这一份是面板装的还是内置的、钉在哪个 commit」
+    const origin = originOf(entry, overrides)
     if (entry.source?.startsWith('git:')) {
       process.stdout.write(`构建插件 ${entry.name}（${entry.source}）…`)
-      const built = await buildGitPlugin(entry)
-      console.log(` 完成，版本 ${built.version}`)
-      plugins.push(built)
+      try {
+        const built = await buildGitPlugin(entry)
+        const deps = built.packages.length ? `，依赖：${built.packages.join('、')}` : ''
+        console.log(` 完成，版本 ${built.entry.version}（plugin.js ${formatSize(built.size)}${deps}）`)
+        plugins.push({ ...built.entry, origin })
+      } catch (err) {
+        // 不在第一个失败处停：每个插件都试一遍、一次报全，面板上才看得出该卸载哪几个
+        console.log(' 失败')
+        console.error(`  ${err.message}`)
+        failures.push({ name: entry.name, source: entry.source, error: err.message })
+      }
     } else {
-      plugins.push(entry)
+      plugins.push({ ...entry, origin })
     }
+  }
+  // 有插件构建失败就不部署：线上保持上一次成功的版本。失败的条目留在 D1 里，由人在面板上卸载或撤销
+  if (failures.length > 0) {
+    const reported = await reportFailure({ phase: 'prepare', failures })
+    const err = new Error(describePluginFailures(failures, { reported }))
+    reportedErrors.add(err)
+    throw err
   }
 
   const resolved = { core: base.core, ...(base.ui ? { ui: base.ui } : {}), plugins }
@@ -374,10 +450,16 @@ async function deployPhase() {
 }
 
 const phase = process.argv[2]
-if (phase === 'prepare') {
-  await prepare()
-} else if (phase === 'deploy') {
-  await deployPhase()
+if (phase === 'prepare' || phase === 'deploy') {
+  try {
+    await (phase === 'prepare' ? prepare() : deployPhase())
+  } catch (err) {
+    // 插件级的失败已经逐个报过了；其余的（投影失败、健康检查不过……）整体报一次，面板上看得到原因
+    if (!(err instanceof Error && reportedErrors.has(err))) {
+      await reportFailure({ phase, error: err instanceof Error ? err.message : String(err) })
+    }
+    throw err
+  }
 } else {
   console.error('用法：node scripts/build-deploy.mjs <prepare|deploy>')
   process.exitCode = 1

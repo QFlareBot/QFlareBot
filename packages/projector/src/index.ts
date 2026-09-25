@@ -1,6 +1,7 @@
 export type {
   DeployManifest,
   InstalledPlugin,
+  PluginOrigin,
   ArtifactRef,
   FetchArtifact,
   BaseBindings,

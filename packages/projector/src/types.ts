@@ -19,6 +19,19 @@ export interface InstalledPlugin {
   /** 禁用的插件也打进 bundle，启用/禁用是运行时状态，不触发重新部署 */
   enabled: boolean
   manifest: Manifest
+  /** 出处：由构建机写入，投影时原样带进入口模块；不写就是「出处未知」（老清单、本地投影） */
+  origin?: PluginOrigin
+}
+
+/**
+ * 插件在部署清单里的出处。运行时靠它回答「线上这一份是面板装的还是仓库内置的、钉在哪个 commit」，
+ * 面板才分得清已上线、待上线与构建失败。不参与投影哈希——同样的代码不该因为出处不同算出两个哈希。
+ */
+export interface PluginOrigin {
+  /** d1：面板 / 管理 API 装进 D1 清单的；repo：仓库 qqbot.manifest.json 内置的 */
+  from: 'd1' | 'repo'
+  /** 原始来源。git: 源码构建的插件在构建机上会被改写成本地产物路径，这里留的是改写之前的那个 */
+  source: string
 }
 
 export type ArtifactRef = {

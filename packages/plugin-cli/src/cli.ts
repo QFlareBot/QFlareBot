@@ -22,7 +22,7 @@ function formatSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
 }
 
-function printSummary(manifest: Manifest, size?: number): void {
+function printSummary(manifest: Manifest, size?: number, packages: string[] = []): void {
   const rows: Array<[string, string | number]> = [
     ['名称', manifest.name],
     ['版本', manifest.version],
@@ -31,6 +31,8 @@ function printSummary(manifest: Manifest, size?: number): void {
     ['DO 类', manifest.durableObjects.length],
   ]
   if (size !== undefined) rows.push(['plugin.js', formatSize(size)])
+  // 打进产物的第三方包：机器人的构建机会按 lockfile 装同样的版本，记得把 lockfile 一起提交
+  if (packages.length > 0) rows.push(['第三方包', packages.join('、')])
   for (const [label, value] of rows) console.log(`  ${label}：${value}`)
 }
 
@@ -75,14 +77,14 @@ async function main(argv: string[]): Promise<number> {
 
   switch (command) {
     case 'build': {
-      const { manifest, outFile, size } = await buildPlugin({
+      const { manifest, outFile, size, thirdPartyPackages } = await buildPlugin({
         ...common,
         ...(values.out !== undefined ? { out: values.out } : {}),
         minify: values.minify ?? false,
       })
       const rel = path.relative(process.cwd(), outFile)
       console.log(`已构建 ${rel.startsWith('..') ? outFile : rel}`)
-      printSummary(manifest, size)
+      printSummary(manifest, size, thirdPartyPackages)
       return 0
     }
     case 'validate': {

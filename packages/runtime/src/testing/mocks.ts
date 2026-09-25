@@ -113,22 +113,36 @@ export function createExecutionContext(): ExecutionContext & { flush(): Promise<
   } as unknown as ExecutionContext & { flush(): Promise<void> }
 }
 
+/** rt_manifest_plugins 最初的五列；后加的列由 manifestStore 的迁移补上 */
+const LEGACY_PLUGIN_COLUMNS = ['name', 'version', 'source', 'added_at', 'updated_at']
+const ADDED_PLUGIN_COLUMNS = ['manifest', 'build_error']
+
 /**
- * 清单存储（manifestStore.ts）专用的极简假 D1：rt_manifest_plugins 与 rt_installs 两张表，
- * 行存进 Map。同样只验证语句逻辑，证明不了 D1 的平台原子性。
+ * 清单存储（manifestStore.ts）专用的极简假 D1：rt_manifest_plugins、rt_installs、rt_pending_cleanups
+ * 三张表，行存进 Map。同样只验证语句逻辑，证明不了 D1 的平台原子性。
+ *
+ * `legacy: true` 模拟加列之前建的老库：插件表只有最初的五列，验证迁移会把缺的列补上。
  */
-export function createManifestD1(): D1Database & {
+export function createManifestD1(options: { legacy?: boolean } = {}): D1Database & {
   plugins: Map<string, Record<string, unknown>>
   installs: Map<string, Record<string, unknown>>
+  cleanups: Map<string, Record<string, unknown>>
   /** 插件表名 → 行数，喂给 purge.ts 的 sqlite_master 查询 */
   tables: Map<string, number>
+  /** rt_manifest_plugins 当前有哪些列 */
+  pluginColumns: Set<string>
+  /** 执行过的 ALTER TABLE，断言迁移只补缺的列 */
+  alters: string[]
 } {
   const plugins = new Map<string, Record<string, unknown>>()
   const installs = new Map<string, Record<string, unknown>>()
+  const cleanups = new Map<string, Record<string, unknown>>()
   const tables = new Map<string, number>()
-  let params: unknown[] = []
+  const pluginColumns = new Set([...LEGACY_PLUGIN_COLUMNS, ...(options.legacy ? [] : ADDED_PLUGIN_COLUMNS)])
+  const alters: string[] = []
 
   const prepare = (sql: string) => {
+    let params: unknown[] = []
     const stmt = {
       bind(...p: unknown[]) {
         params = p
@@ -136,10 +150,41 @@ export function createManifestD1(): D1Database & {
       },
       async run() {
         if (sql.startsWith('INSERT OR REPLACE INTO rt_manifest_plugins')) {
-          const [name, version, source, added_at, updated_at] = params as [string, string, string, number, number]
+          // 列没补上就写新列，真 D1 会报 no such column：这里同样报出来，免得迁移漏了测试还是绿的
+          for (const c of ADDED_PLUGIN_COLUMNS) {
+            if (!pluginColumns.has(c)) throw new Error(`D1_ERROR: table rt_manifest_plugins has no column named ${c}`)
+          }
+          const [name, version, source, manifest, added_at, updated_at] = params as [string, string, string, string | null, number, number]
           const prev = plugins.get(name!)
-          plugins.set(name!, { name, version, source, added_at: (prev?.added_at as number) ?? added_at, updated_at })
+          plugins.set(name!, {
+            name,
+            version,
+            source,
+            manifest,
+            build_error: null,
+            added_at: (prev?.added_at as number) ?? added_at,
+            updated_at,
+          })
           return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('UPDATE rt_manifest_plugins SET build_error = ? WHERE name = ? AND source = ?')) {
+          const [message, name, source] = params as [string, string, string]
+          const row = plugins.get(name)
+          if (row && row.source === source) row.build_error = message
+          return { meta: { changes: row && row.source === source ? 1 : 0 } }
+        }
+        if (sql.startsWith('UPDATE rt_manifest_plugins SET build_error = NULL')) {
+          for (const row of plugins.values()) row.build_error = null
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('INSERT OR REPLACE INTO rt_pending_cleanups')) {
+          const [name, purge, ts] = params as [string, number, number]
+          cleanups.set(name, { name, purge, ts })
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('DELETE FROM rt_pending_cleanups')) {
+          const existed = cleanups.delete(params[0] as string)
+          return { meta: { changes: existed ? 1 : 0 } }
         }
         if (sql.startsWith('INSERT INTO rt_installs')) {
           const [id, action, name, source, manifest_hash, build_uuid, cf_status, status, commit_hash, error, ts] = params as [
@@ -162,17 +207,30 @@ export function createManifestD1(): D1Database & {
           return { meta: { changes: 1 } }
         }
         if (sql.startsWith('DELETE FROM rt_installs')) return { meta: { changes: 0 } }
+        // Cron 顺手清去重表；这个假库不存事件，删零行即可
+        if (sql.startsWith('DELETE FROM rt_seen_events')) return { meta: { changes: 0 } }
         if (sql.startsWith('DELETE FROM rt_manifest_plugins')) {
           plugins.delete(params[0] as string)
           return { meta: { changes: 1 } }
         }
         if (sql.startsWith("UPDATE rt_installs SET status = 'building'")) {
-          const [build_uuid, hash] = params as [string, string]
+          const [build_uuid] = params as [string]
           for (const row of installs.values()) {
-            if (row.status === 'pending' && row.manifest_hash === hash) {
+            if (row.status === 'pending') {
               row.status = 'building'
               row.build_uuid = build_uuid
             }
+          }
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith("UPDATE rt_installs SET status = 'ok' WHERE status = 'pending'")) {
+          for (const row of installs.values()) if (row.status === 'pending') row.status = 'ok'
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('UPDATE rt_installs SET error = COALESCE(error, ?) WHERE build_uuid = ?')) {
+          const [message, build_uuid] = params as [string, string]
+          for (const row of installs.values()) {
+            if (row.build_uuid === build_uuid) row.error = row.error ?? message
           }
           return { meta: { changes: 1 } }
         }
@@ -198,7 +256,8 @@ export function createManifestD1(): D1Database & {
               row.status = status
               row.cf_status = cf_status
               row.commit_hash = commit_hash
-              row.error = error
+              // 与 SQL 的 COALESCE(error, ?) 一致：已有的错误不被覆盖
+              row.error = row.error ?? error
             }
           }
           return { meta: { changes: 1 } }
@@ -206,8 +265,15 @@ export function createManifestD1(): D1Database & {
         throw new Error(`fake D1 不支持：${sql}`)
       },
       async all<T>() {
+        if (sql.startsWith('PRAGMA table_info(rt_manifest_plugins)')) {
+          return { results: [...pluginColumns].map((name) => ({ name })) } as { results: T[] }
+        }
         if (sql.includes('FROM rt_manifest_plugins ORDER')) {
           const results = [...plugins.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string))
+          return { results } as { results: T[] }
+        }
+        if (sql.includes('FROM rt_pending_cleanups')) {
+          const results = [...cleanups.values()].sort((a, b) => (a.ts as number) - (b.ts as number))
           return { results } as { results: T[] }
         }
         if (sql.includes('FROM sqlite_master')) {
@@ -236,12 +302,23 @@ export function createManifestD1(): D1Database & {
   return {
     plugins,
     installs,
+    cleanups,
     tables,
+    pluginColumns,
+    alters,
     prepare,
     async exec(sql: string) {
       const drop = /^DROP TABLE IF EXISTS (\w+)$/.exec(sql)
       if (drop) {
         tables.delete(drop[1]!)
+        return { count: 1, duration: 0 }
+      }
+      const alter = /^ALTER TABLE rt_manifest_plugins ADD COLUMN (\w+) \w+$/.exec(sql)
+      if (alter) {
+        const column = alter[1]!
+        if (pluginColumns.has(column)) throw new Error(`D1_ERROR: duplicate column name: ${column}: SQLITE_ERROR`)
+        pluginColumns.add(column)
+        alters.push(column)
         return { count: 1, duration: 0 }
       }
       return { count: 0, duration: 0 }
@@ -251,7 +328,10 @@ export function createManifestD1(): D1Database & {
   } as unknown as D1Database & {
     plugins: Map<string, Record<string, unknown>>
     installs: Map<string, Record<string, unknown>>
+    cleanups: Map<string, Record<string, unknown>>
     tables: Map<string, number>
+    pluginColumns: Set<string>
+    alters: string[]
   }
 }
 

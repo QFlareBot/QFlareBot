@@ -66,6 +66,134 @@ export function resolveScriptName(generated, env = process.env) {
 }
 
 /**
+ * 回报失败原因的地址：与 build-config 一样从 MANIFEST_URL 推出来（…/build-manifest → …/build-report）。
+ * 推不出来（MANIFEST_URL 不是 build-manifest 结尾）就不报——报到别处去比不报更糟。
+ */
+export function buildReportUrl(manifestUrl) {
+  if (typeof manifestUrl !== 'string') return null
+  const m = /^(.*)\/build-manifest(\?.*)?$/.exec(manifestUrl.trim())
+  return m ? `${m[1]}/build-report${m[2] ?? ''}` : null
+}
+
+/**
+ * 插件的出处，随部署清单进投影、再进运行时：D1 清单里有这个名字就是面板装的（D1 同名覆盖内置），
+ * 否则是仓库内置的。source 留改写成本地产物路径之前的原始来源。
+ *
+ * @param {{ name: string, source: string }} entry
+ * @param {{ has(name: string): boolean }} remoteNames D1 清单里的插件名
+ */
+export function originOf(entry, remoteNames) {
+  return { from: remoteNames.has(entry.name) ? 'd1' : 'repo', source: entry.source }
+}
+
+/** 框架自己的包：构建时一律用机器人仓库那一份（@qqbot/sdk 经 alias），不能从 npm 装进插件 */
+function isFrameworkPackage(name) {
+  return name.startsWith('@qqbot/')
+}
+
+/**
+ * 插件的依赖怎么装。
+ *
+ * - 没有第三方依赖（只写了 @qqbot/sdk 也算）：跳过，和以前完全一样；
+ * - 有依赖就必须提交 lockfile：没有 lockfile，同一个 commit 在不同时间会装出不同的代码，
+ *   而每装一个别的插件都会重建全部插件，这个插件的代码就可能被悄悄换掉，「钉在 commit 上」形同虚设；
+ * - 只装 dependencies（不装 devDependencies：插件把 SDK、CLI 写成 file:../ 本地路径很常见，构建机上不存在），
+ *   不跑安装脚本（构建机上有凭证）。
+ *
+ * @param {{ dependencies?: Record<string, string>, packageManager?: string } | null} pkg 插件的 package.json
+ * @param {Set<string>} files 插件目录里的文件名
+ * @returns {{ action: 'skip' } | { action: 'error', message: string } |
+ *   { action: 'install', manager: 'npm' | 'pnpm', command: string, args: string[], packages: string[] }}
+ */
+export function planDependencyInstall(pkg, files) {
+  const names = Object.keys(pkg?.dependencies ?? {})
+  const packages = names.filter((n) => !isFrameworkPackage(n))
+  if (packages.length === 0) return { action: 'skip' }
+
+  const framework = names.filter(isFrameworkPackage)
+  if (framework.length > 0) {
+    return {
+      action: 'error',
+      message: `dependencies 里的 ${framework.join('、')} 请移到 devDependencies：框架包构建时一律用机器人仓库那一份，不能从 npm 装进插件`,
+    }
+  }
+
+  const hasNpmLock = files.has('package-lock.json') || files.has('npm-shrinkwrap.json')
+  const hasPnpmLock = files.has('pnpm-lock.yaml')
+  // 两种 lockfile 都在时听 packageManager 的；都没写就用 npm（随 Node 自带，最不容易出岔子）
+  const prefersPnpm = typeof pkg?.packageManager === 'string' && pkg.packageManager.startsWith('pnpm')
+  const npm = { action: 'install', manager: 'npm', command: 'npm', args: ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], packages }
+  const pnpm = { action: 'install', manager: 'pnpm', command: 'pnpm', args: ['install', '--frozen-lockfile', '--prod', '--ignore-scripts'], packages }
+  if (hasPnpmLock && (prefersPnpm || !hasNpmLock)) return pnpm
+  if (hasNpmLock) return npm
+
+  if (files.has('yarn.lock') || files.has('bun.lock') || files.has('bun.lockb')) {
+    return { action: 'error', message: '插件依赖目前只支持 npm（package-lock.json）与 pnpm（pnpm-lock.yaml）的 lockfile' }
+  }
+  return {
+    action: 'error',
+    message:
+      `有 dependencies（${packages.join('、')}）但没有提交 lockfile：请把 package-lock.json 或 pnpm-lock.yaml 一起提交——` +
+      '没有 lockfile，同一个 commit 在不同时间会装出不同的代码',
+  }
+}
+
+/** 像凭证的环境变量：名字里带这些词的，或者属于构建机凭证那几组 */
+const SECRET_ENV_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE|CREDENTIAL|AUTH/i
+const SECRET_ENV_PREFIX = /^(CF_|CLOUDFLARE_|MANIFEST_)/
+
+/**
+ * 去掉凭证的环境变量，给执行插件代码的子进程用。
+ *
+ * 抽清单要在 Node 里执行插件入口，插件自己的代码、连同依赖的顶层代码都会跑；构建机上有拉清单的令牌，
+ * 部署还要用部署凭证。别让它们顺手读到。这不是沙箱（文件系统照样碰得到），只是不把钥匙递过去。
+ */
+export function scrubbedEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !SECRET_ENV_NAME.test(k) && !SECRET_ENV_PREFIX.test(k)))
+}
+
+/** 包管理器报错时，截最后几行非空输出放进错误信息（会报回面板） */
+export function tailLines(text, count = 12) {
+  return String(text ?? '')
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim())
+    .slice(-count)
+    .join('\n')
+}
+
+/**
+ * 构建插件时的报错补一句人话。最常见的是「找不到包」：构建机只装插件自己声明的依赖，
+ * 而且在机器人仓库外面构建——以前碰巧能用上机器人仓库里装着的包，现在用不上了。
+ */
+export function explainBuildError(message) {
+  const missing = [...String(message).matchAll(/Could not resolve "([^"]+)"/g)].map((m) => m[1])
+  if (missing.length === 0) return message
+  const unique = [...new Set(missing)]
+  return (
+    `${message}\n——找不到 ${unique.join('、')}：插件用到的第三方包要写进它自己 package.json 的 dependencies，并提交 lockfile。` +
+    '构建机只安装插件自己声明的依赖（Node 内置模块如 fs、net 在 Workers 里不可用）'
+  )
+}
+
+/**
+ * 逐个插件的构建失败合成一条错误：构建日志最后一屏看的就是它。
+ * 构建失败时线上保持上一次成功的版本（故意的），所以要说清楚接下来怎么办。
+ *
+ * @param {Array<{ name: string, source: string, error: string }>} failures
+ * @param {{ reported?: boolean }} [opts] 失败原因是否已经报给了 Worker（线上是旧版本时报不上去）
+ */
+export function describePluginFailures(failures, opts = {}) {
+  return [
+    `${failures.length} 个插件构建失败，本次不部署，线上保持上一次成功的版本：`,
+    ...failures.map((f) => `  - ${f.name}（${f.source}）：${f.error}`),
+    opts.reported
+      ? '失败原因已回报给面板：到插件页「未上线的改动」里卸载或撤销它们，再重新构建。'
+      : '到面板插件页「未上线的改动」里卸载或撤销它们（或用 DELETE /admin/manifest/plugins/<名字>），再重新构建。',
+  ].join('\n')
+}
+
+/**
  * Versions API 报错之后要不要降级。
  *
  * 只兜「这条路在当前环境走不通」的两种：10007 脚本不存在（首次创建）、401/403 凭证

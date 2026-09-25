@@ -3,26 +3,40 @@ import { validateManifest, type Manifest } from '@qqbot/sdk'
 import { authenticate, bearerOf } from './auth.js'
 import { error, json, readJson } from './http.js'
 import {
+  addPendingCleanup,
+  attachBuildError,
+  clearPluginBuildErrors,
   deleteManifestPlugin,
   getManifestPlugin,
   insertInstall,
   listInstalls,
+  listManifestPluginRecords,
   listManifestPlugins,
+  listPendingCleanups,
   manifestHash,
   markPendingBuilding,
   parseGitSource,
   rawManifestUrl,
+  rawPluginFileUrl,
+  removePendingCleanup,
+  sameGitRepo,
+  setPluginBuildError,
+  settlePendingInstalls,
   updateInstallById,
   updateInstallByBuildUuid,
   upsertManifestPlugin,
+  type GitSource,
   type InstallRecord,
   type ManifestPluginEntry,
+  type ManifestPluginRecord,
 } from './manifestStore.js'
 import { clearInstallMarker, purgePluginData, runUninstallHook } from './purge.js'
+import type { PluginRegistry } from './registry.js'
 import { prefixesCollide, tablePrefix } from './sqlScope.js'
-import { Keys } from './store.js'
+import { Keys, readSnapshot, writeSnapshot } from './store.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
+import type { RuntimeEnv } from './types.js'
 
 /**
  * 自部署的管理端点：插件清单存 D1，构建机经 /admin/build-manifest 拉取，
@@ -35,12 +49,21 @@ async function requireDb(scope: RequestScope): Promise<D1Database | null> {
   return scope.env.DB
 }
 
-/** 构建机拉清单：配置了 BUILD_TOKEN 用它，否则与管理 API 同一鉴权（ADMIN_TOKEN/会话令牌） */
-export async function handleBuildManifest(request: Request, scope: RequestScope): Promise<Response> {
+/** 构建机的鉴权：配置了 BUILD_TOKEN 用它，否则与管理 API 同一鉴权（ADMIN_TOKEN/会话令牌） */
+async function authorizeBuildMachine(request: Request, scope: RequestScope): Promise<boolean> {
   const buildToken = scope.env.BUILD_TOKEN
-  const bearer = bearerOf(request)
-  const viaBuildToken = !!buildToken && bearer === buildToken
-  if (!viaBuildToken && !(await authenticate(request, scope.env.ADMIN_TOKEN)).admin) return error('未授权', 401)
+  if (buildToken && bearerOf(request) === buildToken) return true
+  return (await authenticate(request, scope.env.ADMIN_TOKEN)).admin
+}
+
+/**
+ * 构建机拉清单：配置了 BUILD_TOKEN 用它，否则与管理 API 同一鉴权（ADMIN_TOKEN/会话令牌）。
+ *
+ * 构建机会带上 `x-build-uuid`（Workers Builds 注入的 WORKERS_CI_BUILD_UUID），据此精确对上触发这次构建的
+ * 账本记录；没带的（老构建脚本）退回「最近一条进行中的记录」。
+ */
+export async function handleBuildManifest(request: Request, scope: RequestScope): Promise<Response> {
+  if (!(await authorizeBuildMachine(request, scope))) return error('未授权', 401)
 
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1（wrangler.jsonc 的 d1_databases），构建清单不可用', 503)
@@ -49,7 +72,11 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
   // 触发这次构建的账本记录（推送触发的构建没有对应记录，返回 null）。构建机据此对照
   // 「触发时的清单」与「实际构建的清单」——不一致只告警、不阻断：并发装两个插件本来就会这样，
   // 收敛到最新是设计语义，把它做成构建失败只会让正常操作无故炸掉。
-  const pending = (await listInstalls(db, 20)).find((r) => r.status === 'building' || r.status === 'pending')
+  const recent = await listInstalls(db, 50)
+  const buildUuid = request.headers.get('x-build-uuid')?.trim()
+  const pending = buildUuid
+    ? recent.find((r) => r.action === 'build' && r.buildUuid === buildUuid)
+    : recent.find((r) => r.status === 'building' || r.status === 'pending')
   return json({
     ok: true,
     hash,
@@ -63,10 +90,7 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
 
 /** 构建机拉配置：拉取当前 Worker 的基础设施绑定标识（KV ID, D1 ID 等） */
 export async function handleBuildConfig(request: Request, scope: RequestScope): Promise<Response> {
-  const buildToken = scope.env.BUILD_TOKEN
-  const bearer = bearerOf(request)
-  const viaBuildToken = !!buildToken && bearer === buildToken
-  if (!viaBuildToken && !(await authenticate(request, scope.env.ADMIN_TOKEN)).admin) return error('未授权', 401)
+  if (!(await authorizeBuildMachine(request, scope))) return error('未授权', 401)
 
   return json({
     ok: true,
@@ -93,11 +117,68 @@ export async function handleBuildConfig(request: Request, scope: RequestScope): 
   })
 }
 
+/** 回报里单条错误的长度上限：够看清原因，又不至于让一整段编译日志塞进账本 */
+const REPORT_TEXT_LIMIT = 2000
+
+function clipText(text: string, limit = REPORT_TEXT_LIMIT): string {
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
+}
+
+function firstLine(text: string): string {
+  return text.split('\n').find((l) => l.trim())?.trim() ?? text
+}
+
+interface ReportedFailure {
+  name: string
+  source: string
+  error: string
+}
+
+function isReportedFailure(value: unknown): value is ReportedFailure {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.name === 'string' && typeof v.source === 'string' && typeof v.error === 'string'
+}
+
+/**
+ * POST /admin/build-report —— 构建机回报失败原因：哪个插件、哪个来源、什么错误。
+ *
+ * 构建失败时线上保留上一次成功的版本，这是故意的；但面板上以前只看得到一个「失败」，分不清是哪个插件坏了、
+ * 该卸载哪个。构建机现在把每个插件都试着编一遍，失败的逐个报回来：错误记在 D1 条目上（只记在 source
+ * 还没变的那一条），也记到这次构建的账本记录上。**只写错误信息，不改清单**——卸不卸由人决定。
+ *
+ * body: { buildUuid?, phase: 'prepare' | 'deploy', failures?: [{ name, source, error }], error? }
+ */
+export async function handleBuildReport(request: Request, scope: RequestScope): Promise<Response> {
+  if (!(await authorizeBuildMachine(request, scope))) return error('未授权', 401)
+  const db = await requireDb(scope)
+  if (!db) return error('未绑定 D1，无处记录构建结果', 503)
+
+  const body = await readJson<{ buildUuid?: unknown; phase?: unknown; failures?: unknown; error?: unknown }>(request)
+  if (!body) return error('请求体格式错误', 400)
+  const buildUuid = typeof body.buildUuid === 'string' && body.buildUuid.trim() ? body.buildUuid.trim() : null
+  const phase = body.phase === 'deploy' ? 'deploy' : 'prepare'
+  // 每条失败一次 D1 写入：免费版一次请求只有 50 个子请求，留足余量
+  const failures = (Array.isArray(body.failures) ? body.failures : [])
+    .filter(isReportedFailure)
+    .slice(0, 20)
+    .map((f) => ({ name: f.name, source: f.source, error: clipText(f.error) }))
+  const overall = typeof body.error === 'string' && body.error.trim() ? clipText(body.error) : null
+
+  for (const f of failures) await setPluginBuildError(db, f.name, f.source, f.error)
+
+  const summary =
+    failures.length > 0
+      ? `插件构建失败：${failures.map((f) => `${f.name}（${firstLine(f.error)}）`).join('；')}`
+      : overall
+        ? `${phase === 'deploy' ? '部署失败' : '构建失败'}：${firstLine(overall)}`
+        : null
+  if (buildUuid && summary) await attachBuildError(db, buildUuid, clipText(summary))
+  return json({ ok: true, recorded: failures.length })
+}
+
 /** 声明清单：root 的 manifest.json 优先，dist/manifest.json 兜底（旧仓库布局） */
-async function fetchDeclaredManifest(
-  git: NonNullable<ReturnType<typeof parseGitSource>>,
-  fetchImpl: typeof fetch,
-): Promise<Manifest | string> {
+async function fetchDeclaredManifest(git: GitSource, fetchImpl: typeof fetch): Promise<Manifest | string> {
   const urls = [rawManifestUrl(git), rawManifestUrl(git, true)]
   for (const url of urls) {
     let res: Response
@@ -119,17 +200,128 @@ async function fetchDeclaredManifest(
     }
     return manifest
   }
-  return '插件源里没有声明清单（manifest.json）——请在插件仓库运行 qqbot-plugin build，并把生成的 manifest.json 提交到仓库根目录'
+  // 匿名读 raw.githubusercontent.com：私有仓库在这里也是 404，别让人以为只是没提交清单
+  return (
+    '拉不到插件的声明清单（manifest.json）：仓库不存在、是私有仓库（只支持公开的 GitHub 仓库），' +
+    '或这个 commit 下没有 manifest.json——插件作者需要运行 qqbot-plugin build，并把生成的 manifest.json 提交到仓库根目录'
+  )
 }
 
-/** POST /admin/manifest/plugins  { source: "git:owner/repo@sha[#subdir]" } */
+// ---------- 已知插件的清单：安装校验、卸载提示、面板列表共用 ----------
+
+/** 每个已知插件的清单：线上这份部署里的，再用 D1 存的声明清单覆盖（D1 是期望状态） */
+export function knownManifests(records: readonly ManifestPluginRecord[], registry: PluginRegistry): Map<string, Manifest> {
+  const map = new Map<string, Manifest>()
+  for (const p of registry.all()) map.set(p.manifest.name, p.manifest)
+  for (const r of records) if (r.manifest) map.set(r.name, r.manifest)
+  return map
+}
+
+/**
+ * 卸载 name 之后会断掉哪些插件：它们 depends 的服务只有 name 提供。
+ * depends 的键是服务名（ctx.service 按服务名解析），不是插件名。
+ */
+export function dependentsOf(name: string, manifests: ReadonlyMap<string, Manifest>): string[] {
+  const provided = manifests.get(name)?.services ?? []
+  if (provided.length === 0) return []
+  const elsewhere = new Set<string>()
+  for (const [other, m] of manifests) if (other !== name) for (const s of m.services ?? []) elsewhere.add(s)
+  const exclusive = new Set(provided.filter((s) => !elsewhere.has(s)))
+  if (exclusive.size === 0) return []
+  return [...manifests]
+    .filter(([other, m]) => other !== name && Object.keys(m.depends ?? {}).some((d) => exclusive.has(d)))
+    .map(([other]) => other)
+    .sort()
+}
+
+/** 这个插件此前已经有过的 DO 类：线上部署里的，加上 D1 里存的（装的时候确认过 migrations） */
+function knownDurableObjects(name: string, records: readonly ManifestPluginRecord[], registry: PluginRegistry): Set<string> {
+  const known = new Set<string>(registry.get(name)?.manifest.durableObjects ?? [])
+  for (const c of records.find((r) => r.name === name)?.manifest?.durableObjects ?? []) known.add(c)
+  return known
+}
+
+/** 同一插件上一版的清单：D1 里存的优先，其次线上的 */
+function previousManifest(name: string, records: readonly ManifestPluginRecord[], registry: PluginRegistry): Manifest | null {
+  return records.find((r) => r.name === name)?.manifest ?? registry.get(name)?.manifest ?? null
+}
+
+function commandKeys(m: Manifest): Set<string> {
+  const keys = new Set<string>()
+  for (const c of m.commands ?? []) for (const n of [c.name, ...(c.aliases ?? [])]) keys.add(n.toLowerCase())
+  return keys
+}
+
+function repoLabel(git: GitSource): string {
+  return `${git.owner}/${git.repo}${git.subdir ? `#${git.subdir}` : ''}`
+}
+
+/**
+ * 线上这份部署里「来自 D1 清单」的插件集哈希，和 manifestHash(D1 清单) 同一个算法——
+ * 两者相等，就说明 D1 里的期望状态已经全部上线。老部署没有出处信息，回答不了，返回 null。
+ */
+async function liveManifestHash(registry: PluginRegistry): Promise<string | null> {
+  const all = registry.all()
+  if (all.some((p) => !p.origin)) return null
+  return manifestHash(
+    all
+      .filter((p) => p.origin!.from === 'd1')
+      .map((p) => ({ name: p.manifest.name, version: p.manifest.version, source: p.origin!.source })),
+  )
+}
+
+/** 安装、升级、卸载之后的构建结果：触发了、触发失败、或者不需要 */
+type BuildResponse = { buildUuid: string } | { error: string } | { skipped: true; reason: string }
+
+/**
+ * 改完清单之后要不要构建。
+ *
+ * D1 的期望状态已经和线上这份部署一模一样——撤掉的是还没上线的改动，比如卸载一个从没装上的插件——
+ * 就不必白跑一次，构建出来还是现在这份；账本里的 pending 记录直接算完成。线上没有出处信息（老部署）
+ * 判断不了，照旧触发；还有构建在跑时也照旧触发：在跑的那次可能拉的是改动之前的清单。
+ */
+async function buildAfterChange(scope: RequestScope, deps: AdminDeps): Promise<BuildResponse> {
+  const db = scope.env.DB
+  if (db) {
+    const live = await liveManifestHash(deps.registry)
+    if (live !== null && live === (await manifestHash(await listManifestPlugins(db)))) {
+      const building = (await listInstalls(db, 50)).some((r) => r.status === 'building')
+      if (!building) {
+        await settlePendingInstalls(db)
+        return { skipped: true, reason: '插件清单已与线上部署一致，不需要构建' }
+      }
+    }
+  }
+  const build = await triggerProjectionBuild(scope, deps)
+  return build.ok ? { buildUuid: build.buildUuid } : { error: build.error }
+}
+
+const BUILD_DEFERRED: BuildResponse = { skipped: true, reason: '按请求暂不构建：改完之后调一次 POST /admin/builds' }
+
+// ---------- 安装 / 升级 ----------
+
+/**
+ * POST /admin/manifest/plugins  { source: "git:owner/repo@sha[#subdir]" }
+ *
+ * 可选参数，不传就是原来的行为：
+ * - `dryRun: true`：只预检，不写 D1、不记账本、不构建；返回清单摘要、警告与 DO 提示，面板据此让人确认
+ * - `build: false`：只写 D1 不触发构建。批量更新时逐个写进去，最后调一次 `POST /admin/builds`
+ * - `acknowledgeDurableObjects: true`：已按提示往仓库补好 migrations
+ */
 export async function installManifestPlugin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1，无法安装插件', 503)
 
-  const body = await readJson<{ source?: string; acknowledgeDurableObjects?: boolean }>(request)
+  const body = await readJson<{ source?: string; acknowledgeDurableObjects?: boolean; build?: boolean; dryRun?: boolean }>(request)
   const source = body?.source?.trim()
   if (!source) return error('需要 source，例如 git:owner/repo@a1b2c3d4e5', 400)
+
+  if (body?.dryRun === true) {
+    const preview = await previewInstall(source, scope, deps)
+    if (!preview.ok) return error(preview.error, preview.status, preview.code)
+    return json({ ok: true, dryRun: true, ...preview.preview })
+  }
+
   const out = await installFromSource(source, scope, deps, {
     acknowledgeDurableObjects: body?.acknowledgeDurableObjects === true,
   })
@@ -139,20 +331,30 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
   // 卸载与一键更新一直是这么做的，安装以前漏了，靠面板前端补发一次；
   // 于是 curl / 脚本装完什么都不会发生，账本留一条 pending 挂到 24h 后被收敛成失败。
   // 触发失败不回滚安装（清单已经改了，回滚只会更乱），如实报出来让用户重试构建。
-  const build = await triggerProjectionBuild(scope, deps)
+  const build = body?.build === false ? BUILD_DEFERRED : await buildAfterChange(scope, deps)
   return json({
     ok: true,
     plugin: out.plugin,
     ...(out.previous ? { previous: out.previous } : {}),
     hash: out.hash,
     install: out.install,
-    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
+    build,
+    ...(out.warnings.length > 0 ? { warnings: out.warnings } : {}),
   })
 }
 
+type Failure = { ok: false; error: string; status: number; code?: string }
+
 type InstallOutcome =
-  | { ok: true; plugin: ManifestPluginEntry; previous?: { version: string }; hash: string; install: InstallRecord }
-  | { ok: false; error: string; status: number; code?: string }
+  | {
+      ok: true
+      plugin: ManifestPluginEntry
+      previous?: { version: string; source: string }
+      hash: string
+      install: InstallRecord
+      warnings: string[]
+    }
+  | Failure
 
 /** 声明了 DO 类、但还没确认仓库 migrations 已就位——面板据此给出「我已加好」的确认入口 */
 export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
@@ -164,37 +366,44 @@ export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
  * 这个持久状态、造不出正确的历史，所以 projector 选择了校验而不是合成（见 checkDoMigrations）。
  * 校验发生在 prepare 阶段——也就是说插件已经写进 D1 之后才炸，而且是**每一次**构建都炸，
  * 包括之后装别的插件、一键更新、卸载以外的任何操作，直到有人想到把它卸载。
- * 构建日志还没内嵌进面板，用户在面板上只看得到一个「失败」。
+ *
+ * 只拦**新增**的类：这个插件以前有过的类（线上部署里的，或者 D1 里存的、装的时候确认过的），
+ * migrations 早就在仓库里了——升级时再拦一次，会让声明了 DO 的插件永远没法一键更新。
  *
  * 运行时读不到仓库里的 wrangler.jsonc（它不在 bundle 里），没法判断那条 migrations 是否
  * 已经加好，所以只能拦下来把要加的内容原样给出，由用户确认后带 acknowledgeDurableObjects 重装。
  */
-function checkDurableObjectsDeclared(declared: Manifest, acknowledged: boolean): InstallOutcome | null {
-  const classes = declared.durableObjects ?? []
-  if (classes.length === 0 || acknowledged) return null
-  const exportNames = classes.map((c) => doExportName(declared.name, c))
+function durableObjectsNotice(declared: Manifest, known: ReadonlySet<string>): string | null {
+  const added = (declared.durableObjects ?? []).filter((c) => !known.has(c))
+  if (added.length === 0) return null
+  const exportNames = added.map((c) => doExportName(declared.name, c))
   const tag = suggestMigrationTag(new Set<string>(), exportNames)
-  return {
-    ok: false,
-    status: 409,
-    code: DO_MIGRATION_REQUIRED,
-    error:
-      `${declared.name} 声明了 Durable Object 类（${classes.join('、')}），装进来之前需要先改仓库。\n` +
-      'DO 的 migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个状态、造不出来。\n' +
-      '请在 apps/seed/wrangler.jsonc 的 migrations 末尾追加一项并提交（tag 不能与已有重复）：\n' +
-      `  { "tag": "${tag}", "new_sqlite_classes": [${exportNames.map((n) => `"${n}"`).join(', ')}] }\n` +
-      '不加就装的话，之后每一次构建都会失败（包括装别的插件），直到把它卸载。\n' +
-      '已经加好并推送了？确认后重新安装即可。',
-  }
+  return (
+    `${declared.name} ${known.size > 0 ? '的新版本新增了' : '声明了'} Durable Object 类（${added.join('、')}），装进来之前需要先改仓库。\n` +
+    'DO 的 migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个状态、造不出来。\n' +
+    '请在 apps/seed/wrangler.jsonc 的 migrations 末尾追加一项并提交（tag 不能与已有重复）：\n' +
+    `  { "tag": "${tag}", "new_sqlite_classes": [${exportNames.map((n) => `"${n}"`).join(', ')}] }\n` +
+    '不加就装的话，之后每一次构建都会失败（包括装别的插件），直到把它卸载。\n' +
+    '已经加好并推送了？确认后重新安装即可。'
+  )
 }
 
-/** 安装/升级一个 git 来源的插件：拉声明清单校验、冲突与依赖检查、写入 D1 并记一条 pending 账本 */
-async function installFromSource(
-  source: string,
-  scope: RequestScope,
-  deps: AdminDeps,
-  opts: { acknowledgeDurableObjects?: boolean } = {},
-): Promise<InstallOutcome> {
+/** 拉到并校验过的声明清单，以及判断它能不能装要用到的上下文 */
+interface Inspected {
+  ok: true
+  git: GitSource
+  declared: Manifest
+  entry: ManifestPluginEntry
+  records: ManifestPluginRecord[]
+  /** D1 里的同名条目（有即为升级） */
+  existing: ManifestPluginRecord | undefined
+  known: Map<string, Manifest>
+  /** 新增了 DO 类时要给用户看的 migrations 提示；null 表示不需要确认 */
+  doNotice: string | null
+}
+
+/** 拉声明清单并做格式校验 */
+async function inspectSource(source: string, scope: RequestScope, deps: AdminDeps): Promise<Inspected | Failure> {
   const db = await requireDb(scope)
   if (!db) return { ok: false, error: '未绑定 D1，无法安装插件', status: 503 }
 
@@ -206,12 +415,23 @@ async function installFromSource(
   const problems = validateManifest(declared)
   if (problems.length > 0) return { ok: false, error: `声明清单非法：${problems.join('；')}`, status: 400 }
 
-  const doBlocked = checkDurableObjectsDeclared(declared, opts.acknowledgeDurableObjects === true)
-  if (doBlocked) return doBlocked
+  const records = await listManifestPluginRecords(db)
+  return {
+    ok: true,
+    git,
+    declared,
+    entry: { name: declared.name, version: declared.version, source },
+    records,
+    existing: records.find((p) => p.name === declared.name),
+    known: knownManifests(records, deps.registry),
+    doNotice: durableObjectsNotice(declared, knownDurableObjects(declared.name, records, deps.registry)),
+  }
+}
 
-  const installed = await listManifestPlugins(db)
-  const registryNames = new Set(deps.registry.all().map((p) => p.manifest.name))
-  const allNames = new Set<string>([...installed.map((p) => p.name), ...registryNames])
+/** 装不了的情况（与以前一样的几条硬规则）：conflicts、表前缀撞车、依赖缺失 */
+function blockingProblem(inspected: Inspected, deps: AdminDeps): Failure | null {
+  const { declared, records, known } = inspected
+  const allNames = new Set<string>([...records.map((p) => p.name), ...deps.registry.all().map((p) => p.manifest.name)])
 
   const conflict = (declared.conflicts ?? []).find((c) => allNames.has(c))
   if (conflict) return { ok: false, error: `安装 ${declared.name} 与已装插件冲突：${declared.name} conflicts ${conflict}`, status: 409 }
@@ -229,14 +449,196 @@ async function installFromSource(
     }
   }
 
-  const missingDeps = Object.keys(declared.depends ?? {}).filter((d) => !allNames.has(d) && !deps.registry.providerOf(d))
+  // depends 的键是服务名（ctx.service 按服务名解析）。提供者既算线上这份部署里的，也算 D1 里已经装了、
+  // 还在等构建的——否则先装提供者、紧接着装使用者会被误拒。键与某个插件同名也放行（以前就这么认）。
+  const services = new Set<string>()
+  for (const [name, m] of known) if (name !== declared.name) for (const s of m.services ?? []) services.add(s)
+  const missingDeps = Object.keys(declared.depends ?? {}).filter(
+    (d) => !allNames.has(d) && !deps.registry.providerOf(d) && !services.has(d),
+  )
   if (missingDeps.length > 0) {
     return { ok: false, error: `依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`, status: 400 }
   }
+  return null
+}
 
-  const existing = installed.find((p) => p.name === declared.name)
-  const entry: ManifestPluginEntry = { name: declared.name, version: declared.version, source }
-  await upsertManifestPlugin(db, entry)
+/**
+ * 要提醒、但不拦的事。以前这些情况都能直接装上，现在也照样能装——
+ * 只是写进响应的 warnings，面板在预检时摆出来让人确认。
+ */
+function installWarnings(inspected: Inspected, registry: PluginRegistry): string[] {
+  const { declared, git, existing, known, records } = inspected
+  const name = declared.name
+  const warnings: string[] = []
+
+  // 同名即覆盖：换了仓库就不是「升级」，是换成了另一家的代码
+  const existingGit = existing ? parseGitSource(existing.source) : null
+  const live = registry.get(name)
+  if (existingGit) {
+    if (!sameGitRepo(existingGit, git)) {
+      warnings.push(`已装的 ${name} 来自 ${repoLabel(existingGit)}，这次会换成 ${repoLabel(git)} 的代码（同名即覆盖）`)
+    }
+  } else if (live && live.origin?.from !== 'd1') {
+    warnings.push(`与仓库内置插件 ${name} 同名：装上后会替换内置的那一份，卸载之后内置的才会回来`)
+  } else if (live?.origin) {
+    // 卸载还没生效（线上还在、D1 里已经没了）又装回来
+    const liveGit = parseGitSource(live.origin.source)
+    if (liveGit && !sameGitRepo(liveGit, git)) {
+      warnings.push(`线上的 ${name} 来自 ${repoLabel(liveGit)}，这次会换成 ${repoLabel(git)} 的代码（同名即覆盖）`)
+    }
+  }
+
+  // permissions 只是知情同意，但升级新增的那几项得让人看见
+  const previous = previousManifest(name, records, registry)
+  if (previous) {
+    const added = (declared.permissions ?? []).filter((p) => !(previous.permissions ?? []).includes(p))
+    if (added.length > 0) warnings.push(`新版本新增权限：${added.join('、')}`)
+  }
+
+  // 命令撞名：运行时按优先级只有一个会响应，另一个被静默遮住
+  const mine = commandKeys(declared)
+  for (const [other, m] of known) {
+    if (other === name) continue
+    const clash = [...commandKeys(m)].filter((c) => mine.has(c))
+    if (clash.length > 0) {
+      warnings.push(`与 ${other} 的命令重名：${clash.map((c) => `/${c}`).join('、')}（运行时按优先级只有一个会响应）`)
+    }
+  }
+
+  // conflicts 的另一个方向：新插件自己没声明，但已装的插件声明了与它冲突
+  for (const [other, m] of known) {
+    if (other !== name && (m.conflicts ?? []).includes(name)) warnings.push(`已装的 ${other} 声明与 ${name} 冲突`)
+  }
+  return warnings
+}
+
+/** 插件的第三方依赖（package.json 的 dependencies），预检时给人看 */
+interface DependencyInfo {
+  /** 包名 → 版本范围；框架自己的包（@qqbot/*）不在里面 */
+  packages: Record<string, string>
+  /** 有第三方依赖时，仓库里有没有 lockfile；没有依赖就不查，为 null */
+  lockfile: boolean | null
+  /** 写进了 dependencies 的框架包 */
+  framework: string[]
+}
+
+/**
+ * 读插件的 package.json 看依赖，有依赖再探一下 lockfile 在不在。拉不到就当没有依赖——
+ * 这里只是提前提醒，真正按 lockfile 装、装不上就失败的，是构建机（见 seed 的 plugin-build.mjs）。
+ */
+async function inspectDependencies(git: GitSource, fetchImpl: typeof fetch): Promise<DependencyInfo> {
+  const info: DependencyInfo = { packages: {}, lockfile: null, framework: [] }
+  let deps: unknown
+  try {
+    const res = await fetchImpl(rawPluginFileUrl(git, 'package.json'), { redirect: 'follow' })
+    if (!res.ok) return info
+    deps = (JSON.parse(await res.text()) as { dependencies?: unknown }).dependencies
+  } catch {
+    return info
+  }
+  if (typeof deps !== 'object' || deps === null) return info
+  for (const [name, range] of Object.entries(deps as Record<string, unknown>)) {
+    if (typeof range !== 'string') continue
+    if (name.startsWith('@qqbot/')) info.framework.push(name)
+    else info.packages[name] = range
+  }
+  if (Object.keys(info.packages).length === 0) return info
+
+  // 只探在不在：lockfile 动辄几百 KB，Worker 里没必要整份拉下来
+  info.lockfile = false
+  for (const file of ['package-lock.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json']) {
+    try {
+      const res = await fetchImpl(rawPluginFileUrl(git, file), { headers: { range: 'bytes=0-0' }, redirect: 'follow' })
+      await res.body?.cancel()
+      if (res.ok) {
+        info.lockfile = true
+        break
+      }
+    } catch {
+      // 探不到当作没有
+    }
+  }
+  return info
+}
+
+/** 依赖上注定会让构建失败的两种情况：与构建机的 planDependencyInstall 同一套规则 */
+function dependencyWarnings(info: DependencyInfo): string[] {
+  const names = Object.keys(info.packages)
+  if (names.length === 0) return []
+  const warnings: string[] = []
+  if (info.lockfile === false) {
+    warnings.push(`插件依赖第三方包（${names.join('、')}），但仓库里没有 lockfile：构建会失败——请插件作者提交 package-lock.json 或 pnpm-lock.yaml`)
+  }
+  if (info.framework.length > 0) {
+    warnings.push(`dependencies 里的 ${info.framework.join('、')} 要移到 devDependencies，否则构建会失败（框架包一律用机器人仓库那一份）`)
+  }
+  return warnings
+}
+
+/** 预检给面板看的清单摘要 */
+function summarizeManifest(m: Manifest) {
+  return {
+    name: m.name,
+    version: m.version,
+    ...(m.displayName !== undefined ? { displayName: m.displayName } : {}),
+    ...(m.description !== undefined ? { description: m.description } : {}),
+    permissions: m.permissions ?? [],
+    services: m.services ?? [],
+    depends: Object.keys(m.depends ?? {}),
+    durableObjects: m.durableObjects ?? [],
+    commands: (m.commands ?? []).map((c) => c.name),
+  }
+}
+
+/** dryRun：跑完全部校验，但什么都不写 */
+async function previewInstall(
+  source: string,
+  scope: RequestScope,
+  deps: AdminDeps,
+): Promise<{ ok: true; preview: Record<string, unknown> } | Failure> {
+  const inspected = await inspectSource(source, scope, deps)
+  if (!inspected.ok) return inspected
+  const blocked = blockingProblem(inspected, deps)
+  if (blocked) return blocked
+  const { entry, existing, declared, doNotice } = inspected
+  const dependencies = await inspectDependencies(inspected.git, deps.options.fetchImpl)
+  return {
+    ok: true,
+    preview: {
+      plugin: entry,
+      ...(existing ? { previous: { version: existing.version, source: existing.source } } : {}),
+      manifest: summarizeManifest(declared),
+      // 第三方依赖：构建时按插件仓库的 lockfile 安装、打进插件自己的 plugin.js。和权限一样让人确认
+      dependencies: dependencies.packages,
+      warnings: [...installWarnings(inspected, deps.registry), ...dependencyWarnings(dependencies)],
+      // 预检不 409：把要补的 migrations 摆出来，让人确认后带 acknowledgeDurableObjects 正式装
+      durableObjects: doNotice ? { required: true, message: doNotice } : null,
+    },
+  }
+}
+
+/** 安装/升级一个 git 来源的插件：拉声明清单校验、冲突与依赖检查、写入 D1 并记一条 pending 账本 */
+async function installFromSource(
+  source: string,
+  scope: RequestScope,
+  deps: AdminDeps,
+  opts: { acknowledgeDurableObjects?: boolean } = {},
+): Promise<InstallOutcome> {
+  const inspected = await inspectSource(source, scope, deps)
+  if (!inspected.ok) return inspected
+  // 与以前同一个顺序：DO 提示先于其他校验
+  if (inspected.doNotice && opts.acknowledgeDurableObjects !== true) {
+    return { ok: false, status: 409, code: DO_MIGRATION_REQUIRED, error: inspected.doNotice }
+  }
+  const blocked = blockingProblem(inspected, deps)
+  if (blocked) return blocked
+
+  const db = scope.env.DB!
+  const { entry, existing, declared } = inspected
+  const warnings = installWarnings(inspected, deps.registry)
+  await upsertManifestPlugin(db, { ...entry, manifest: declared })
+  // 卸载的后半段还没跑（旧部署还在）就又装回来：取消它，别让定时任务把新装的这份的数据清掉
+  await removePendingCleanup(db, entry.name)
   const hash = await manifestHash(await listManifestPlugins(db))
   const install = await insertInstall(db, {
     action: existing ? 'upgrade' : 'install',
@@ -245,18 +647,25 @@ async function installFromSource(
     manifestHash: hash,
     status: 'pending',
   })
-  return { ok: true, plugin: entry, ...(existing ? { previous: { version: existing.version } } : {}), hash, install }
+  return {
+    ok: true,
+    plugin: entry,
+    ...(existing ? { previous: { version: existing.version, source: existing.source } } : {}),
+    hash,
+    install,
+    warnings,
+  }
 }
 
 /**
  * 从仓库的 commits.atom 解析默认分支最新 commit。
  * 不走匿名 GitHub API：Workers 共享出口 IP，60 次/小时的限额会被打爆；atom feed 宽松且无需鉴权。
- * 私有仓库的 atom 401，只能手贴 git: 链接。
+ * 私有仓库的 atom 401——只支持公开仓库。
  */
 export async function resolveLatestCommit(owner: string, repo: string, fetchImpl: typeof fetch): Promise<string> {
   const res = await fetchImpl(`https://github.com/${owner}/${repo}/commits.atom`, { redirect: 'follow' })
   if (!res.ok) {
-    throw new Error(`拉取 ${owner}/${repo} 的 commits.atom 失败（HTTP ${res.status}）。私有仓库不支持自动检查更新，请直接粘贴 git:owner/repo@commit`)
+    throw new Error(`拉取 ${owner}/${repo} 的 commits.atom 失败（HTTP ${res.status}）：仓库不存在，或是私有仓库（只支持公开的 GitHub 仓库）`)
   }
   const xml = await res.text()
   const firstEntry = /<entry>[\s\S]*?<\/entry>/.exec(xml)?.[0] ?? ''
@@ -283,11 +692,32 @@ export async function checkPluginUpdate(name: string, scope: RequestScope, deps:
   const latestSource = `git:${git.owner}/${git.repo}@${latestSha}${git.subdir ? `#${git.subdir}` : ''}`
   const upToDate = latestSha === git.sha
   let latestVersion: string | null = null
+  // 批量更新前让人看见的两件事：新增的权限，以及新增的 DO 类（要先改仓库，不能直接勾上就更新）
+  let newPermissions: string[] = []
+  let newDurableObjects: string[] = []
   if (!upToDate) {
     const declared = await fetchDeclaredManifest({ ...git, sha: latestSha }, deps.options.fetchImpl)
-    if (typeof declared !== 'string') latestVersion = declared.version
+    if (typeof declared !== 'string') {
+      latestVersion = declared.version
+      const records = await listManifestPluginRecords(db)
+      const previous = previousManifest(name, records, deps.registry)
+      newPermissions = (declared.permissions ?? []).filter((p) => !(previous?.permissions ?? []).includes(p))
+      const knownDo = knownDurableObjects(name, records, deps.registry)
+      newDurableObjects = (declared.durableObjects ?? []).filter((c) => !knownDo.has(c))
+    }
   }
-  return json({ ok: true, name, current: existing.source, latestSha, latestVersion, upToDate, latestSource })
+  return json({
+    ok: true,
+    name,
+    current: existing.source,
+    currentVersion: existing.version,
+    latestSha,
+    latestVersion,
+    upToDate,
+    latestSource,
+    newPermissions,
+    newDurableObjects,
+  })
 }
 
 /** POST /admin/manifest/plugins/:name/update —— 升级到上游最新 commit 并自动触发构建 */
@@ -312,7 +742,7 @@ export async function updatePlugin(name: string, scope: RequestScope, deps: Admi
   if (!outcome.ok) return error(outcome.error, outcome.status, outcome.code)
 
   // 就地触发构建：换钉子之后不构建，新版永远不会上线
-  const build = await triggerProjectionBuild(scope, deps)
+  const build = await buildAfterChange(scope, deps)
   return json({
     ok: true,
     name,
@@ -321,21 +751,28 @@ export async function updatePlugin(name: string, scope: RequestScope, deps: Admi
     latestSource,
     plugin: outcome.plugin,
     install: outcome.install,
-    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
+    build,
+    ...(outcome.warnings.length > 0 ? { warnings: outcome.warnings } : {}),
   })
 }
 
+// ---------- 卸载 ----------
+
 /**
- * DELETE /admin/manifest/plugins/:name[?purge=true]
+ * DELETE /admin/manifest/plugins/:name[?purge=true][&build=false]
  *
  * 数据默认**保留**：卸载多半是不想要了，但误删不可逆，而留下的数据在
  * `GET /admin/storage` 里会被标成孤儿，随时可以清——比默认删安全，又不至于管不了。
+ *
+ * D1 里有、但从没真正装上（构建失败）的插件同样走这里：它不在部署里，没有 onUninstall 可跑；
+ * 删掉之后 D1 就和线上一致了，不会白触发一次构建。
  */
 export async function uninstallManifestPlugin(
   name: string,
   purgeData: boolean,
   scope: RequestScope,
   deps: AdminDeps,
+  opts: { build?: boolean } = {},
 ): Promise<Response> {
   const db = await requireDb(scope)
   if (!db) return error('未绑定 D1，无法卸载插件', 503)
@@ -346,6 +783,9 @@ export async function uninstallManifestPlugin(
     return error(bundled ? '该插件由仓库清单内置：请从 qqbot.manifest.json 移除后重新构建' : `未安装：${name}`, 404)
   }
 
+  const records = await listManifestPluginRecords(db)
+  const dependents = dependentsOf(name, knownManifests(records, deps.registry))
+
   // 趁插件代码还在这次部署里，先让它自己收尾；重建之后就没机会了
   const registered = deps.registry.get(name)
   const { hook, hookError } = registered
@@ -354,32 +794,104 @@ export async function uninstallManifestPlugin(
 
   // 把其他已知插件名一并交给清理逻辑：D1 表前缀可能碰撞（`my-plugin` vs `my_plugin`），
   // 没有这份名单就无法判断某张表到底属于谁，宁可留孤儿也不能误删邻居
-  const otherNames = [
-    ...new Set([
-      ...deps.registry.all().map((p) => p.manifest.name),
-      ...(await listManifestPlugins(db)).map((p) => p.name),
-    ]),
-  ]
+  const otherNames = [...new Set([...deps.registry.all().map((p) => p.manifest.name), ...records.map((p) => p.name)])]
   const purged = purgeData ? await purgePluginData(name, scope.env, otherNames) : null
   await clearInstallMarker(name, scope.env)
 
   await deleteManifestPlugin(db, name)
+  // 后半段：重建完成前旧代码还在跑，冷启动的 isolate 读不到标记会重跑 onInstall，把表建回来、
+  // 把标记写回去（以后重装 onInstall 就静默不跑了）。等插件真的不在部署里了，由定时任务再收一次尾
+  await addPendingCleanup(db, name, purgeData)
   const hash = await manifestHash(await listManifestPlugins(db))
   const install = await insertInstall(db, { action: 'uninstall', name, source: existing.source, manifestHash: hash, status: 'pending' })
 
   // 就地触发构建：只改 D1 清单的话，插件还留在正在运行的 bundle 里——卸载等于没生效。
   // 触发失败不回滚卸载（清单已经改了，回滚只会更乱），如实报出来让用户手动重试。
-  const build = await triggerProjectionBuild(scope, deps)
+  const build = opts.build === false ? BUILD_DEFERRED : await buildAfterChange(scope, deps)
 
   return json({
     ok: true,
     removed: existing,
     hash,
     install,
-    build: build.ok ? { buildUuid: build.buildUuid } : { error: build.error },
+    build,
     data: { purged: purgeData, hook, ...(hookError ? { hookError } : {}), ...(purged ?? {}) },
+    ...(dependents.length > 0
+      ? { warnings: [`这些插件依赖它提供的服务，卸载后调用会报错：${dependents.join('、')}`] }
+      : {}),
   })
 }
+
+// ---------- 面板装的插件与线上的对照 ----------
+
+type ManagedState = 'deployed' | 'differs' | 'not_deployed'
+
+function lastRecordOf(name: string, recent: readonly InstallRecord[]) {
+  // recent 按时间倒序，第一条就是最近的
+  const r = recent.find((row) => row.name === name)
+  return r ? { action: r.action, status: r.status, error: r.error, ts: r.ts, buildUuid: r.buildUuid } : null
+}
+
+/**
+ * GET /admin/manifest/plugins —— D1 清单里的每个插件，和线上这份部署的对照。
+ *
+ * - `deployed`：线上就是这一份
+ * - `differs`：线上是另一份（升级还没生效或构建失败；或者线上是被它覆盖的同名内置插件）
+ * - `not_deployed`：线上根本没有——还在等构建，或者构建失败了。这类插件不在 /admin/status 的列表里
+ *   （那里列的是部署里的插件），以前在面板上看不见、也卸载不了，只能 curl
+ *
+ * `removing` 是反过来的：线上还在跑、D1 里已经删了（卸载还没生效）。老部署没有出处信息，这一项为空，
+ * `live.source` 为 null，`deployed / differs` 只能按版本号猜。
+ */
+export async function listManagedPlugins(scope: RequestScope, deps: AdminDeps): Promise<Response> {
+  const db = await requireDb(scope)
+  if (!db) return error('未绑定 D1，没有面板装的插件', 503)
+
+  const records = await listManifestPluginRecords(db)
+  const recent = await listInstalls(db, 100)
+  const hash = await manifestHash(records.map(({ name, version, source }) => ({ name, version, source })))
+  const liveHash = await liveManifestHash(deps.registry)
+
+  const plugins = records.map((r) => {
+    const live = deps.registry.get(r.name)
+    let state: ManagedState = 'not_deployed'
+    if (live) {
+      const same = live.origin ? live.origin.from === 'd1' && live.origin.source === r.source : live.manifest.version === r.version
+      state = same ? 'deployed' : 'differs'
+    }
+    return {
+      name: r.name,
+      version: r.version,
+      source: r.source,
+      addedAt: r.addedAt,
+      updatedAt: r.updatedAt,
+      state,
+      live: live ? { version: live.manifest.version, source: live.origin?.source ?? null, from: live.origin?.from ?? null } : null,
+      buildError: r.buildError,
+      lastRecord: lastRecordOf(r.name, recent),
+      manifest: r.manifest ? summarizeManifest(r.manifest) : null,
+    }
+  })
+
+  const inD1 = new Set(records.map((r) => r.name))
+  const removing = deps.registry
+    .all()
+    .filter((p) => p.origin?.from === 'd1' && !inD1.has(p.manifest.name))
+    .map((p) => ({ name: p.manifest.name, version: p.manifest.version, source: p.origin!.source, lastRecord: lastRecordOf(p.manifest.name, recent) }))
+
+  return json({
+    ok: true,
+    hash,
+    liveHash,
+    // null：老部署，判断不了
+    inSync: liveHash === null ? null : liveHash === hash,
+    building: recent.some((r) => r.status === 'building'),
+    plugins,
+    removing,
+  })
+}
+
+// ---------- 构建触发与账本 ----------
 
 function buildsApi(scope: RequestScope, deps: AdminDeps): CloudflareBuildsApi | null {
   const { CF_ACCOUNT_ID, CF_BUILDS_TOKEN } = scope.env
@@ -556,7 +1068,7 @@ async function triggerProjectionBuild(
     }
   }
 
-  await markPendingBuilding(db, hash, buildUuid)
+  await markPendingBuilding(db, buildUuid)
   const install = await insertInstall(db, {
     action: 'build',
     name: null,
@@ -621,12 +1133,14 @@ async function syncBuildLedger(
   }
 
   if (byUuid) {
+    let succeeded = false
     for (const row of rows) {
       if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
       const build = byUuid.get(row.buildUuid)
       if (!build) continue
       const { status: next, cfStatus } = buildToInstallState(build)
       const commitHash = build.build_trigger_metadata?.commit_hash ?? null
+      if (next === 'ok') succeeded = true
       if (next !== row.status || (cfStatus && cfStatus !== row.cfStatus) || (commitHash && commitHash !== row.commitHash)) {
         await updateInstallByBuildUuid(db, row.buildUuid, {
           status: next,
@@ -637,8 +1151,11 @@ async function syncBuildLedger(
         row.status = next
         row.cfStatus = cfStatus
         row.commitHash = commitHash
+        if (next === 'failed') row.error = row.error ?? `构建未成功：${cfStatus}`
       }
     }
+    // 有构建成功了：它拉的是当时的完整清单，里面每个插件都编过了，之前记下的构建错误都过时了
+    if (succeeded) await clearPluginBuildErrors(db).catch(() => {})
     // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛
     const NOT_FOUND_MS = 30 * 60 * 1000
     for (const row of rows) {
@@ -650,7 +1167,7 @@ async function syncBuildLedger(
         await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
         row.status = 'failed'
         row.cfStatus = 'not_found'
-        row.error = message
+        row.error = row.error ?? message
       }
     }
   }
@@ -663,7 +1180,7 @@ async function syncBuildLedger(
       if (row.buildUuid) await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', error: message })
       else await updateInstallById(db, row.id, { status: 'failed', error: message })
       row.status = 'failed'
-      row.error = message
+      row.error = row.buildUuid ? (row.error ?? message) : message
     }
   }
 
@@ -692,6 +1209,49 @@ export async function syncBuildLedgerOnSchedule(scope: RequestScope, deps: Admin
     if (syncError) deps.logger.warn('定时同步构建状态未完成', { error: syncError })
   } catch (err) {
     deps.logger.warn('定时同步构建状态失败', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/** 连同配置、优先级、启用状态一起从快照里拿掉（卸载时选了清数据才走到这里） */
+async function dropPluginState(env: RuntimeEnv, name: string): Promise<void> {
+  const snapshot = await readSnapshot(env, true)
+  if (!(name in snapshot.plugins)) return
+  const plugins = { ...snapshot.plugins }
+  delete plugins[name]
+  await writeSnapshot(env, { ...snapshot, plugins })
+}
+
+/**
+ * 卸载的后半段，由 Cron 调用：等插件真的不在这份部署里了，再删一遍 onInstall 标记，按需再清一遍数据。
+ *
+ * 卸载请求当场已经清过一次，但重建完成前旧代码还在跑——冷启动的 isolate 读不到标记会重跑 onInstall，
+ * 把表建回来、把标记写回去，以后重装时 onInstall 就静默不跑了。在旧代码没机会再动之后收尾，
+ * 这两件事才靠得住。插件还在部署里（重建没完成、构建失败）就等下一次；清数据还会连快照里的配置一起清。
+ */
+export async function processPendingCleanups(scope: RequestScope, deps: AdminDeps): Promise<void> {
+  const db = scope.env.DB
+  if (!db) return
+  try {
+    const pending = await listPendingCleanups(db)
+    const ready = pending.filter((c) => !deps.registry.get(c.name))
+    if (ready.length === 0) return
+
+    // 与 purgeOrphan 同一份「已知插件名」：表前缀可能撞车，名单越全越不会误删邻居
+    const known = new Set<string>(deps.registry.all().map((p) => p.manifest.name))
+    for (const p of await listManifestPlugins(db)) known.add(p.name)
+    for (const r of await listInstalls(db, 200)) if (r.name) known.add(r.name)
+
+    for (const c of ready) {
+      await clearInstallMarker(c.name, scope.env)
+      if (c.purge) {
+        await purgePluginData(c.name, scope.env, [...known])
+        await dropPluginState(scope.env, c.name)
+      }
+      await removePendingCleanup(db, c.name)
+      deps.logger.info('卸载收尾完成', { plugin: c.name, purge: c.purge })
+    }
+  } catch (err) {
+    deps.logger.warn('卸载收尾失败，下次定时任务再试', { error: err instanceof Error ? err.message : String(err) })
   }
 }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { definePlugin } from '@qqbot/sdk'
+import { definePlugin, type Manifest } from '@qqbot/sdk'
 import { BUILD_COMMAND, DEPLOY_COMMAND } from '@qqbot/projector'
 import { createRuntime } from './runtime.js'
 import { resetManifestSchema } from './manifestStore.js'
@@ -82,14 +82,35 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       // 一对表前缀相同的插件名：- 与 _ 都会被 tablePrefix 归一成 _（见 sqlScope.ts）
       'raw.githubusercontent.com/me/qqbot-plugin-dashed/d1e2f3a4b5/manifest.json': declaredManifest({ name: 'my-plugin' }),
       'raw.githubusercontent.com/me/qqbot-plugin-scored/d1e2f3a4b6/manifest.json': declaredManifest({ name: 'my_plugin' }),
+      // 提供 greet 服务：needy 依赖它
+      'raw.githubusercontent.com/me/qqbot-plugin-greeter/a0b1c2d3e4/manifest.json': declaredManifest({ name: 'greeter', services: ['greet'] }),
+      // 同名、别家仓库
+      'raw.githubusercontent.com/other/qqbot-plugin-hello/a1b2c3d4e5/manifest.json': declaredManifest(),
+      'raw.githubusercontent.com/me/qqbot-plugin-chatty/c0d1e2f3a4/manifest.json': declaredManifest({
+        name: 'chatty',
+        commands: [{ name: 'ping', aliases: ['p'] }],
+        permissions: ['kv'],
+      }),
+      // game 的两个新版本：DO 类不变 / 新增了一个
+      'raw.githubusercontent.com/me/qqbot-plugin-game/e5f6a7b8d0/manifest.json': declaredManifest({
+        name: 'game',
+        version: '1.1.0',
+        durableObjects: ['Room', 'Lobby'],
+      }),
+      'raw.githubusercontent.com/me/qqbot-plugin-game/e5f6a7b8d1/manifest.json': declaredManifest({
+        name: 'game',
+        version: '1.2.0',
+        durableObjects: ['Room', 'Lobby', 'Arena'],
+      }),
     },
     [{ build_uuid: 'build-9', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
     undefined,
     triggerWrites,
   )
   const runtime = createRuntime({ plugins, fetchImpl })
+  const db = createManifestD1()
   const env = createEnv({
-    DB: createManifestD1(),
+    DB: db,
     BUILD_TOKEN,
     CF_ACCOUNT_ID: 'acc',
     CF_BUILDS_TOKEN: 'tok',
@@ -100,7 +121,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
   const call = (path: string, init: RequestInit = {}) =>
     runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
   const admin = { authorization: `Bearer ${ADMIN}` }
-  return { call, env, admin, triggerWrites, runtime }
+  return { call, env, admin, triggerWrites, runtime, db }
 }
 
 beforeEach(() => {
@@ -362,7 +383,8 @@ describe('DELETE /admin/manifest/plugins/:name', () => {
   })
 
   it('触发构建失败不回滚卸载：清单已改，如实报错让用户手动重试', async () => {
-    const { call } = setup({ CF_ACCOUNT_ID: undefined, CF_BUILDS_TOKEN: undefined })
+    // 入口里没有出处信息的老部署：判断不了「清单是否已与线上一致」，照旧每次都触发构建
+    const { call } = setup({ CF_ACCOUNT_ID: undefined, CF_BUILDS_TOKEN: undefined }, [{ name: 'echo', version: '1.0.0' }])
     await call('/admin/manifest/plugins', {
       method: 'POST',
       headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
@@ -801,5 +823,460 @@ describe('插件检查更新与一键更新', () => {
     const res = await post(call, '/admin/manifest/plugins/echo/check-update')
     expect(res.status).toBe(404)
     expect(((await res.json()) as { error: string }).error).toContain('内置插件')
+  })
+})
+
+// ---------- 以下覆盖「批量更新 / 未上线插件可卸载 / 构建回报」这一轮改动 ----------
+
+/** 投影出来的懒加载条目：带出处，像构建机产出的入口那样 */
+function deployed(
+  name: string,
+  opts: { version?: string; source?: string; from?: 'd1' | 'repo'; manifest?: Record<string, unknown> } = {},
+) {
+  const version = opts.version ?? '1.0.0'
+  const manifest = declaredManifest({ name, version, ...opts.manifest }) as unknown as Manifest
+  return {
+    manifest,
+    origin: { from: opts.from ?? 'd1', source: opts.source ?? `git:me/qqbot-plugin-${name}@a1b2c3d4e5` },
+    load: async () => ({ default: definePlugin({ name, version }) }),
+  }
+}
+
+const jsonHeaders = { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' }
+
+async function install(call: ReturnType<typeof setup>['call'], body: Record<string, unknown>) {
+  const res = await call('/admin/manifest/plugins', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) })
+  return { res, data: (await res.json()) as Record<string, any> }
+}
+
+async function managed(call: ReturnType<typeof setup>['call']) {
+  const res = await call('/admin/manifest/plugins', { headers: { authorization: `Bearer ${ADMIN}` } })
+  expect(res.status).toBe(200)
+  return (await res.json()) as {
+    hash: string
+    liveHash: string | null
+    inSync: boolean | null
+    building: boolean
+    plugins: Array<{ name: string; state: string; live: { version: string; source: string | null } | null; buildError: string | null; lastRecord: { action: string; status: string } | null; manifest: { services: string[] } | null }>
+    removing: Array<{ name: string; source: string }>
+  }
+}
+
+async function ledger(call: ReturnType<typeof setup>['call']) {
+  const res = await call('/admin/builds', { headers: { authorization: `Bearer ${ADMIN}` } })
+  return ((await res.json()) as { builds: Array<{ action: string; name: string | null; status: string; buildUuid: string | null; error: string | null }> }).builds
+}
+
+describe('GET /admin/manifest/plugins：D1 清单与线上的对照', () => {
+  it('没上线的插件列出来、能卸载；清单回到与线上一致时不白跑构建', async () => {
+    // 线上只有一个仓库内置插件（带出处 = 新构建机产出的入口）
+    const { call, env } = setup({}, [deployed('echo', { from: 'repo', source: 'file:../../plugins/echo/dist/plugin.js' })])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+
+    let list = await managed(call)
+    expect(list.plugins).toEqual([expect.objectContaining({ name: 'hello', state: 'not_deployed', live: null })])
+    expect(list.inSync).toBe(false)
+
+    // 构建失败：线上保持原样，hello 还在 D1 里
+    await env.DB!.prepare("UPDATE rt_installs SET status = ?, cf_status = ?, commit_hash = ?, error = COALESCE(error, ?) WHERE build_uuid = ?")
+      .bind('failed', 'fail', null, '构建未成功：fail', 'build-9')
+      .run()
+
+    const remove = await call('/admin/manifest/plugins/hello', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+    const body = (await remove.json()) as { build: Record<string, unknown>; data: { hook: string } }
+    // 从没上线过：没有 onUninstall 可跑，删掉之后清单与线上一致，不必触发构建
+    expect(body.data.hook).toBe('none')
+    expect(body.build).toMatchObject({ skipped: true })
+
+    list = await managed(call)
+    expect(list.plugins).toEqual([])
+    expect(list.inSync).toBe(true)
+    const rows = await ledger(call)
+    expect(rows.find((r) => r.action === 'uninstall')).toMatchObject({ name: 'hello', status: 'ok' })
+  })
+
+  it('已上线 / 线上是另一份 / 卸载还没生效，三种状态分得清', async () => {
+    const { call } = setup({}, [deployed('hello'), deployed('gone', { source: 'git:me/qqbot-plugin-gone@b2c3d4e5f6' })])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+
+    let list = await managed(call)
+    expect(list.plugins).toEqual([expect.objectContaining({ name: 'hello', state: 'deployed' })])
+    // gone 线上还在、D1 里没有：卸载还没生效
+    expect(list.removing).toEqual([expect.objectContaining({ name: 'gone', source: 'git:me/qqbot-plugin-gone@b2c3d4e5f6' })])
+
+    await install(call, { source: 'git:me/qqbot-plugin-hello@f6a7b8c9d0', build: false })
+    list = await managed(call)
+    expect(list.plugins).toEqual([
+      expect.objectContaining({ name: 'hello', state: 'differs', live: { version: '1.0.0', source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', from: 'd1' } }),
+    ])
+  })
+
+  it('老部署没有出处信息：inSync 为 null，状态按版本号判断', async () => {
+    const { call } = setup({}, [definePlugin({ name: 'hello', version: '1.0.0' })])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+    const list = await managed(call)
+    expect(list.inSync).toBeNull()
+    expect(list.liveHash).toBeNull()
+    expect(list.plugins[0]).toMatchObject({ state: 'deployed', live: { version: '1.0.0', source: null } })
+  })
+})
+
+describe('批量写入：build: false 只写清单，最后只构建一次', () => {
+  it('两个插件逐个写入不触发构建，一次 POST /admin/builds 把两条都并进去', async () => {
+    const { call } = setup()
+    const a = await install(call, { source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4', build: false })
+    // needy 依赖 greet：提供者 greeter 还没构建上线，只在 D1 里——以前会被误拒
+    const b = await install(call, { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', build: false })
+    expect(a.res.status).toBe(200)
+    expect(b.res.status).toBe(200)
+    expect(a.data.build).toMatchObject({ skipped: true })
+    expect((await ledger(call)).filter((r) => r.action === 'build')).toEqual([])
+
+    const trigger = await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(trigger.status).toBe(200)
+    const rows = await ledger(call)
+    // 两条安装记录存的哈希各不相同，都得并进这次构建，不能留一条永远 pending
+    expect(rows.map((r) => [r.action, r.name, r.buildUuid])).toEqual(
+      expect.arrayContaining([
+        ['install', 'greeter', 'build-9'],
+        ['install', 'needy', 'build-9'],
+        ['build', null, 'build-9'],
+      ]),
+    )
+  })
+
+  it('不传 build 时行为不变：安装就地触发构建', async () => {
+    const { call } = setup()
+    const { data } = await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    expect(data.build).toEqual({ buildUuid: 'build-9' })
+  })
+})
+
+describe('dryRun 预检', () => {
+  it('只校验不写：不进 D1、不记账本、不构建', async () => {
+    const { call, triggerWrites } = setup()
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a4', dryRun: true })
+    expect(res.status).toBe(200)
+    expect(data).toMatchObject({
+      dryRun: true,
+      plugin: { name: 'chatty', version: '1.0.0' },
+      manifest: { permissions: ['kv'], commands: ['ping'] },
+      warnings: [],
+      durableObjects: null,
+    })
+    expect((await managed(call)).plugins).toEqual([])
+    expect(await ledger(call)).toEqual([])
+    expect(triggerWrites).toEqual([])
+  })
+
+  it('声明了 DO：预检不 409，把要补的 migrations 摆出来', async () => {
+    const { call } = setup()
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', dryRun: true })
+    expect(res.status).toBe(200)
+    expect(data.durableObjects).toMatchObject({ required: true })
+    expect(data.durableObjects.message).toContain('"new_sqlite_classes": ["P_game_Room", "P_game_Lobby"]')
+  })
+
+  it('硬规则照旧拒绝：依赖缺失', async () => {
+    const { call } = setup()
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', dryRun: true })
+    expect(res.status).toBe(400)
+    expect(data.error).toContain('依赖未满足：greet')
+  })
+})
+
+describe('只提醒、不拦的情况（以前能装的现在照样能装）', () => {
+  it('同名但换了仓库：照装，给出警告', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    const { res, data } = await install(call, { source: 'git:other/qqbot-plugin-hello@a1b2c3d4e5' })
+    expect(res.status).toBe(200)
+    expect(data.install.action).toBe('upgrade')
+    expect(data.warnings).toEqual([expect.stringContaining('这次会换成 other/qqbot-plugin-hello 的代码')])
+  })
+
+  it('命令重名、已装插件声明与它冲突、覆盖同名内置插件：都只是警告', async () => {
+    const { call } = setup({}, [
+      definePlugin({ name: 'pinger', commands: { ping: () => 'pong' } }),
+      definePlugin({ name: 'hater', conflicts: ['chatty'] }),
+      definePlugin({ name: 'chatty' }),
+    ])
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a4' })
+    expect(res.status).toBe(200)
+    expect(data.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('与仓库内置插件 chatty 同名'),
+        expect.stringContaining('与 pinger 的命令重名：/ping'),
+        expect.stringContaining('已装的 hater 声明与 chatty 冲突'),
+      ]),
+    )
+  })
+
+  it('升级新增的权限列进警告', async () => {
+    const { call } = setup({}, [deployed('chatty', { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a3' })])
+    const { data } = await install(call, { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a4' })
+    expect(data.warnings).toEqual([expect.stringContaining('新版本新增权限：kv')])
+  })
+})
+
+describe('Durable Object：只拦新增的类', () => {
+  it('确认过 migrations 的插件，升级时 DO 类没变就直接放行；新增了类才要再确认', async () => {
+    const { call } = setup()
+    expect((await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', acknowledgeDurableObjects: true })).res.status).toBe(200)
+
+    // 类不变：以前每次升级都 409，声明了 DO 的插件永远没法一键更新
+    const same = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8d0' })
+    expect(same.res.status).toBe(200)
+
+    const added = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8d1' })
+    expect(added.res.status).toBe(409)
+    expect(added.data.code).toBe('durable_objects_migration_required')
+    expect(added.data.error).toContain('新增了 Durable Object 类（Arena）')
+    expect(added.data.error).toContain('"new_sqlite_classes": ["P_game_Arena"]')
+  })
+
+  it('线上部署里已有的类同样算数', async () => {
+    const { call } = setup({}, [deployed('game', { manifest: { durableObjects: ['Room', 'Lobby'] } })])
+    expect((await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8d0' })).res.status).toBe(200)
+  })
+
+  it('check-update 报出新版本新增的权限与 DO 类', async () => {
+    const LATEST = 'f6a7b8c9d0000000000000000000000000000000'
+    const fetchImpl = createFetchMock({
+      'raw.githubusercontent.com/me/qqbot-plugin-game/e5f6a7b8c9/manifest.json': declaredManifest({ name: 'game', durableObjects: ['Room'] }),
+      [`raw.githubusercontent.com/me/qqbot-plugin-game/${LATEST}/manifest.json`]: declaredManifest({
+        name: 'game',
+        version: '2.0.0',
+        permissions: ['r2'],
+        durableObjects: ['Room', 'Arena'],
+      }),
+    })
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({ DB: createManifestD1(), CF_ACCOUNT_ID: 'acc', CF_BUILDS_TOKEN: 'tok', CF_WORKER_TAG: 'tag', CF_TRIGGER_UUID: 'trig-1' })
+    const call = (path: string, init: RequestInit = {}) => runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
+    await call('/admin/manifest/plugins', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', acknowledgeDurableObjects: true }) })
+
+    const res = await call('/admin/manifest/plugins/game/check-update', { method: 'POST', headers: jsonHeaders })
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({
+      upToDate: false,
+      currentVersion: '1.0.0',
+      latestVersion: '2.0.0',
+      newPermissions: ['r2'],
+      newDurableObjects: ['Arena'],
+    })
+  })
+})
+
+describe('卸载的后半段：等插件真的不在部署里了再收尾', () => {
+  /** 跑一次 Cron，并等 waitUntil 里的后台任务（账本同步、卸载收尾）跑完 */
+  async function tick(runtime: ReturnType<typeof createRuntime>, env: ReturnType<typeof setup>['env']) {
+    const ctx = createExecutionContext()
+    await runtime.scheduled!({ scheduledTime: Date.now(), cron: '* * * * *', noRetry() {} } as ScheduledController, env, ctx)
+    await ctx.flush()
+  }
+  /** 新部署：入口里已经没有被卸载的插件；任何网络请求都算意外 */
+  const nextDeployment = () =>
+    createRuntime({ plugins: [], fetchImpl: (async () => new Response('unexpected', { status: 500 })) as typeof fetch })
+
+  it('旧部署还在时不动；新部署里没它了才删标记、清数据、清快照配置', async () => {
+    const { call, env, runtime, db } = setup({}, [deployed('hello')])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+    await env.KV.put('rt:snapshot', JSON.stringify({ revision: 1, plugins: { hello: { enabled: true, config: { a: 1 } } } }))
+    resetSnapshotCache()
+
+    const remove = await call('/admin/manifest/plugins/hello?purge=true&build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+    expect(((await remove.json()) as { build: Record<string, unknown> }).build).toMatchObject({ skipped: true })
+
+    // 重建完成前旧代码还在跑：冷启动的 isolate 重跑 onInstall，把表建回来、把标记写回去
+    await env.KV.put('rt:installed:hello', '1.0.0')
+    await env.KV.put('p:hello:note', 'x')
+
+    await tick(runtime, env)
+    expect(env.KV.store.has('rt:installed:hello')).toBe(true)
+    expect(db.cleanups.has('hello')).toBe(true)
+
+    resetSnapshotCache()
+    await tick(nextDeployment(), env)
+    expect(env.KV.store.has('rt:installed:hello')).toBe(false)
+    expect(env.KV.store.has('p:hello:note')).toBe(false)
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).plugins).toEqual({})
+    expect(db.cleanups.size).toBe(0)
+  })
+
+  it('不清数据的卸载只删标记，数据与配置都留着', async () => {
+    const { call, env } = setup({}, [deployed('hello')])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+    await call('/admin/manifest/plugins/hello?build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    await env.KV.put('rt:installed:hello', '1.0.0')
+    await env.KV.put('p:hello:note', 'x')
+
+    await tick(nextDeployment(), env)
+    expect(env.KV.store.has('rt:installed:hello')).toBe(false)
+    expect(env.KV.store.get('p:hello:note')).toBe('x')
+  })
+
+  it('收尾之前又装回来：取消待清理，别把新装的数据清掉', async () => {
+    const { call, db } = setup({}, [deployed('hello')])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+    await call('/admin/manifest/plugins/hello?purge=true&build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(db.cleanups.has('hello')).toBe(true)
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+    expect(db.cleanups.has('hello')).toBe(false)
+  })
+
+  it('卸载服务提供者时提醒谁会断掉', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4', build: false })
+    await install(call, { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', build: false })
+    const res = await call('/admin/manifest/plugins/greeter?build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { warnings?: string[] }).warnings).toEqual([expect.stringContaining('needy')])
+  })
+})
+
+describe('POST /admin/build-report：构建机回报失败原因', () => {
+  const report = (call: ReturnType<typeof setup>['call'], body: unknown, token = BUILD_TOKEN) =>
+    call('/admin/build-report', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('匿名拒绝；错误记到 D1 条目与这次构建的账本上，之后同步成失败也不被冲掉', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    expect((await call('/admin/build-report', { method: 'POST', body: '{}' })).status).toBe(401)
+
+    const res = await report(call, {
+      buildUuid: 'build-9',
+      phase: 'prepare',
+      failures: [{ name: 'hello', source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', error: 'hello 的声明清单与源码不一致（字段：commands）\n详细…' }],
+    })
+    expect(res.status).toBe(200)
+    expect((await managed(call)).plugins[0]).toMatchObject({ buildError: expect.stringContaining('声明清单与源码不一致') })
+    const rows = await ledger(call)
+    // 同步把 build-9 标成了成功（mock 的构建列表里它是 success）——但错误信息只补不盖，还留着
+    expect(rows.every((r) => r.error?.startsWith('插件构建失败：hello（hello 的声明清单与源码不一致（字段：commands））'))).toBe(true)
+  })
+
+  it('报告里的 source 已经不是 D1 当前那一份：不记（用户已经换了版本）', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@f6a7b8c9d0' })
+    await report(call, { phase: 'prepare', failures: [{ name: 'hello', source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', error: '旧版本坏了' }] })
+    expect((await managed(call)).plugins[0]!.buildError).toBeNull()
+  })
+
+  it('部署阶段失败归不到插件：只记到账本', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    await report(call, { buildUuid: 'build-9', phase: 'deploy', error: '预览地址健康检查失败：HTTP 500' })
+    const rows = await ledger(call)
+    expect(rows.find((r) => r.action === 'build')?.error).toBe('部署失败：预览地址健康检查失败：HTTP 500')
+  })
+})
+
+describe('构建机带 build uuid 拉清单', () => {
+  it('精确对上触发这次构建的记录；推送触发的构建（账本里没有）返回 null', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    const pull = async (uuid: string) =>
+      ((await (await call('/admin/build-manifest', { headers: { authorization: `Bearer ${BUILD_TOKEN}`, 'x-build-uuid': uuid } })).json()) as {
+        pendingBuild: { buildUuid: string } | null
+      }).pendingBuild
+    expect(await pull('build-9')).toMatchObject({ buildUuid: 'build-9' })
+    expect(await pull('push-build-1')).toBeNull()
+  })
+})
+
+describe('GET /admin/status 的新字段', () => {
+  it('出处、卸载待生效、依赖关系；配置用默认值打底', async () => {
+    const { call, env } = setup({}, [
+      deployed('greeter', { source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4', manifest: { services: ['greet'], defaultConfig: { a: 1, b: 2 } } }),
+      deployed('needy', { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', manifest: { depends: { greet: '*' } } }),
+      deployed('gone', { source: 'git:me/qqbot-plugin-gone@b2c3d4e5f6' }),
+    ])
+    await install(call, { source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4', build: false })
+    await install(call, { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', build: false })
+    await env.KV.put('rt:snapshot', JSON.stringify({ revision: 1, plugins: { greeter: { enabled: true, config: { a: 5 } } } }))
+    resetSnapshotCache()
+
+    const res = await call('/admin/status', { headers: { authorization: `Bearer ${ADMIN}` } })
+    const { plugins } = (await res.json()) as { plugins: Array<Record<string, any>> }
+    const byName = Object.fromEntries(plugins.map((p) => [p.name, p]))
+    expect(byName.greeter).toMatchObject({
+      installed: true,
+      removing: false,
+      origin: { from: 'd1', source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4' },
+      services: ['greet'],
+      dependents: ['needy'],
+      // 升级后新增的 b 回落默认值，已保存的 a 保留
+      config: { a: 5, b: 2 },
+    })
+    expect(byName.needy).toMatchObject({ depends: ['greet'], dependents: [] })
+    // 线上还在、D1 里没有：卸载还没生效——以前会被当成「仓库内置插件」
+    expect(byName.gone).toMatchObject({ installed: false, removing: true })
+  })
+})
+
+describe('预检列出插件的第三方依赖', () => {
+  const ROOT = 'raw.githubusercontent.com/me/qqbot-plugin-deps/a1b2c3d4e5'
+
+  /** 插件仓库里除了声明清单还有哪些文件（package.json、lockfile） */
+  function preview(files: Record<string, unknown>) {
+    const fetchImpl = createFetchMock({
+      [`${ROOT}/manifest.json`]: declaredManifest({ name: 'deps' }),
+      ...Object.fromEntries(Object.entries(files).map(([file, body]) => [`${ROOT}/${file}`, body])),
+    })
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({ DB: createManifestD1() })
+    return runtime
+      .fetch!(
+        new Request(`${BASE}/admin/manifest/plugins`, {
+          method: 'POST',
+          headers: jsonHeaders,
+          body: JSON.stringify({ source: 'git:me/qqbot-plugin-deps@a1b2c3d4e5', dryRun: true }),
+        }),
+        env,
+        createExecutionContext(),
+      )
+      .then(async (res) => ({ status: res.status, data: (await res.json()) as { dependencies: Record<string, string>; warnings: string[] } }))
+  }
+
+  it('列出 dependencies（框架包与开发依赖不算）；有 lockfile 就不警告', async () => {
+    const { status, data } = await preview({
+      'package.json': {
+        dependencies: { nanoid: '^5.0.0', dayjs: '1.11.13' },
+        devDependencies: { '@qqbot/sdk': 'file:../qqbot-workers/packages/sdk', typescript: '^5.9.0' },
+      },
+      'package-lock.json': { lockfileVersion: 3 },
+    })
+    expect(status).toBe(200)
+    expect(data.dependencies).toEqual({ nanoid: '^5.0.0', dayjs: '1.11.13' })
+    expect(data.warnings).toEqual([])
+  })
+
+  it('有依赖却没提交 lockfile：提前警告构建会失败（照样能装，由人决定）', async () => {
+    const { status, data } = await preview({ 'package.json': { dependencies: { nanoid: '^5.0.0' } } })
+    expect(status).toBe(200)
+    expect(data.warnings).toEqual([expect.stringContaining('没有 lockfile：构建会失败')])
+  })
+
+  it('把 SDK 写进了 dependencies、又有别的依赖：提示挪到 devDependencies', async () => {
+    const { data } = await preview({
+      'package.json': { dependencies: { nanoid: '^5.0.0', '@qqbot/sdk': '^0.1.0' } },
+      'pnpm-lock.yaml': 'lockfileVersion: 9.0',
+    })
+    expect(data.dependencies).toEqual({ nanoid: '^5.0.0' })
+    expect(data.warnings).toEqual([expect.stringContaining('@qqbot/sdk 要移到 devDependencies')])
+  })
+
+  it('零依赖（只有开发依赖）或者读不到 package.json：依赖为空，不警告', async () => {
+    const zero = await preview({ 'package.json': { devDependencies: { '@qqbot/sdk': '^0.1.0' } } })
+    expect(zero.data).toMatchObject({ dependencies: {}, warnings: [] })
+    const missing = await preview({})
+    expect(missing.status).toBe(200)
+    expect(missing.data).toMatchObject({ dependencies: {}, warnings: [] })
   })
 })
