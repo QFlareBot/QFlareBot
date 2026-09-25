@@ -1,7 +1,7 @@
 # QFlareBot
 
-[![CI](https://github.com/qflarebot/QFlareBot/actions/workflows/ci.yml/badge.svg)](https://github.com/qflarebot/QFlareBot/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/qflarebot/QFlareBot)](LICENSE)
+[![CI](https://github.com/QFlareBot/QFlareBot/actions/workflows/ci.yml/badge.svg)](https://github.com/QFlareBot/QFlareBot/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/QFlareBot/QFlareBot)](LICENSE)
 
 运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架：零服务器、Fork 即部署、面板装插件。
 
@@ -81,7 +81,7 @@ pnpm dev                                             # 打开 http://localhost:8
 
 ## 参与贡献
 
-问题与建议请提 [Issue](https://github.com/qflarebot/QFlareBot/issues)。提交 PR 前请确保 `pnpm build && pnpm -r typecheck && pnpm test` 通过。
+问题与建议请提 [Issue](https://github.com/QFlareBot/QFlareBot/issues)。提交 PR 前请确保 `pnpm build && pnpm -r typecheck && pnpm test` 通过。
 
 ## 协议
 

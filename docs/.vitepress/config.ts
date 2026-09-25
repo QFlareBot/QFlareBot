@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitepress'
 
-const repo = 'https://github.com/qflarebot/QFlareBot'
+const repo = 'https://github.com/QFlareBot/QFlareBot'
 
 // 站点发布在 qflarebot.github.io 根路径，不需要 base
 export default defineConfig({
@@ -28,7 +28,24 @@ export default defineConfig({
     ],
     socialLinks: [{ icon: 'github', link: repo }],
     editLink: { pattern: `${repo}/edit/main/docs/:path`, text: '在 GitHub 上编辑此页' },
-    search: { provider: 'local' },
+    search: {
+      provider: 'local',
+      options: {
+        miniSearch: {
+          // MiniSearch 默认按空格和标点切词，一整句中文成了一个词，只有句首的词搜得到。
+          // 改用 Intl.Segmenter 按词切；建索引（Node）和搜索（浏览器）用的是同一个函数。
+          // 函数会被 VitePress 序列化进客户端，必须自包含，不能引用外部变量。
+          options: {
+            tokenize: (text: string) =>
+              [...new Intl.Segmenter('zh', { granularity: 'word' }).segment(text)]
+                .filter((s) => s.isWordLike)
+                .map((s) => s.segment),
+          },
+          // 中文查询会被切成多个词，默认的 OR 会把只命中一个字词的页面都列出来
+          searchOptions: { combineWith: 'AND' },
+        },
+      },
+    },
     outline: { level: [2, 3], label: '本页目录' },
     lastUpdated: { text: '最后更新' },
     docFooter: { prev: '上一页', next: '下一页' },

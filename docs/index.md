@@ -14,7 +14,7 @@ hero:
       link: /plugin-guide
     - theme: alt
       text: GitHub
-      link: https://github.com/qflarebot/QFlareBot
+      link: https://github.com/QFlareBot/QFlareBot
 
 features:
   - title: 零服务器

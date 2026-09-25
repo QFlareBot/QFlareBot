@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: qflarebot/QFlareBot
+          repository: QFlareBot/QFlareBot
           path: QFlareBot
 
       - uses: pnpm/action-setup@v4

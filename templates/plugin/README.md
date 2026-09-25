@@ -9,7 +9,7 @@
 `@qqbot/sdk` 与 `@qqbot/plugin-cli` 不发 npm，从 QFlareBot 源码构建。把 QFlareBot 克隆到插件仓库旁边（`devDependencies` 里是 `file:../QFlareBot/packages/*`）：
 
 ```bash
-git clone https://github.com/qflarebot/QFlareBot
+git clone https://github.com/QFlareBot/QFlareBot
 (cd QFlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
 cd qqbot-plugin-hello    # 与 QFlareBot 同级
 npm install
