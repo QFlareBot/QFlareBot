@@ -20,12 +20,13 @@
    - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，汇总写进
      run 页 Summary。`ADMIN_TOKEN` 必须自己定（它就是面板登录密钥，只有你知道明文）；缺任一个
      secret 会直接失败并在日志里给出配置指引。
-3. 工作流结束后照 Summary 里的清单收尾：QQ 开放平台填回调地址、连接仓库（向导会引导）。
+3. 工作流结束后照 Summary 里的清单收尾：绑定自定义域名、QQ 开放平台填回调地址、连接仓库（网页向导里已做完）。
 
-**域名由你自己选、自己绑。** 引导只部署到默认的 `<Worker名>.<子域>.workers.dev`，不接收也不绑定自定义域名。
-回调地址先填默认域名；QQ 开放平台验证不通过（国内网络访问 `*.workers.dev` 可能不稳定）或想换成自己的域名时，
-到 Cloudflare 后台 Worker → Settings → Domains & Routes 的 Custom Domains 添加一个，回调地址改填
-`https://你的域名/webhook`。之后的部署（重跑引导、自部署构建）都不会改动你绑的域名。
+**自定义域名必须绑，由你自己选、自己绑。** QQ 开放平台访问不到 `*.workers.dev`（已实测，回调验证不通过），
+所以回调必须走你自己的域名。引导只部署到默认的 `<Worker名>.<子域>.workers.dev`（面板与构建机拉清单用它），
+不接收也不绑定自定义域名，也不给出 workers.dev 的回调地址。部署完到 Cloudflare 后台 Worker → Settings →
+Domains & Routes 的 Custom Domains 添加一个（域名要托管在同一个 Cloudflare 账户下），回调地址填
+`https://你的域名/webhook`——用新域名打开面板，概览页可以一键复制。之后的部署（重跑引导、自部署构建）都不会改动你绑的域名。
 
 Token 权限清单（预填链接已带；手动创建照此勾选）：
 
@@ -36,6 +37,7 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 | D1 | Edit |
 | Workers R2 Storage | Edit |
 | Account Settings | Read |
+| Workers 构建配置（Workers Builds Configuration，也可能显示为 Workers CI） | Edit（网页向导用：自动检测仓库连接、写构建配置、补跑首次构建；无 UI 模式用不到） |
 | 账户范围 | 所有账户（或包含目标账户） |
 
 > 引导只做**只读探测**（GET 一个列表端点）：通过只说明读权限够用，Edit 缺失要到真正部署时才报 403。

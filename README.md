@@ -98,8 +98,9 @@ buttons: {
 - 启用/禁用/改配置只改 KV 快照，不触发构建：`PATCH /admin/plugins/:name`。
 
 设置步骤见 [apps/seed/README.md](apps/seed/README.md)：fork 后运行根目录的 **Bootstrap** 工作流即可完成首次部署。
-推荐走**网页向导**模式（不需要任何 GitHub secret）：页面上粘贴 API token → 填表 → 点两个预填链接（建构建 token、连接仓库），
+推荐走**网页向导**模式（不需要任何 GitHub secret）：页面上粘贴 API token → 填表 → 连接仓库（向导自动检测）→ 建构建 token，
 构建命令与清单环境变量由引导经 Builds API 自动写进构建 trigger，Cloudflare 后台一个格子都不用填。
+部署完还要自己绑一个**自定义域名**：QQ 开放平台访问不到 `*.workers.dev`，回调必须走你的域名。
 
 ## 运行时路由
 

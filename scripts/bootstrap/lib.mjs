@@ -373,9 +373,14 @@ export async function pollQQBindResult(taskId, key) {
 
 // ── 汇总输出 ─────────────────────────────────────────────────────────────
 
-/** 主 token 的预填创建链接（权限组 key 已实测有效） */
+/**
+ * 主 token 的预填创建链接（权限组 key 已实测有效）。
+ *
+ * `workers_ci`（Workers 构建配置）是给网页向导第 ④ 步用的：检测仓库连接、把构建命令与
+ * 清单环境变量写进 trigger、触发首次构建，都不必等用户先建好构建 token。无 UI 模式用不到它。
+ */
 export const SETUP_TOKEN_URL =
-  'https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup'
+  'https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_ci%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup'
 
 /**
  * 构建机上的构建与部署命令。向导会经 Builds API 直接写进 trigger；
@@ -427,11 +432,110 @@ export function workerDomainsUrl(accountId, workerName) {
   return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/settings/triggers`
 }
 
+/** Worker 的构建记录页 */
+export function workerBuildsUrl(accountId, workerName) {
+  return `https://dash.cloudflare.com/${accountId}/workers/services/view/${encodeURIComponent(workerName)}/production/builds`
+}
+
+// ── Workers Builds（网页向导第 ④ ⑤ 步） ───────────────────────────────────
+
+/** 按脚本名找 Builds API 用的 tag——脚本名（id）与 tag 不是一回事 */
+export async function findWorkerTag(token, accountId, workerName) {
+  const scripts = await cfFetch(token, `/accounts/${accountId}/workers/scripts`)
+  const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === workerName)
+  if (!me?.tag) throw new BootstrapError(`账户里找不到 Worker ${workerName}`)
+  return me.tag
+}
+
+/**
+ * 列 Worker 的 Builds trigger；仓库连上之前为空。
+ *
+ * 404 按「还没连接」处理（未连接时 Cloudflare 回什么没有文档，未实测）。
+ * 403 抛出时带 `missingPermission`：它通常是缺 Workers 构建配置权限，但没连接时是否也回 403
+ * 同样没有文档——所以连接前拿到 403 的调用方不该当场报红，见 wizard 的连接检测。
+ *
+ * @param who 报错里怎么称呼这个 token（「主 Token」「构建 Token」）
+ */
+export async function listTriggers(token, accountId, workerTag, who) {
+  try {
+    const triggers = await cfFetch(token, `/accounts/${accountId}/builds/workers/${workerTag}/triggers`)
+    return Array.isArray(triggers) ? triggers : triggers?.items ?? []
+  } catch (err) {
+    if (!(err instanceof BootstrapError)) throw err
+    if (err.status === 404) return []
+    if (err.status === 403) {
+      const denied = new BootstrapError(
+        `${who}缺少「Workers 构建配置（编辑）」权限（英文界面叫 Workers Builds Configuration，也可能显示为 Workers CI）——` +
+          '到 Cloudflare 的 API Tokens 页编辑这个 token 补上这项（token 值不变）',
+        { status: 403 },
+      )
+      denied.missingPermission = true
+      throw denied
+    }
+    throw err
+  }
+}
+
+/**
+ * 从 trigger 列表里挑生产 trigger，返回 { uuid, branch }；没有则 null。
+ *
+ * 连接时勾了「非生产分支构建」，Cloudflare 会另建一个预览 trigger：branch_includes 是 ["*"]、
+ * 排除生产分支。取列表第一个可能正好取到它——往里写 manifest:deploy，任何分支一推就切 100% 流量。
+ * 生产 trigger 的 branch_includes 是具体分支名；字段缺失（响应形状变了）时按生产处理、分支记 main。
+ */
+export function pickProductionTrigger(triggers) {
+  for (const t of triggers ?? []) {
+    const uuid = t?.trigger_uuid ?? t?.uuid ?? t?.id
+    if (typeof uuid !== 'string' || !uuid) continue
+    const includes = Array.isArray(t.branch_includes) ? t.branch_includes : []
+    const branch = includes.find((b) => typeof b === 'string' && b && !b.includes('*'))
+    if (branch) return { uuid, branch }
+    if (!includes.length) return { uuid, branch: 'main' }
+  }
+  return null
+}
+
+/**
+ * 把构建命令与清单环境变量写进 trigger。
+ *
+ * 这四项以前只出现在 Summary 的照抄块里，而向导用户那时早已离开 run 页：走完向导 →
+ * 去面板装插件 → 构建机用默认命令跑 → 失败，面板上只显示「失败」。
+ */
+export async function configureTrigger(token, accountId, triggerUuid, { manifestUrl, buildToken }) {
+  await cfFetch(token, `/accounts/${accountId}/builds/triggers/${triggerUuid}`, {
+    method: 'PATCH',
+    body: { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND },
+  })
+  await cfFetch(token, `/accounts/${accountId}/builds/triggers/${triggerUuid}/environment_variables`, {
+    method: 'PATCH',
+    body: {
+      MANIFEST_URL: { value: manifestUrl, is_secret: false },
+      MANIFEST_TOKEN: { value: buildToken, is_secret: true },
+    },
+  })
+}
+
+/** 手动触发一次构建，返回 build_uuid */
+export async function startBuild(token, accountId, triggerUuid, branch) {
+  const result = await cfFetch(token, `/accounts/${accountId}/builds/triggers/${triggerUuid}/builds`, {
+    method: 'POST',
+    body: { branch },
+  })
+  const buildUuid = result?.build_uuid ?? result?.uuid ?? result?.id
+  if (typeof buildUuid !== 'string') throw new BootstrapError('触发构建的响应缺少 build_uuid')
+  return buildUuid
+}
+
+/** 查一次构建的状态：{ status, outcome }；outcome 为空表示还在跑 */
+export async function getBuild(token, accountId, buildUuid) {
+  const b = await cfFetch(token, `/accounts/${accountId}/builds/builds/${buildUuid}`)
+  return { status: b?.status ?? '', outcome: b?.build_outcome ?? '' }
+}
+
 /** 把引导结果渲染成 Markdown 汇总（GITHUB_STEP_SUMMARY / 向导完成页共用） */
 export function renderSummary(result, { redactSecrets = false } = {}) {
   const {
     panelUrl,
-    webhookUrl,
     manifestUrl,
     buildToken,
     buildTokenReused,
@@ -454,13 +558,6 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   if (resources.d1) lines.push(`| D1 | ${resources.d1.name}${resources.d1.created ? '（新建）' : '（复用已有）'} |`)
   if (resources.r2) lines.push(`| R2 | ${resources.r2.name}${resources.r2.created ? '（新建）' : '（复用已有）'} |`)
   lines.push('')
-  // 单独放进代码块：GitHub 给代码块配了一键复制按钮，表格里的行内代码没有
-  lines.push('**回调地址**（填到 QQ 开放平台，代码块右上角可一键复制）：')
-  lines.push('')
-  lines.push('```text')
-  lines.push(webhookUrl)
-  lines.push('```')
-  lines.push('')
   lines.push(
     '**面板登录**：用你自己设置的 `ADMIN_TOKEN`（无 UI 模式是 GitHub Secret 里那个，网页向导是表单里填的）。' +
       '引导不会生成、也不会在任何地方输出它；忘了就 `wrangler secret put ADMIN_TOKEN` 重设。',
@@ -468,14 +565,28 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
   lines.push('')
   lines.push('### 下一步')
   lines.push('')
+  // 域名由用户自己选、自己绑：引导不接收域名，部署也不声明 routes，绑上之后不会被任何部署路径改动。
+  // 回调地址只给域名模板，不给 workers.dev 的——QQ 开放平台验证不通 *.workers.dev（已实测），给了只会让人白填一次
+  lines.push(
+    `1. **绑定自定义域名（必需）**：QQ 开放平台访问不到 \`*.workers.dev\`，回调必须走你自己的域名。` +
+      `打开 [Cloudflare 域名设置页](${workerDomainsUrl(accountId, workerName)})，在 **Custom Domains** 里添加一个` +
+      '（域名要托管在这个 Cloudflare 账户下，如 `bot.yourdomain.com`）。之后的部署都不会改动你绑的域名。',
+  )
+  lines.push('')
+  lines.push(
+    '2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 `https://你的域名/webhook`' +
+      '（用新域名打开面板，概览页可以一键复制）' +
+      (qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'),
+  )
+  lines.push('')
   if (triggerConfigured) {
     lines.push(
-      `1. **构建配置已自动写入**：Build command、Deploy command、\`MANIFEST_URL\`、\`MANIFEST_TOKEN\` 都已经通过 Builds API ` +
+      `3. **构建配置已自动写入**：Build command、Deploy command、\`MANIFEST_URL\`、\`MANIFEST_TOKEN\` 都已经通过 Builds API ` +
         `写进了这个 Worker 的构建 trigger，[后台](${buildsConnectUrl(accountId, workerName)})一个格子都不用填。到面板装一个插件即可验证重建链路。`,
     )
   } else {
     lines.push(
-      `1. **连接仓库**（装/卸插件触发重建的前置）：打开 [Worker 设置页](${buildsConnectUrl(accountId, workerName)})，在 Build 一栏点 Connect，` +
+      `3. **连接仓库**（装/卸插件触发重建的前置）：打开 [Worker 设置页](${buildsConnectUrl(accountId, workerName)})，在 Build 一栏点 Connect，` +
         '选择本 fork 仓库，分支选默认分支，然后照抄下面四项。' +
         '（网页向导模式会在连接完成后自动写入这四项，不必手抄；这里是无 UI 模式的兜底——' +
         '工作流跑的时候仓库还没连接，trigger 不存在，写不了。）',
@@ -518,15 +629,6 @@ export function renderSummary(result, { redactSecrets = false } = {}) {
     lines.push('')
     lines.push('   **尚未配置 `CF_BUILDS_TOKEN`**（Worker 触发重建用）：创建一个 user token（权限：Workers Builds Configuration Edit + Workers Scripts Read，账户范围限本账户），`wrangler secret put CF_BUILDS_TOKEN` 写入，或重跑引导时带上。配置后到面板装一个插件即可验证重建链路。')
   }
-  lines.push('')
-  lines.push(`2. **QQ 开放平台**：在 [q.qq.com](https://q.qq.com) 机器人管理里把回调地址填成 \`${webhookUrl}\`${qqSaved ? '。QQ 凭证已在引导时保存进 KV。' : '，再到管理面板 → 设置里保存 AppID/AppSecret（存 KV）。'}`)
-  lines.push('')
-  // 域名由用户自己选、自己绑：引导不接收域名，部署也不声明 routes，绑上之后不会被任何部署路径改动
-  lines.push(
-    `3. **自定义域名（可选）**：如果 QQ 开放平台验证回调失败（国内网络访问 \`*.workers.dev\` 可能不稳定），或者想用自己的域名，` +
-      `打开 [Cloudflare 域名设置页](${workerDomainsUrl(accountId, workerName)})，在 **Custom Domains** 里添加一个（如 \`bot.yourdomain.com\`），` +
-      '回调地址改填 `https://你的域名/webhook`。之后的部署都不会改动你绑的域名。',
-  )
   lines.push('')
   if (warnings.length) {
     lines.push('### ⚠️ 提醒')
@@ -657,7 +759,8 @@ export async function runBootstrap(opts) {
       hint: '到 Cloudflare 后台 Workers & Pages 页面领取一次 workers.dev 子域后重跑',
     })
   }
-  // 面板、回调、构建机拉清单都走默认域名：直连 Cloudflare 边缘，零外部 DNS 依赖
+  // 面板、构建机拉清单走默认域名：直连 Cloudflare 边缘，零外部 DNS 依赖。
+  // 回调例外——QQ 开放平台访问不到 workers.dev，必须由用户另绑自定义域名（Summary 里说明）
   const baseUrl = `https://${defaultDomain}`
   const manifestUrl = `${baseUrl}/admin/build-manifest`
 
@@ -696,7 +799,6 @@ export async function runBootstrap(opts) {
     baseUrl,
     defaultDomain,
     panelUrl: `${baseUrl}/`,
-    webhookUrl: `${baseUrl}/webhook`,
     manifestUrl,
     /** 构建机侧的 MANIFEST_TOKEN 用它，不是面板主密钥；沿用 Worker 上已有值时为 null（值读不到） */
     buildToken: buildTokenPlan.value,

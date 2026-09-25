@@ -2,8 +2,8 @@
 /**
  * 网页引导：起本地 HTTP 服务 + Cloudflare Quick Tunnel，把向导页暴露出去。
  * 用户在 run 页 Summary 里点隧道链接 → 网页上创建/粘贴 token → 建资源 → 部署 →
- * 创建构建 token → 连接仓库，全程跟着页面走。连接完成后构建命令与清单环境变量
- * 由向导经 Builds API 写进 trigger，Cloudflare 后台不需要手填任何格子。
+ * 连接仓库 → 创建构建 token，全程跟着页面走。连接由向导用主 token 自动检测，检测到就把
+ * 构建命令与清单环境变量写进 trigger、补跑一次构建，Cloudflare 后台不需要手填任何格子。
  *
  * 安全边界：
  * - token 只在本进程内存里，收到即输出 ::add-mask::（Actions 日志自动打码）
@@ -17,8 +17,9 @@
  *   POST /api/qq-bind/poll           轮询一次；扫码完成后凭证留在本进程，部署时自动存进 KV
  *   POST /api/provision              表单提交，启动引导（异步）
  *   GET  /api/progress               进度轮询
- *   GET  /api/builds-status          仓库是否已连接 Workers Builds
- *   POST /api/complete               { buildsToken? } 写入构建凭证、配置构建 trigger 并收尾退出
+ *   GET  /api/builds-connection      连接检测轮询：连上即写构建配置、补跑构建；之后报构建进度
+ *   POST /api/builds-token           { buildsToken } 验证构建 token（连接之后才有意义）
+ *   POST /api/complete               { buildsToken? } 写入构建凭证并收尾退出
  */
 
 import { spawn } from 'node:child_process'
@@ -33,16 +34,22 @@ import {
   adminTokenProblem,
   BootstrapError,
   BUILD_COMMAND,
-  cfFetch,
+  configureTrigger,
   createQQBindTask,
   DEPLOY_COMMAND,
+  findWorkerTag,
+  getBuild,
   listAccounts,
+  listTriggers,
+  pickProductionTrigger,
   pollQQBindResult,
   probePermissions,
   renderSummary,
   runBootstrap,
   SETUP_TOKEN_URL,
+  startBuild,
   verifyToken,
+  workerBuildsUrl,
   writeSecrets,
 } from './lib.mjs'
 
@@ -64,6 +71,8 @@ const state = {
   provision: null, // { lines: [], done, ok, error, result }
   qqBind: null, // 进行中的扫码任务 { taskId, key }
   qqBound: null, // 扫码拿到的凭证 { appId, secret }，不下发给浏览器
+  builds: null, // 检测到仓库连接后：{ tag, trigger: { uuid, branch }, configured, error, buildUuid, build, buildError, apiToken }
+  buildsBusy: null, // 进行中的连接检测（轮询会并发打进来）
   completed: false,
   completeTimer: null,
   lastActivity: Date.now(),
@@ -124,50 +133,114 @@ function json(res, status, body) {
 }
 
 /**
- * 仓库连上之后，把构建配置直接写进 trigger。
+ * 仓库连上之后一次做完：把构建命令与清单环境变量写进 trigger → 补跑一次构建。
  *
- * Build command / Deploy command / MANIFEST_URL / MANIFEST_TOKEN 这四项以前只出现在
- * GITHUB_STEP_SUMMARY 的照抄块里——而向导用户这时候早就离开那个页面了，结果是：
- * 走完向导 → 去面板装插件 → 构建机用默认命令跑 → 失败，面板上只显示「失败」。
+ * 连接那一刻 Cloudflare 若自己跑了一次构建，用的是表单里的命令、也还没有清单变量，注定失败；
+ * 配好之后补跑这一次，用户当场就能看到构建链路通不通，不用等到面板里装插件。
  *
- * 这里用的正是构建 token 自带的 Workers Builds Configuration (Edit) 权限，
- * 不需要用户额外授权，也不需要多输入任何东西。
+ * `token` 平时是主 token（第 ④ 步检测到连接时）；主 token 没写成时，「完成引导」会拿构建 token
+ * 再试一次——两者都带 Workers 构建配置权限。写配置失败不算引导失败：Worker 已经部署好，
+ * Summary 里有手填清单。
  */
-async function configureTrigger(buildsToken, accountId, triggerUuid, { manifestUrl, buildToken }) {
-  await cfFetch(buildsToken, `/accounts/${accountId}/builds/triggers/${triggerUuid}`, {
-    method: 'PATCH',
-    body: { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND },
-  })
-  await cfFetch(buildsToken, `/accounts/${accountId}/builds/triggers/${triggerUuid}/environment_variables`, {
-    method: 'PATCH',
-    body: {
-      MANIFEST_URL: { value: manifestUrl, is_secret: false },
-      MANIFEST_TOKEN: { value: buildToken, is_secret: true },
-    },
-  })
+async function setupTrigger(token) {
+  const b = state.builds
+  const { result } = state.provision
+  // 引导沿用了 Worker 上已有的 BUILD_TOKEN 时手里没有它的值，写不了 trigger 的 MANIFEST_TOKEN。
+  // 就地换一个新值：先写 trigger，成功了才写 Worker；trigger 没写成就两边都不动，原来的值仍然对齐
+  const rotated = result.buildToken ? null : randomBytes(32).toString('base64url')
+  mask(rotated)
+  try {
+    await configureTrigger(token, state.accountId, b.trigger.uuid, {
+      manifestUrl: result.manifestUrl,
+      buildToken: result.buildToken ?? rotated,
+    })
+    if (rotated) {
+      writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, workerName: state.workerName, secrets: { BUILD_TOKEN: rotated } })
+      Object.assign(result, { buildToken: rotated, buildTokenReused: false })
+    }
+  } catch (err) {
+    b.error = `写入构建配置失败：${err.message}`
+    log(b.error)
+    return
+  }
+  b.configured = true
+  b.error = null
+  b.apiToken = token // 查构建进度沿用写得进配置的这个 token
+  log('构建配置（命令与清单环境变量）已写入 trigger')
+  try {
+    b.buildUuid = await startBuild(token, state.accountId, b.trigger.uuid, b.trigger.branch)
+    log(`已触发构建 ${b.buildUuid}（分支 ${b.trigger.branch}）`)
+  } catch (err) {
+    b.buildError = err.message
+    log(`触发构建失败：${err.message}`)
+  }
 }
 
 /**
- * 列某个 Worker 的 Builds trigger。
+ * 用主 token 查一次仓库连没连上；连上了就接着写构建配置。
  *
- * 构建 token 能列脚本、却在这里 403（[10000] Authentication error），几乎一定是缺
- * Workers Builds Configuration 权限——预填链接没把它勾上时就是这样。原样抛出那句
- * Authentication error 等于让人自己猜，这里直接点名缺什么、怎么补。
+ * 没连接时 Cloudflare 回空列表还是 403，没有文档——所以这里拿到 403 不报红，
+ * 只在等待提示里带一句「也可能是主 token 缺权限」：用户还没点 Connect 就看到一个红色的
+ * 权限错误，正是之前「先建构建 token 再连接」那一版踩的坑。
  */
-async function listTriggers(buildsToken, accountId, workerTag) {
+async function detectConnection() {
+  const tag = await findWorkerTag(state.token, state.accountId, state.workerName)
+  let triggers
   try {
-    const triggers = await cfFetch(buildsToken, `/accounts/${accountId}/builds/workers/${workerTag}/triggers`)
-    return Array.isArray(triggers) ? triggers : triggers?.items ?? []
+    triggers = await listTriggers(state.token, state.accountId, tag, '主 Token（第 ① 步那个）')
   } catch (err) {
-    if (err instanceof BootstrapError && err.status === 403) {
-      throw new BootstrapError(
-        '构建 Token 缺少 Workers Builds Configuration（Edit）权限（权限列表里也可能叫 Workers CI）——' +
-          '到 Cloudflare 的 API Tokens 页编辑这个 token 补上这项（token 值不变），再回来重新粘贴',
-        { status: 403 },
-      )
-    }
+    if (err.missingPermission) return { maybeMissingPermission: err.message }
     throw err
   }
+  const trigger = pickProductionTrigger(triggers)
+  if (!trigger) return {}
+  state.builds = { tag, trigger, configured: false, error: null, buildUuid: null, build: null, buildError: null }
+  log(`检测到仓库已连接 Workers Builds（trigger ${trigger.uuid}，生产分支 ${trigger.branch}）`)
+  await setupTrigger(state.token)
+  return {}
+}
+
+/** 构建进度：拿到终态之前每次轮询都查一次 */
+async function refreshBuild() {
+  const b = state.builds
+  if (!b?.buildUuid || b.build?.outcome) return
+  try {
+    b.build = await getBuild(b.apiToken, state.accountId, b.buildUuid)
+  } catch (err) {
+    log(`查询构建状态失败：${err.message}`)
+  }
+}
+
+function buildsView(extra = {}) {
+  const b = state.builds
+  return {
+    connected: !!b,
+    configured: !!b?.configured,
+    branch: b?.trigger.branch ?? null,
+    error: b?.error ?? null,
+    buildStarted: !!b?.buildUuid,
+    buildStatus: b?.build?.status ?? null,
+    buildOutcome: b?.build?.outcome ?? null,
+    buildError: b?.buildError ?? null,
+    buildsUrl: state.accountId ? workerBuildsUrl(state.accountId, state.workerName) : null,
+    ...extra,
+  }
+}
+
+/**
+ * 验证构建 token 能找到这个 Worker 的生产 trigger——Worker 靠它触发重建。
+ * 调用前连接已经确认过，这时再遇到 403 就一定是 token 自己缺权限，可以放心点名。
+ */
+async function verifyBuildsToken(buildsToken) {
+  let tag
+  try {
+    tag = await findWorkerTag(buildsToken, state.accountId, state.workerName)
+  } catch (err) {
+    if (err.status === 403) throw new BootstrapError('构建 Token 缺少「Workers 脚本（读取）」权限——编辑这个 token 补上（token 值不变）')
+    throw err
+  }
+  const triggers = await listTriggers(buildsToken, state.accountId, tag, '构建 Token ')
+  if (!pickProductionTrigger(triggers)) throw new BootstrapError('构建 Token 查不到这个 Worker 的构建 trigger——确认 token 的账户范围包含本账户')
 }
 
 // ── 隧道 ─────────────────────────────────────────────────────────────────
@@ -398,88 +471,63 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    if ((req.method === 'POST' || req.method === 'GET') && url.pathname === '/api/builds-status') {
-      if (!state.accountId) return json(res, 400, { error: '先完成引导' })
-      let buildsToken = ''
-      if (req.method === 'POST') {
-        const body = await readBody(req)
-        if (typeof body.buildsToken === 'string') buildsToken = body.buildsToken.trim()
-      } else {
-        buildsToken = url.searchParams.get('buildsToken')?.trim() || ''
+    if (req.method === 'GET' && url.pathname === '/api/builds-connection') {
+      if (!state.provision?.ok) return json(res, 400, { error: '先完成部署' })
+      let extra = {}
+      if (!state.builds) {
+        state.buildsBusy ??= detectConnection().finally(() => { state.buildsBusy = null })
+        try {
+          extra = await state.buildsBusy
+        } catch (err) {
+          extra = { detectError: err.message }
+        }
       }
-      if (!buildsToken) {
-        return json(res, 200, { ok: false, connected: false, error: '请先粘贴构建 Token' })
-      }
+      await refreshBuild()
+      json(res, 200, buildsView(extra))
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/builds-token') {
+      if (!state.builds) return json(res, 400, { error: '先完成连接仓库' })
+      const body = await readBody(req)
+      const buildsToken = typeof body.buildsToken === 'string' ? body.buildsToken.trim() : ''
+      if (!buildsToken) return json(res, 400, { error: '请先粘贴构建 Token' })
       mask(buildsToken)
       try {
-        const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
-        const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
-        if (!me?.tag) return json(res, 200, { ok: false, connected: false, error: `找不到脚本 ${state.workerName}` })
-        const items = await listTriggers(buildsToken, state.accountId, me.tag)
-        json(res, 200, { ok: true, connected: items.length > 0, count: items.length })
+        await verifyBuildsToken(buildsToken)
       } catch (err) {
-        json(res, 200, { ok: false, connected: false, error: err.message })
+        return json(res, 400, { error: err.message })
       }
+      json(res, 200, { ok: true })
       return
     }
 
     if (req.method === 'POST' && url.pathname === '/api/complete') {
       if (!state.provision?.ok) return json(res, 400, { error: '引导尚未成功' })
       const body = await readBody(req)
+      const buildsToken = typeof body.buildsToken === 'string' ? body.buildsToken.trim() : ''
       let buildsTokenWritten = false
-      let triggerConfigured = false
-      let triggerError = null
-      if (body.buildsToken && typeof body.buildsToken === 'string') {
-        const buildsToken = body.buildsToken.trim()
+      if (buildsToken) {
+        if (!state.builds) return json(res, 400, { error: '先完成连接仓库' })
         mask(buildsToken)
-        // 用构建 token 实际打一次 trigger 列表，验证它真能触发重建，并留下 trigger uuid
-        const verify = async () => {
-          const scripts = await cfFetch(buildsToken, `/accounts/${state.accountId}/workers/scripts`)
-          const me = (Array.isArray(scripts) ? scripts : scripts?.items ?? []).find((s) => s?.id === state.workerName)
-          if (!me?.tag) throw new Error(`找不到脚本 ${state.workerName}`)
-          const items = await listTriggers(buildsToken, state.accountId, me.tag)
-          if (!items.length) throw new Error('仓库尚未连接 Workers Builds（查不到 trigger）——先完成连接仓库一步')
-          return items[0].trigger_uuid ?? items[0].uuid ?? items[0].id
+        try {
+          await verifyBuildsToken(buildsToken)
+        } catch (err) {
+          return json(res, 400, { error: err.message })
         }
-        const triggerUuid = await verify()
-
-        // 引导沿用了 Worker 上已有的 BUILD_TOKEN 时手里没有它的值，写不了 trigger 的 MANIFEST_TOKEN。
-        // 这里两边都握在手里，就地换一个新值：先写 trigger，成功了才写 Worker；
-        // trigger 没写成就两边都不动，原来的值仍然是对齐的
-        const { result } = state.provision
-        const rotatedBuildToken = result.buildToken ? null : randomBytes(32).toString('base64url')
-        mask(rotatedBuildToken)
-
-        // 写构建配置失败不算引导失败：Worker 已经部署好、凭证也写进去了，
-        // 用户照 Summary 里的兜底清单手填四项同样能跑，没必要把整个引导推倒。
-        if (triggerUuid) {
-          try {
-            await configureTrigger(buildsToken, state.accountId, triggerUuid, {
-              manifestUrl: result.manifestUrl,
-              buildToken: result.buildToken ?? rotatedBuildToken,
-            })
-            triggerConfigured = true
-            log('构建配置（命令与清单环境变量）已写入 trigger')
-          } catch (err) {
-            triggerError = err.message
-            log(`写入构建配置失败：${err.message}——Summary 里会给出手填清单`)
-          }
-        } else {
-          triggerError = '拿不到 trigger uuid'
-        }
-
-        const rotated = rotatedBuildToken && triggerConfigured
+        // 主 token 没把配置写进去时，用构建 token 再试一次——它有同样的权限
+        if (!state.builds.configured) await setupTrigger(buildsToken)
         writeSecrets({
           repoRoot,
           token: state.token,
           accountId: state.accountId,
           workerName: state.workerName,
-          secrets: { CF_BUILDS_TOKEN: buildsToken, ...(rotated ? { BUILD_TOKEN: rotatedBuildToken } : {}) },
+          secrets: { CF_BUILDS_TOKEN: buildsToken },
         })
         buildsTokenWritten = true
-        // 记下来：重复点「完成」时直接复用，不会再换一次
-        if (rotated) Object.assign(result, { buildToken: rotatedBuildToken, buildTokenReused: false })
       }
+      const triggerConfigured = !!state.builds?.configured
+      const triggerError = state.builds?.error ?? null
       const summary = renderSummary({
         ...state.provision.result,
         buildsTokenWritten,
@@ -489,7 +537,7 @@ const server = createServer(async (req, res) => {
         await writeFile(env.GITHUB_STEP_SUMMARY, summary + '\n').catch(() => {})
       }
       state.completed = true
-      json(res, 200, { ok: true, summary, triggerConfigured, triggerError })
+      json(res, 200, { ok: true, summary, triggerConfigured, triggerError, buildsTokenWritten })
       // 不再 3 秒强杀 Runner，留出 10 分钟窗口供用户查看/复制配置，用户也可在页面点击“完成并退出”立即释放 Runner
       if (state.completeTimer) clearTimeout(state.completeTimer)
       state.completeTimer = setTimeout(() => {

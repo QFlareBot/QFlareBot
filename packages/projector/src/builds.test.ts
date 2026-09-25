@@ -108,6 +108,21 @@ describe('CloudflareBuildsApi.getTriggerUuid', () => {
     const { api: api2 } = fakeApi(() => ok({ items: [{ id: 'i-1' }] }))
     expect(await api2.getTriggerUuid('t')).toBe('i-1')
   })
+
+  it('开了非生产分支构建时跳过排在前面的预览 trigger', async () => {
+    const { api } = fakeApi(() =>
+      ok([
+        { trigger_uuid: 'preview', branch_includes: ['*'], branch_excludes: ['main'] },
+        { trigger_uuid: 'prod', branch_includes: ['main'], branch_excludes: [] },
+      ]),
+    )
+    expect(await api.getTriggerUuid('t')).toBe('prod')
+  })
+
+  it('只有预览 trigger 时返回 null', async () => {
+    const { api } = fakeApi(() => ok([{ trigger_uuid: 'preview', branch_includes: ['*'] }]))
+    expect(await api.getTriggerUuid('t')).toBeNull()
+  })
 })
 
 describe('trigger 配置写入', () => {

@@ -2,7 +2,7 @@
 #
 # 两种模式（自动选择）：
 # - 已配置 GitHub secret CLOUDFLARE_API_TOKEN → 无 UI 引导：直接建资源、部署，
-#   汇总（面板地址、回调地址、ADMIN_TOKEN、后续步骤）写进本页 Summary。
+#   汇总（面板地址、资源、后续步骤：绑自定义域名、填回调、连接仓库）写进本页 Summary。
 # - 未配置 → 网页引导：工作流起一个 Cloudflare Quick Tunnel 暴露向导网页，
 #   点开 run 页 Summary 里的链接，跟着网页一步步做（创建 token、填表、看进度）。
 #

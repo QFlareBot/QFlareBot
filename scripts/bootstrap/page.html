@@ -67,7 +67,7 @@
       <li>点下面按钮打开 Cloudflare 的 token 创建页——<b>名字和权限已经预填好</b>，确认后点 Create Token；</li>
       <li>复制生成的 token，粘贴到下面输入框，点「验证」。</li>
     </ol>
-    <p><a id="setup-token-link" class="btn" href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup" target="_blank" rel="noopener">打开预填的 Token 创建页 ↗</a></p>
+    <p><a id="setup-token-link" class="btn" href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_ci%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=qqbot-setup" target="_blank" rel="noopener">打开预填的 Token 创建页 ↗</a></p>
     <details><summary>预填的权限（链接失效时按这个手动勾选）</summary>
       <ol class="hint">
         <li>Workers Scripts — Edit</li>
@@ -75,6 +75,7 @@
         <li>D1 — Edit</li>
         <li>Workers R2 Storage — Edit</li>
         <li>Account Settings — Read</li>
+        <li>Workers 构建配置（Workers Builds Configuration / Workers CI）— Edit：第 ④ 步用它自动检测仓库连接、写构建配置</li>
         <li>账户范围：所有账户</li>
       </ol>
     </details>
@@ -117,25 +118,34 @@
     <div id="progress-msg" class="msg hidden"></div>
   </section>
 
-  <!-- 4. 构建 Token 与连接仓库 -->
-  <section id="step-builds" class="hidden">
-    <h2>④ 创建构建 Token & 连接仓库（装/卸插件自动重建的前置）</h2>
+  <!-- 4. 连接仓库 -->
+  <section id="step-connect" class="hidden">
+    <h2>④ 连接仓库（装/卸插件自动重建的前置）</h2>
     <ol class="hint">
-      <li><b>第 1 步：创建构建 Token</b>：点击下方按钮打开 Cloudflare 页面（权限已预填），创建后粘贴到下方输入框；</li>
-      <li><b>第 2 步：连接仓库</b>：打开 Worker 设置页，在 <b>Build</b> 一栏点 <b>Connect</b> → 选择这个仓库，分支选默认分支；
-        <b>Build command 与 Deploy command 必须照下面填</b>（表单默认的 <code>npx wrangler deploy</code> 在这个仓库里跑不通），其余保持默认；</li>
-      <li>粘贴 Token 后下方会自动开始监听，仓库连好后自动显示验证通过。</li>
-      <li><b>清单环境变量不用填</b>：<code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 在点「完成引导」时自动写进构建 trigger，顺带把上面两条命令再校正一遍。</li>
+      <li>点下面按钮打开 Worker 设置页，在 <b>Build</b> 一栏点 <b>Connect</b> → 选择这个仓库，分支选默认分支；</li>
+      <li><b>Build command 与 Deploy command 照下面填</b>（表单默认的 <code>npx wrangler deploy</code> 在这个仓库里跑不通），其余保持默认。
+        填错了也不要紧：向导检测到连接后会自动改正；</li>
+      <li>连好后这里会自动变绿，不用回来点任何按钮。向导会顺手写好 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code>，并补跑一次构建——
+        连接那一刻 Cloudflare 自己跑的那次构建如果失败了，不用管。</li>
     </ol>
     <div class="cmd"><span class="k">Build command</span><code id="cmd-build"></code><button class="ghost" data-copy="cmd-build">复制</button></div>
     <div class="cmd"><span class="k">Deploy command</span><code id="cmd-deploy"></code><button class="ghost" data-copy="cmd-deploy">复制</button></div>
-    <div style="margin: 12px 0;">
-      <a id="builds-token-link" class="btn ghost" target="_blank" rel="noopener">① 打开预填的构建 Token 创建页 ↗</a>
-      <a id="connect-link" class="btn" target="_blank" rel="noopener">② 打开 Worker 设置页（Build → Connect）↗</a>
-    </div>
-    <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这两项即可：<b>Workers Builds Configuration (Edit)</b>（权限列表里也可能叫 <b>Workers CI</b>）与 <b>Workers Scripts (Read)</b>，账户范围选本账户。</div>
-    <label>构建 Token（Worker 触发重建用，粘贴后自动检测仓库连接）</label>
-    <textarea id="builds-token-input" placeholder="粘贴构建 token（留空可跳过——之后也能在面板补配）"></textarea>
+    <a id="connect-link" class="btn" target="_blank" rel="noopener">打开 Worker 设置页（Build → Connect）↗</a>
+    <div id="connect-msg" class="msg hidden"></div>
+    <button id="skip-connect-btn" class="ghost">先跳过，之后再连</button>
+  </section>
+
+  <!-- 5. 构建 Token -->
+  <section id="step-builds" class="hidden">
+    <h2>⑤ 创建构建 Token（Worker 用它触发重建）</h2>
+    <ol class="hint">
+      <li>点下面按钮打开 Cloudflare 的 token 创建页（权限已预填），确认后创建；</li>
+      <li>复制生成的 token 粘贴到下面，粘贴后会自动验证一次，通过后点「完成引导」。</li>
+    </ol>
+    <a id="builds-token-link" class="btn ghost" target="_blank" rel="noopener">打开预填的构建 Token 创建页 ↗</a>
+    <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这两项即可：<b>Workers 构建配置（编辑）</b>（英文界面叫 Workers Builds Configuration，也可能显示为 Workers CI）与 <b>Workers 脚本（读取）</b>，账户范围选本账户。</div>
+    <label>构建 Token</label>
+    <textarea id="builds-token-input" placeholder="粘贴构建 token（留空可跳过——之后也能补配）"></textarea>
     <div id="builds-status-msg" class="msg hidden"></div>
     <button id="finish-btn">完成引导</button>
     <button id="skip-btn" class="ghost">先跳过，之后再配</button>
@@ -291,7 +301,7 @@ $('start-btn').onclick = async () => {
     await api('/api/provision', {
       accountId: verifiedAccountId || undefined,
       workerName: $('f-worker').value.trim(),
-      kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2 和域名
+      kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2
       r2Name: $('f-r2').value.trim(),
       adminToken,
       qqAppId: $('f-qq-appid').value.trim(),
@@ -319,59 +329,99 @@ function pollProgress() {
           say('progress-msg', `❌ ${p.error}${p.hint ? `\n提示：${p.hint}` : ''}`, 'err')
           return
         }
-        say('progress-msg', '✅ 部署完成，进入最后一步', 'ok')
-        show('step-builds')
-        $('step-builds').scrollIntoView({ behavior: 'smooth' })
+        say('progress-msg', '✅ 部署完成，接下来连接仓库', 'ok')
         const r = p.result
         $('connect-link').href = r.buildsConnectUrl
-        const rows = [
-          ['管理面板', `<a href="${esc(r.panelUrl)}" target="_blank" rel="noopener">${esc(r.panelUrl)} ↗</a>`],
-          ['回调地址（QQ 开放平台）', `<div class="cmd"><code id="res-webhook">${esc(r.webhookUrl)}</code><button class="ghost" data-copy="res-webhook">复制</button></div>`],
-          ['构建清单地址（MANIFEST_URL）', `<code>${esc(r.manifestUrl)}</code>`],
-          ['面板登录', '用你在第 ② 步设置的 ADMIN_TOKEN'],
-        ]
-        $('result-table').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')
-
-        const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
-        $('domains-guide').innerHTML = `💡 <b>自定义域名（可选）</b>：回调地址默认就是上面的 workers.dev 地址。如果 QQ 开放平台验证回调失败（国内网络访问 <code>*.workers.dev</code> 可能不稳定），或者想用自己的域名，到 <a href="${domainsUrl}" target="_blank" rel="noopener" style="color: #8ab4f8; text-decoration: underline;">Cloudflare 域名设置页 ↗</a> 的 Custom Domains 添加一个（如 <code>bot.yourdomain.com</code>），回调地址改填 <code>https://你的域名/webhook</code>。之后的部署都不会改动你绑的域名。`
-
         // 预填链接由引导结果直接带出（dash 的 permissionGroupKeys 是固定短 key，不需要现查）
         $('builds-token-link').href = r.buildsTokenUrl
+        renderResult(r)
+        show('step-connect')
+        $('step-connect').scrollIntoView({ behavior: 'smooth' })
+        pollConnection()
       }
     } catch { /* 网络抖动，下一轮再试 */ }
   }, 1500)
 }
 
-let buildsTimer = null
-async function checkBuildsStatus() {
-  const token = $('builds-token-input').value.trim()
-  if (!token) {
-    say('builds-status-msg', '', '')
-    $('builds-status-msg').classList.add('hidden')
-    return
-  }
-  try {
-    const s = await api('/api/builds-status', { buildsToken: token })
-    if (s.connected) {
-      say('builds-status-msg', '✅ 仓库已连接成功，构建 Token 验证通过！点击下方按钮完成引导。', 'ok')
-      if (buildsTimer) { clearInterval(buildsTimer); buildsTimer = null }
-    } else if (s.ok) {
-      say('builds-status-msg', '⏳ 构建 Token 有效！正在等待在 Cloudflare 仪表盘点击 Connect 仓库…（每 3 秒检测）', '')
-    } else {
-      say('builds-status-msg', `❌ ${s.error || 'Token 验证失败'}`, 'err')
-    }
-  } catch (err) {
-    say('builds-status-msg', `❌ ${err.message}`, 'err')
-  }
+function renderResult(r) {
+  const domainsUrl = `https://dash.cloudflare.com/${r.accountId}/workers/services/view/${encodeURIComponent(r.workerName)}/production/settings/triggers`
+  const rows = [
+    ['管理面板', `<a href="${esc(r.panelUrl)}" target="_blank" rel="noopener">${esc(r.panelUrl)} ↗</a>`],
+    // 不给 workers.dev 的回调地址：QQ 开放平台访问不到 *.workers.dev，给了只会让人白填一次
+    ['回调地址（QQ 开放平台）', '<code>https://你的域名/webhook</code>——先绑定自定义域名，见下'],
+    ['构建清单地址（MANIFEST_URL）', `<code>${esc(r.manifestUrl)}</code>`],
+    ['面板登录', '用你在第 ② 步设置的 ADMIN_TOKEN'],
+  ]
+  $('result-table').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')
+  $('domains-guide').innerHTML =
+    `⚠️ <b>还差一步：绑定自定义域名（必需）</b>。QQ 开放平台访问不到 <code>*.workers.dev</code>，回调必须走你自己的域名：` +
+    `到 <a href="${domainsUrl}" target="_blank" rel="noopener">Cloudflare 域名设置页 ↗</a> 的 <b>Custom Domains</b> 添加一个` +
+    `（域名要托管在这个 Cloudflare 账户下，如 <code>bot.yourdomain.com</code>），再把 QQ 开放平台的回调地址填成 <code>https://你的域名/webhook</code>。` +
+    `用新域名打开面板，概览页可以一键复制回调地址。之后的部署都不会改动你绑的域名。`
 }
 
-$('builds-token-input').oninput = () => {
-  if (buildsTimer) clearInterval(buildsTimer)
-  checkBuildsStatus()
-  const token = $('builds-token-input').value.trim()
-  if (token) {
-    buildsTimer = setInterval(checkBuildsStatus, 3000)
+// ④ 连接检测：后端用主 token 查 trigger，连上就自动写构建配置并补跑一次构建；之后继续报构建进度
+let connectTimer = null
+let connectSince = 0
+const BUILD_STATE = { queued: '排队中', initializing: '准备中', running: '构建中', stopped: '已结束' }
+function pollConnection() {
+  connectSince = Date.now()
+  const tick = async () => {
+    let s
+    try { s = await api('/api/builds-connection') } catch (err) { say('connect-msg', `❌ ${err.message}`, 'err'); connectTimer = setTimeout(tick, 5000); return }
+    if (!s.connected) {
+      // 连接前一律不报红：没连接时 Cloudflare 回空列表还是 403 没有文档，分不清就只提示
+      const waited = Date.now() - connectSince > 45000
+      let text = '⏳ 等待你在 Cloudflare 点 Connect…（每 3 秒自动检测）'
+      if (s.detectError) text += `\n检测出错（会继续重试）：${s.detectError}`
+      if (s.maybeMissingPermission && waited) text += `\n已经连好了还停在这里的话：${s.maybeMissingPermission}。补完这里会自动继续。`
+      say('connect-msg', text)
+      connectTimer = setTimeout(tick, 3000)
+      return
+    }
+    const logs = s.buildsUrl ? `（<a href="${esc(s.buildsUrl)}" target="_blank" rel="noopener">构建记录 ↗</a>）` : ''
+    const el = $('connect-msg')
+    el.classList.remove('hidden')
+    if (!s.configured) {
+      el.className = 'msg err'
+      el.innerHTML = `✅ 已检测到仓库连接，但${esc(s.error || '构建配置没写进去')}。下一步粘贴构建 Token 后会用它再试一次。`
+    } else {
+      let build
+      if (s.buildOutcome === 'success') build = `✅ 补跑的构建已成功${logs}，自部署链路是通的。`
+      else if (s.buildOutcome) build = `❌ 补跑的构建结果：${esc(s.buildOutcome)}${logs}——打开日志看是哪一步失败，贴出来就能查。`
+      else if (s.buildStarted) build = `<span class="spin"></span>已补跑一次构建：${BUILD_STATE[s.buildStatus] || '已提交'}${logs}。构建要几分钟，可以先做下一步。`
+      else build = `⚠️ 补跑构建没触发成功（${esc(s.buildError || '未知原因')}），不影响后续：到面板装一个插件时会再触发${logs}。`
+      el.className = 'msg ok'
+      el.innerHTML = `✅ 已检测到仓库连接（分支 <code>${esc(s.branch)}</code>），构建命令与 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 已写入。<br>${build}`
+    }
+    $('skip-connect-btn').classList.add('hidden')
+    if ($('step-builds').classList.contains('hidden')) {
+      show('step-builds')
+      $('step-builds').scrollIntoView({ behavior: 'smooth' })
+    }
+    // 构建出结果之前继续轮询进度
+    if (s.buildStarted && !s.buildOutcome) connectTimer = setTimeout(tick, 5000)
   }
+  tick()
+}
+
+$('skip-connect-btn').onclick = () => { clearTimeout(connectTimer); finish(false) }
+
+// ⑤ 构建 Token：连接已确认，粘贴后验证一次即可，不再轮询
+let verifyTimer = null
+$('builds-token-input').oninput = () => {
+  clearTimeout(verifyTimer)
+  const token = $('builds-token-input').value.trim()
+  if (!token) { $('builds-status-msg').classList.add('hidden'); return }
+  say('builds-status-msg', '验证中…')
+  verifyTimer = setTimeout(async () => {
+    try {
+      await api('/api/builds-token', { buildsToken: token })
+      say('builds-status-msg', '✅ 构建 Token 验证通过，点「完成引导」', 'ok')
+    } catch (err) {
+      say('builds-status-msg', `❌ ${err.message}`, 'err')
+    }
+  }, 500)
 }
 
 /**
@@ -381,39 +431,38 @@ $('builds-token-input').oninput = () => {
 function renderFinishState(done) {
   const el = $('trigger-state')
   el.classList.remove('hidden')
+  const parts = []
   if (done?.triggerConfigured) {
-    el.className = 'msg ok'
-    el.innerHTML = '✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 都已写进这个 Worker 的构建 trigger。到面板装一个插件即可验证重建链路，Cloudflare 后台无需再配置。'
+    parts.push('✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 都已写进这个 Worker 的构建 trigger，Cloudflare 后台无需再配置。')
   } else {
-    el.className = 'msg'
-    el.innerHTML = `⚠️ <b>构建配置未自动写入</b>${done?.triggerError ? `（${done.triggerError}）` : '（未提供构建 token）'}：在补齐之前，装插件不会触发重建。补法见本次工作流 run 页的 Step Summary，里面有可照抄的四项配置。`
+    parts.push(`⚠️ <b>构建配置未自动写入</b>（${esc(done?.triggerError || '仓库还没连接')}）：在补齐之前，装插件不会触发重建。补法见本次工作流 run 页的 Step Summary，里面有可照抄的四项配置。`)
   }
+  if (!done?.buildsTokenWritten) {
+    parts.push('⚠️ <b>没有配置构建 Token</b>：在补配之前，面板上装插件会直接失败（提示"自部署未配置"）。补法同样见 Step Summary。')
+  }
+  el.className = done?.triggerConfigured && done?.buildsTokenWritten ? 'msg ok' : 'msg'
+  el.innerHTML = parts.join('<br><br>')
 }
 
-$('finish-btn').onclick = async () => {
+async function finish(withToken) {
+  const token = withToken ? $('builds-token-input').value.trim() : ''
   $('finish-btn').disabled = true
   try {
-    const token = $('builds-token-input').value.trim()
-    const done = await api('/api/complete', { buildsToken: token || undefined })
-    renderFinishState(done)
-    if (buildsTimer) clearInterval(buildsTimer)
-    show('step-done')
-    $('step-done').scrollIntoView({ behavior: 'smooth' })
+    renderFinishState(await api('/api/complete', token ? { buildsToken: token } : {}))
   } catch (err) {
     say('builds-msg', `❌ ${err.message}`, 'err')
     $('finish-btn').disabled = false
+    return
   }
-}
-$('skip-btn').onclick = async () => {
-  try { renderFinishState(await api('/api/complete', {})) } catch { /* 已完成也算收尾 */ }
-  if (buildsTimer) clearInterval(buildsTimer)
   show('step-done')
-  say('builds-msg', '已跳过构建 token——在补配之前，面板上装插件会直接失败（提示"自部署未配置"）。', '')
   $('step-done').scrollIntoView({ behavior: 'smooth' })
 }
+$('finish-btn').onclick = () => finish(true)
+$('skip-btn').onclick = () => finish(false)
 
 $('exit-btn').onclick = async () => {
   $('exit-btn').disabled = true
+  clearTimeout(connectTimer)
   try {
     await api('/api/exit', {})
     document.querySelector('main').innerHTML = `
@@ -430,6 +479,7 @@ $('exit-btn').onclick = async () => {
 
 $('cancel-btn').onclick = async () => {
   if (!confirm('确定要终止当前部署工作流吗？\n终止后 GitHub Actions Runner 将停止运行并退出。')) return
+  clearTimeout(connectTimer)
   $('cancel-btn').disabled = true
   try {
     await api('/api/cancel', {})

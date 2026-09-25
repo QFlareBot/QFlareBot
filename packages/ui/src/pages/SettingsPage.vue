@@ -48,6 +48,8 @@ const bindState = ref<BindState>('idle')
 const bindQr = ref('')
 const bindError = ref('')
 const origin = location.origin
+/** QQ 开放平台访问不到 *.workers.dev，从默认域名打开时不能把它当回调地址给出去 */
+const onWorkersDev = location.hostname.endsWith('.workers.dev')
 let bindTimer: ReturnType<typeof setTimeout> | undefined
 
 function stopBind() {
@@ -279,7 +281,12 @@ async function saveMenu() {
             </template>
             <template v-else-if="bindState === 'created'">
               <p class="font-medium text-fg">机器人已创建，凭证已保存</p>
-              <p class="text-xs text-fg-muted">
+              <p v-if="onWorkersDev" class="text-xs text-fg-muted">
+                还差两步：先给这个 Worker 绑定自定义域名（QQ 开放平台访问不到 <code class="font-mono">*.workers.dev</code>），再到
+                <a class="underline" href="https://q.qq.com" target="_blank" rel="noopener">QQ 开放平台</a> 的机器人管理里把回调地址填成
+                <code class="font-mono">https://你的域名{{ status?.webhookPath ?? '/webhook' }}</code>
+              </p>
+              <p v-else class="text-xs text-fg-muted">
                 还差一步：到 <a class="underline" href="https://q.qq.com" target="_blank" rel="noopener">QQ 开放平台</a> 的机器人管理里，把回调地址填成
                 <code class="font-mono">{{ origin }}{{ status?.webhookPath ?? '/webhook' }}</code>
               </p>

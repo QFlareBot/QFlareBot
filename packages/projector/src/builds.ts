@@ -134,16 +134,25 @@ export class CloudflareBuildsApi {
   }
 
   /**
-   * 查某个 Worker 的 Builds trigger（取第一个），返回 trigger_uuid。
+   * 查某个 Worker 的生产 Builds trigger，返回 trigger_uuid。
    * 仓库连上 Workers Builds 之前该列表为空——所以自发现只能在连接之后成功。
+   *
+   * 连接时勾了「非生产分支构建」，Cloudflare 会另建一个预览 trigger（branch_includes 只有 "*"），
+   * 不能取列表第一个：往预览 trigger 写部署命令、从它触发构建，都会打到错的那一路。
+   * `scripts/bootstrap/lib.mjs` 的 pickProductionTrigger 是同一条规则。
    */
   async getTriggerUuid(workerTag: string): Promise<string | null> {
-    const result = await this.#request<Array<{ trigger_uuid?: string; uuid?: string; id?: string }> | { items?: Array<{ trigger_uuid?: string; uuid?: string; id?: string }> }>(
+    type Trigger = { trigger_uuid?: string; uuid?: string; id?: string; branch_includes?: unknown }
+    const result = await this.#request<Trigger[] | { items?: Trigger[] }>(
       'GET',
       `/builds/workers/${encodeURIComponent(workerTag)}/triggers`,
     )
     const items = Array.isArray(result) ? result : (result.items ?? [])
-    const uuid = items[0]?.trigger_uuid ?? items[0]?.uuid ?? items[0]?.id
+    const production = items.find((t) => {
+      const includes = Array.isArray(t.branch_includes) ? t.branch_includes : []
+      return !includes.length || includes.some((b) => typeof b === 'string' && b !== '' && !b.includes('*'))
+    })
+    const uuid = production?.trigger_uuid ?? production?.uuid ?? production?.id
     return typeof uuid === 'string' ? uuid : null
   }
 

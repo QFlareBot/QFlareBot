@@ -5,14 +5,20 @@ import {
   BootstrapError,
   buildsConnectUrl,
   buildsTokenUrl,
+  configureTrigger,
   createQQBindTask,
+  getBuild,
+  listTriggers,
   listWorkerSecretNames,
   MANIFEST_PLUGINS_TABLE,
+  pickProductionTrigger,
   pollQQBindResult,
   readInstalledPlugins,
   renderSummary,
   resolveBuildToken,
   runBootstrap,
+  SETUP_TOKEN_URL,
+  startBuild,
   verifyToken,
 } from './lib.mjs'
 
@@ -158,7 +164,6 @@ describe('renderSummary：沿用 BUILD_TOKEN', () => {
     baseUrl: 'https://qqbot.sub.workers.dev',
     defaultDomain: 'qqbot.sub.workers.dev',
     panelUrl: 'https://qqbot.sub.workers.dev/',
-    webhookUrl: 'https://qqbot.sub.workers.dev/webhook',
     manifestUrl: 'https://qqbot.sub.workers.dev/admin/build-manifest',
     buildToken: null,
     buildTokenReused: true,
@@ -181,7 +186,6 @@ describe('renderSummary：地址与密钥', () => {
     accountId: 'acc',
     workerName: 'qqbot',
     panelUrl: 'https://qqbot.sub.workers.dev/',
-    webhookUrl: 'https://qqbot.sub.workers.dev/webhook',
     manifestUrl: 'https://qqbot.sub.workers.dev/admin/build-manifest',
     buildToken: 'build-token-value',
     buildTokenReused: false,
@@ -192,10 +196,18 @@ describe('renderSummary：地址与密钥', () => {
     warnings: [],
   }
 
-  it('面板地址是可点的链接，回调地址单独放进代码块（GitHub 给代码块配了复制按钮）', () => {
+  it('面板地址是可点的链接', () => {
     const md = renderSummary(base, { redactSecrets: true })
     expect(md).toContain('[https://qqbot.sub.workers.dev/](https://qqbot.sub.workers.dev/)')
-    expect(md).toContain('```text\nhttps://qqbot.sub.workers.dev/webhook\n```')
+  })
+
+  it('不给 workers.dev 的回调地址（QQ 开放平台访问不到），先要求绑定自定义域名', () => {
+    const md = renderSummary(base, { redactSecrets: true })
+    expect(md).not.toContain('workers.dev/webhook')
+    expect(md).toContain('https://你的域名/webhook')
+    const domainStep = md.indexOf('绑定自定义域名（必需）')
+    expect(domainStep).toBeGreaterThan(-1)
+    expect(domainStep).toBeLessThan(md.indexOf('QQ 开放平台**'))
   })
 
   it('管理密钥不出现在汇总里，哪怕调用方误传了', () => {
@@ -234,5 +246,70 @@ describe('扫码创建 QQ 机器人', () => {
     stubFetch(new Response(JSON.stringify({ retcode: 0, data: { status: 3 } })), new Response(JSON.stringify({ retcode: 1, msg: '频率过快' })))
     expect(await pollQQBindResult('t1', 'k')).toEqual({ status: 'expired' })
     await expect(pollQQBindResult('t1', 'k')).rejects.toThrow('频率过快')
+  })
+})
+
+describe('主 token 预填链接', () => {
+  it('带上 Workers 构建配置（编辑）：第 ④ 步要用主 token 检测连接、写构建配置', () => {
+    const groups = JSON.parse(new URL(SETUP_TOKEN_URL).searchParams.get('permissionGroupKeys'))
+    expect(groups).toContainEqual({ key: 'workers_ci', type: 'edit' })
+    expect(groups).toContainEqual({ key: 'workers_scripts', type: 'edit' })
+  })
+})
+
+describe('pickProductionTrigger', () => {
+  it('跳过排在前面的预览 trigger（开了非生产分支构建时 Cloudflare 另建的那个）', () => {
+    const triggers = [
+      { trigger_uuid: 'preview', branch_includes: ['*'], branch_excludes: ['main'] },
+      { trigger_uuid: 'prod', branch_includes: ['main'], branch_excludes: [] },
+    ]
+    expect(pickProductionTrigger(triggers)).toEqual({ uuid: 'prod', branch: 'main' })
+  })
+
+  it('生产分支按 trigger 实际配置取，不写死 main', () => {
+    expect(pickProductionTrigger([{ trigger_uuid: 't', branch_includes: ['master'] }])).toEqual({ uuid: 't', branch: 'master' })
+  })
+
+  it('只有预览 trigger 或列表为空时返回 null；缺 branch_includes 字段时按生产处理', () => {
+    expect(pickProductionTrigger([{ trigger_uuid: 'preview', branch_includes: ['*'] }])).toBeNull()
+    expect(pickProductionTrigger([])).toBeNull()
+    expect(pickProductionTrigger([{ uuid: 'u' }])).toEqual({ uuid: 'u', branch: 'main' })
+  })
+})
+
+describe('Workers Builds 调用', () => {
+  const fail = (status, code, message) =>
+    new Response(JSON.stringify({ success: false, errors: [{ code, message }], result: null }), { status })
+
+  it('listTriggers：404 当作还没连接；403 点名缺哪个权限并打上 missingPermission', async () => {
+    stubFetch(fail(404, 12004, 'not found'))
+    expect(await listTriggers('tok', 'acc', 'tag', '主 Token')).toEqual([])
+
+    stubFetch(fail(403, 10000, 'Authentication error'))
+    const err = await listTriggers('tok', 'acc', 'tag', '构建 Token ').catch((e) => e)
+    expect(err).toBeInstanceOf(BootstrapError)
+    expect(err.missingPermission).toBe(true)
+    expect(err.message).toMatch(/^构建 Token 缺少「Workers 构建配置（编辑）」权限/)
+
+    stubFetch(fail(500, 1, 'boom'))
+    await expect(listTriggers('tok', 'acc', 'tag', '主 Token')).rejects.toThrow('boom')
+  })
+
+  it('configureTrigger 写命令与清单变量；startBuild 按分支触发；getBuild 读状态', async () => {
+    const calls = stubFetch(ok({}), ok({}), ok({ build_uuid: 'b1' }), ok({ status: 'running', build_outcome: null }))
+    await configureTrigger('tok', 'acc', 'trig', { manifestUrl: 'https://x/admin/build-manifest', buildToken: 'bt' })
+    expect(await startBuild('tok', 'acc', 'trig', 'main')).toBe('b1')
+    expect(await getBuild('tok', 'acc', 'b1')).toEqual({ status: 'running', outcome: '' })
+    expect(calls.map((c) => `${c.method} ${c.url.replace('https://api.cloudflare.com/client/v4', '')}`)).toEqual([
+      'PATCH /accounts/acc/builds/triggers/trig',
+      'PATCH /accounts/acc/builds/triggers/trig/environment_variables',
+      'POST /accounts/acc/builds/triggers/trig/builds',
+      'GET /accounts/acc/builds/builds/b1',
+    ])
+    expect(calls[1].body).toEqual({
+      MANIFEST_URL: { value: 'https://x/admin/build-manifest', is_secret: false },
+      MANIFEST_TOKEN: { value: 'bt', is_secret: true },
+    })
+    expect(calls[2].body).toEqual({ branch: 'main' })
   })
 })

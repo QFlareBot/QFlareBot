@@ -44,6 +44,8 @@ async function clear() {
 const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).length)
 const brokenCount = computed(() => plugins.value.filter((p) => p.error).length)
 const webhookUrl = computed(() => `${location.origin}${status.value?.webhookPath ?? '/webhook'}`)
+/** QQ 开放平台访问不到 *.workers.dev：从默认域名打开面板时，这里显示的地址填了也不通 */
+const onWorkersDev = location.hostname.endsWith('.workers.dev')
 const ago = computed(() => (updatedAt.value ? `${Math.max(0, Math.round((Date.now() - updatedAt.value) / 1000))} 秒前` : ''))
 
 function copyWebhook() {
@@ -100,7 +102,11 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
     </div>
 
     <QCard title="回调地址" description="填到 QQ 开放平台 → 开发设置 → 回调配置" class="mb-4">
-      <div class="flex flex-wrap items-center gap-2">
+      <p v-if="onWorkersDev" class="text-sm text-fg">
+        QQ 开放平台访问不到 <code class="font-mono text-xs">*.workers.dev</code>，回调必须走自定义域名：先到 Cloudflare 后台给这个 Worker 的
+        Settings → Domains &amp; Routes 添加一个 Custom Domain，再用新域名打开面板，这里就会显示可以填的回调地址。
+      </p>
+      <div v-else class="flex flex-wrap items-center gap-2">
         <code class="min-w-0 flex-1 truncate rounded-md bg-surface-muted px-2 py-1.5 font-mono text-xs text-fg">{{ webhookUrl }}</code>
         <QButton size="sm" @click="copyWebhook"><Copy class="size-3.5" aria-hidden="true" />复制</QButton>
       </div>
