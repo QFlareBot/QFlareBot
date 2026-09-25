@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BootstrapError,
   buildsConnectUrl,
+  buildsTokenUrl,
   listWorkerSecretNames,
   MANIFEST_PLUGINS_TABLE,
   readInstalledPlugins,
@@ -104,6 +105,19 @@ describe('listWorkerSecretNames', () => {
     const calls = stubFetch(ok([{ name: 'ADMIN_TOKEN', type: 'secret_text' }, { name: 'BUILD_TOKEN', type: 'secret_text' }]))
     await expect(listWorkerSecretNames('tok', 'acc', 'my bot')).resolves.toEqual(['ADMIN_TOKEN', 'BUILD_TOKEN'])
     expect(calls[0].url).toBe('https://api.cloudflare.com/client/v4/accounts/acc/workers/scripts/my%20bot/secrets')
+  })
+})
+
+describe('buildsTokenUrl', () => {
+  it('预填 Workers 构建配置（workers_ci，Edit）与 Workers 脚本（Read），账户限定为本账户', () => {
+    // workers_builds 不是有效 key：控制台静默忽略，建出来的 token 缺 Builds 权限、列 trigger 必然 403
+    const url = new URL(buildsTokenUrl('acc', 'qqbot-builds'))
+    expect(JSON.parse(url.searchParams.get('permissionGroupKeys'))).toEqual([
+      { key: 'workers_ci', type: 'edit' },
+      { key: 'workers_scripts', type: 'read' },
+    ])
+    expect(url.searchParams.get('accountId')).toBe('acc')
+    expect(url.searchParams.get('name')).toBe('qqbot-builds')
   })
 })
 

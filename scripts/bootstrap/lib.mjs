@@ -315,10 +315,14 @@ export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
  * 再取 `key` 字段，两头都不成立：引导 token 没有 API Tokens Read 权限（必然 403），
  * 而那个端点的返回里也根本没有 `key` 字段——于是解析永远失败，页面永远退回
  * 「请手动勾选权限」，这个按钮从来没真正工作过。写死即可。
+ *
+ * Builds 权限的 key 是 `workers_ci`（控制台显示为「Workers 构建配置」，已实测）。
+ * 早先写的 `workers_builds` 不是有效 key，控制台静默忽略，建出来的 token 只有
+ * Workers Scripts 读权限，列 trigger 必然 403。
  */
 export function buildsTokenUrl(accountId, tokenName) {
   const groups = [
-    { key: 'workers_builds', type: 'edit' },
+    { key: 'workers_ci', type: 'edit' },
     { key: 'workers_scripts', type: 'read' },
   ]
   const params = new URLSearchParams()
