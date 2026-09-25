@@ -54,12 +54,12 @@ export default definePlugin<Config>({
 })
 ```
 
-配套文件与命令（详见模板 `templates/plugin`）。SDK 与 `qqbot-plugin` 不发 npm，从 FlareBot 源码构建，和插件仓库并排放——模板的 `devDependencies` 指向 `file:../FlareBot/packages/*`：
+配套文件与命令（详见模板 `templates/plugin`）。SDK 与 `qqbot-plugin` 不发 npm，从 QFlareBot 源码构建，和插件仓库并排放——模板的 `devDependencies` 指向 `file:../QFlareBot/packages/*`：
 
 ```bash
-git clone https://github.com/clown145/FlareBot
-(cd FlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
-cd qqbot-plugin-hello    # 与 FlareBot 同级
+git clone https://github.com/qflarebot/QFlareBot
+(cd QFlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
+cd qqbot-plugin-hello    # 与 QFlareBot 同级
 npm install
 
 npm run build            # 生成 dist/plugin.js + dist/manifest.json

@@ -1,5 +1,5 @@
 {
-  "name": "flarebot",
+  "name": "qflarebot",
   "private": true,
   "version": "0.1.0",
   "description": "运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架",

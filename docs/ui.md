@@ -14,7 +14,7 @@ Vue 3 + Vite + Tailwind v4，hash 路由。构建产物由 `scripts/pack.mjs` �
 | 设置 | 凭证保存（先向 QQ 验证；也可扫码创建机器人，凭证由 Worker 解密后直接保存）；换 AppID 时旧机器人自动存进「已保存的机器人」，可一键切回或删除（AppSecret 只留在 Worker 的 KV，不回显）；安全模式、命令前缀 |
 | 插件页面 | 侧栏「插件页面」下按插件出现，见下节 |
 
-设计 token 与规则见 `design-system/flarebot/MASTER.md`；机器可读版本是 `@qqbot/ui-bridge/tokens.css`。
+设计 token 与规则见 `design-system/qflarebot/MASTER.md`；机器可读版本是 `@qqbot/ui-bridge/tokens.css`。
 
 ## 插件页面（解耦方案）
 

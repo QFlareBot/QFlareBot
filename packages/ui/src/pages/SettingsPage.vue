@@ -215,7 +215,7 @@ function draftPanels() {
     {
       scope: panelsScope.value,
       target_type: 'all',
-      panel: { remark: '由 FlareBot 面板同步', items },
+      panel: { remark: '由 QFlareBot 面板同步', items },
     },
     null,
     2,

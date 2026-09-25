@@ -6,7 +6,7 @@
 
 ---
 
-**Project:** FlareBot
+**Project:** QFlareBot
 **Generated:** 2026-09-18 08:31:38
 **Category:** RPA / Automation Dashboard
 **Design Dials:** Variance 2/10 (Centered / Minimal) | Motion 2/10 (Subtle) | Density 8/10 (Dense / Dashboard)

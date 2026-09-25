@@ -20,27 +20,27 @@ jobs:
       run:
         working-directory: plugin
     steps:
-      # 与本地开发同一布局：FlareBot 与插件并排，devDependencies 里的 file:../FlareBot/... 才解析得到
+      # 与本地开发同一布局：QFlareBot 与插件并排，devDependencies 里的 file:../QFlareBot/... 才解析得到
       - uses: actions/checkout@v4
         with:
           path: plugin
 
       - uses: actions/checkout@v4
         with:
-          repository: clown145/FlareBot
-          path: FlareBot
+          repository: qflarebot/QFlareBot
+          path: QFlareBot
 
       - uses: pnpm/action-setup@v4
         with:
-          package_json_file: FlareBot/package.json
+          package_json_file: QFlareBot/package.json
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # SDK 与 plugin-cli 不发 npm，从 FlareBot 源码构建
+      # SDK 与 plugin-cli 不发 npm，从 QFlareBot 源码构建
       - name: 构建 SDK 与 plugin-cli
-        working-directory: FlareBot
+        working-directory: QFlareBot
         run: |
           pnpm install --frozen-lockfile --filter '@qqbot/plugin-cli...'
           pnpm --filter '@qqbot/plugin-cli...' build

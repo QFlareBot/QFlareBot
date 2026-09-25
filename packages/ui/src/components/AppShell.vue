@@ -32,7 +32,7 @@ function onLogout() {
     <aside class="hidden w-52 shrink-0 flex-col border-r border-border bg-surface md:flex">
       <div class="flex h-12 items-center gap-2 px-4 text-sm font-semibold text-fg">
         <span class="size-2 rounded-full" :class="status?.bot ? 'bg-success' : 'bg-warning'" aria-hidden="true" />
-        FlareBot
+        QFlareBot
       </div>
       <nav class="flex flex-1 flex-col gap-0.5 px-2" aria-label="主导航">
         <RouterLink
@@ -73,7 +73,7 @@ function onLogout() {
     <!-- 手机顶栏 -->
     <header class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4 md:hidden">
       <span class="flex items-center gap-2 text-sm font-semibold text-fg">
-        <span class="size-2 rounded-full" :class="status?.bot ? 'bg-success' : 'bg-warning'" aria-hidden="true" />FlareBot
+        <span class="size-2 rounded-full" :class="status?.bot ? 'bg-success' : 'bg-warning'" aria-hidden="true" />QFlareBot
       </span>
       <div class="flex items-center">
         <button type="button" class="flex size-11 cursor-pointer items-center justify-center text-fg-muted" :aria-label="theme === 'dark' ? '切换到浅色' : '切换到深色'" @click="toggle">

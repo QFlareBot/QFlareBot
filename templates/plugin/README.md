@@ -2,20 +2,20 @@
 
 运行在 Cloudflare Workers 上的 QQ 机器人插件模板。复制本目录、改掉包名即可开始开发。
 
-> 完整的插件开发指南（事件 / 回复 / 配置 / 存储 / 生命周期）见 FlareBot 仓库的 [docs/plugin-guide.md](../../docs/plugin-guide.md)；本篇只讲模板自身的约定与发布流程。
+> 完整的插件开发指南（事件 / 回复 / 配置 / 存储 / 生命周期）见 QFlareBot 仓库的 [docs/plugin-guide.md](../../docs/plugin-guide.md)；本篇只讲模板自身的约定与发布流程。
 
 ## 开发
 
-`@qqbot/sdk` 与 `@qqbot/plugin-cli` 不发 npm，从 FlareBot 源码构建。把 FlareBot 克隆到插件仓库旁边（`devDependencies` 里是 `file:../FlareBot/packages/*`）：
+`@qqbot/sdk` 与 `@qqbot/plugin-cli` 不发 npm，从 QFlareBot 源码构建。把 QFlareBot 克隆到插件仓库旁边（`devDependencies` 里是 `file:../QFlareBot/packages/*`）：
 
 ```bash
-git clone https://github.com/clown145/FlareBot
-(cd FlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
-cd qqbot-plugin-hello    # 与 FlareBot 同级
+git clone https://github.com/qflarebot/QFlareBot
+(cd QFlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
+cd qqbot-plugin-hello    # 与 QFlareBot 同级
 npm install
 ```
 
-CI 按同样的布局拉取并构建 FlareBot。机器人的构建机不装 `devDependencies`，编译时一律用机器人仓库自己那一份 SDK。
+CI 按同样的布局拉取并构建 QFlareBot。机器人的构建机不装 `devDependencies`，编译时一律用机器人仓库自己那一份 SDK。
 
 - `src/index.ts`：插件入口，必须默认导出 `definePlugin(...)`。示例包含一个命令 `/hello`、一个正则 `ping`、一个 `qq.group.robot_added` 事件，以及面板据以渲染配置表单的 `configSchema`。
 - 插件不 import 运行时，所有能力（配置、KV、D1、日志、OpenAPI）都从处理器参数的 `ctx` 上取。
