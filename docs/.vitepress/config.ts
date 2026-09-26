@@ -9,7 +9,13 @@ export default defineConfig({
   description: '运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架',
   cleanUrls: true,
   lastUpdated: true,
+  // 图标由 design-system/qflarebot/brand/export.mjs 导出到 docs/public
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' }],
+  ],
   themeConfig: {
+    logo: { light: '/logo.svg', dark: '/logo-dark.svg', alt: 'QFlareBot' },
     nav: [
       { text: '快速部署', link: '/deploy' },
       { text: '插件开发', link: '/plugin-guide' },

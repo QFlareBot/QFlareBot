@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design-system/qflarebot/brand/logo-dark.svg">
+  <img src="design-system/qflarebot/brand/logo.svg" alt="QFlareBot" width="88" height="88">
+</picture>
+
 # QFlareBot
 
 [![Release](https://img.shields.io/github/v/release/QFlareBot/QFlareBot?sort=semver&include_prereleases)](https://github.com/QFlareBot/QFlareBot/releases)

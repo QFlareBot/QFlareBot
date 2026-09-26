@@ -5,6 +5,10 @@ hero:
   name: QFlareBot
   text: 跑在 Cloudflare Workers 上的 QQ 机器人
   tagline: 零服务器、Fork 即部署、面板装插件
+  image:
+    light: /logo.svg
+    dark: /logo-dark.svg
+    alt: QFlareBot
   actions:
     - theme: brand
       text: 快速部署
