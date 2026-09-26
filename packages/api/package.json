@@ -1,6 +1,6 @@
 {
   "name": "@qqbot/api",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "QQ 机器人 OpenAPI 客户端：Ed25519 验签、AccessToken、消息与富媒体（基于 fetch 与 WebCrypto）",
   "license": "GPL-3.0-or-later",
   "type": "module",

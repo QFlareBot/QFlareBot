@@ -1,6 +1,6 @@
 {
   "name": "@qqbot/ui-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "插件页面与管理面板之间的桥：设计 token、postMessage 协议、页面端客户端",
   "license": "MIT",
   "type": "module",

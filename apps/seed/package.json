@@ -1,7 +1,7 @@
 {
   "name": "@qqbot/seed",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "种子应用：Fork 后连接 Cloudflare 即可部署的 QQ 机器人 Worker",
   "license": "GPL-3.0-or-later",
   "type": "module",
