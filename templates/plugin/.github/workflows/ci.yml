@@ -21,20 +21,20 @@ jobs:
         working-directory: plugin
     steps:
       # 与本地开发同一布局：QFlareBot 与插件并排，devDependencies 里的 file:../QFlareBot/... 才解析得到
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: plugin
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: QFlareBot/QFlareBot
           path: QFlareBot
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: QFlareBot/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
