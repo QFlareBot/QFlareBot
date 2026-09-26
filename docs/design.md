@@ -1,6 +1,6 @@
 # 设计决策记录
 
-这份文档记录框架的核心决策与理由，改动契约前先读它。日期：2026-09-18。
+这份文档记录框架的核心决策与理由，改动契约前先读它。最初写于 2026-09-18，之后随实现更新。
 
 ## 1. 为什么是 Cloudflare Workers
 
@@ -18,9 +18,9 @@ TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；R
 
 1. 部署走"先上传后切流量"，健康检查失败就不切。含 Durable Object 的 Worker 没有版本预览 URL（平台限制），此时跳过健康检查——这是当前最大的例外
 2. 插件用动态 `import()`，某个插件求值抛错只影响自己，面板照常可用（声明 Durable Object 的插件例外：类必须静态导出，随主模块求值，求值失败会拖垮整个 Worker）
-5. 声明 Durable Object 的插件在**安装**这一步就被拦下并给出要补的 `migrations`——投影对 DO 迁移只校验不合成（构建机没有「上次应用到哪个 tag」的持久状态），校验在构建阶段，不拦的话插件已入 D1 才炸，且此后每次构建都炸
-3. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台版本回滚、以及"恢复 D1 清单快照 + 重新触发构建"是最后手段
-4. 部署凭证不进 Worker：Worker 只持有 Builds 触发 token（user-scoped，权限仅触发构建与读构建状态）；编译与部署凭证由构建机持有
+3. 声明 Durable Object 的插件在**安装**这一步就被拦下并给出要补的 `migrations`——投影对 DO 迁移只校验不合成（构建机没有「上次应用到哪个 tag」的持久状态），校验在构建阶段，不拦的话插件已入 D1 才炸，且此后每次构建都炸
+4. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台版本回滚、以及"恢复 D1 清单快照 + 重新触发构建"是最后手段
+5. 部署凭证不进 Worker：Worker 只持有 Builds 触发 token（user-scoped，权限仅触发构建与读构建状态）；编译与部署凭证由构建机持有
 
 代价与信任模型：插件代码与框架同 isolate、同 realm 无沙箱，permissions 声明只是"知情同意"，不是安全边界。这与 NoneBot/Koishi 的"装的插件即可信代码"前提一致，文档中说明并建议 bot 单开一个 Cloudflare 账号。
 
@@ -96,18 +96,16 @@ DO 按 128 MB × 活跃墙上时钟计费：一个被持续访问的 DO 一天�
 - Cron：框架只注册一个 Cron Trigger，按插件表达式分发（免费版 Trigger 仅 5 个）
 - 全局篡改：同 isolate 无法禁止，靠构建期 lint 与审核
 
-## 9. 里程碑
+## 9. 面板与插件页面
 
-**M1（本仓库当前）**：sdk / api / runtime / projector / plugin-cli / 四个示例插件 / 种子应用 / 插件模板。平台能力覆盖见 `capabilities.md`：按键（自动升级 markdown）、`buttons` 匹配器与交互自动 ack、event_id 被动回复、引用、视频/语音/文件、流式（单聊）、撤回、输入中、群管理。清单投影、多模块部署元数据、Versions API 客户端已实现但**未对线上 API 实测**。
+面板是 `@qqbot/ui`（Vue 3），构建产物内联进 Worker 制品由运行时返回——自我部署不需要额外的 Cloudflare API，UI 与管理 API 永远同版本。插件页面走**解耦**方案：插件路由返回任意 HTML，面板以 sandbox iframe 打开，`@qqbot/ui-bridge` 提供 token、主题与 postMessage 通道；不做"插件写 Vue 组件挂进面板"的原生扩展，避免把面板组件 API 变成公共契约。鉴权是无状态 HMAC 令牌（会话 7 天、桥接 1 小时且限定插件），轮换 `ADMIN_TOKEN` 即全部失效。详见[面板与插件页面](./ui.md)，设计 token 见仓库里的 [design-system/qflarebot/MASTER.md](https://github.com/QFlareBot/QFlareBot/blob/main/design-system/qflarebot/MASTER.md)。
 
-## 10. 面板与插件页面
+## 10. 里程碑
 
-面板是 `@qqbot/ui`（Vue 3），构建产物内联进 Worker 制品由运行时返回——自我部署不需要额外的 Cloudflare API，UI 与管理 API 永远同版本。插件页面走**解耦**方案：插件路由返回任意 HTML，面板以 sandbox iframe 打开，`@qqbot/ui-bridge` 提供 token、主题与 postMessage 通道；不做"插件写 Vue 组件挂进面板"的原生扩展，避免把面板组件 API 变成公共契约。鉴权是无状态 HMAC 令牌（会话 7 天、桥接 1 小时且限定插件），轮换 `ADMIN_TOKEN` 即全部失效。详见 `ui.md`，设计 token 见 `../design-system/qflarebot/MASTER.md`。
+**M1**：sdk / api / runtime / projector / plugin-cli / 示例插件 / 种子应用 / 插件模板。平台能力覆盖见 [平台能力对照](./capabilities.md)：按键（自动升级 markdown）、`buttons` 匹配器与交互自动 ack、event_id 被动回复、引用、视频/语音/文件、流式（单聊）、撤回、输入中、群管理。清单投影、多模块部署元数据与 Versions API 客户端也在这时实现，当时还没对线上实测，到 M2 跑通。
 
-## 11. 里程碑（更新）
+**M2**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）、插件数据所有权（D1 表名前缀强制、卸载清理、`GET /admin/storage` 存储视图，见第 5 节）。线上 Builds 已实测跑通（Versions API 上传 → 健康检查 → 切流量，`workers_dev: false` 下预览地址同样可用）。
 
-**M2（当前）**：清单入 D1（`rt_manifest_plugins` + `rt_installs` 账本）、构建清单 API（`GET /admin/build-manifest`）、安装/卸载端点（声明清单校验、conflicts/depends 检测）、Builds API 触发与构建状态/commit 同步、seed 自部署脚本（git 源码构建 + Versions API 健康检查部署 + 仓库清单回退）、面板安装入口（粘贴仓库链接 + 构建记录列表）、插件数据所有权（D1 表名前缀强制、卸载清理、`GET /admin/storage` 存储视图，见第 5 节）。线上 Builds 已实测跑通（Versions API 上传 → 健康检查 → 切流量，`workers_dev: false` 下预览地址同样可用）。构建日志内嵌未做。
+**M2 之后（当前）**：插件第三方依赖（按插件自己的 lockfile、在仓库外构建，见第 4 节）；批量更新只构建一次；构建失败回报与「未上线的改动」；期望状态与线上状态对照；插件目录 [QFlareBot/plugins](https://github.com/QFlareBot/plugins) 与面板「市场」（批量安装只构建一次）；插件前缀改为 `qflarebot-plugin-`（旧的 `qqbot-plugin-` 构建时照样认）。
 
-**M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、面板安装页（源码安装 + 构建日志内嵌）、Access 集成指引、Dynamic Workers 脚本引擎插件。
-
-**M3**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、Access 集成指引、Dynamic Workers 脚本引擎插件。
+**M3（计划）**：多轮对话（`session.prompt`，Conversation DO）、`ctx.store(scope)` 通用 DO、构建日志内嵌面板、Access 集成指引、Dynamic Workers 脚本引擎插件。

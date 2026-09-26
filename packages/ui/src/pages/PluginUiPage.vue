@@ -30,6 +30,8 @@ let host: BridgeHost | null = null
 
 let firstToken: string | null = null
 
+const withToken = (path: string, token: string) => `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+
 watch(
   pagePath,
   async (path) => {
@@ -37,13 +39,32 @@ watch(
     if (!path || !plugin.value) return
     try {
       firstToken = (await api.bridgeToken(plugin.value.name)).token
-      src.value = `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(firstToken)}`
+      src.value = withToken(path, firstToken)
     } catch (e) {
       push(`无法打开插件页面：${(e as Error).message}`, 'error')
     }
   },
   { immediate: true },
 )
+
+// 新窗口里没有桥来送令牌，只能像 iframe 首次那样放进 ?token=（1 小时有效，不刷新）。
+// 窗口必须在点击里同步打开，等拿到令牌再 open 会被浏览器当成弹窗拦掉
+async function openInNewWindow() {
+  const path = pagePath.value
+  if (!path || !plugin.value) return
+  const win = window.open('', '_blank')
+  if (!win) {
+    push('浏览器拦截了新窗口', 'error')
+    return
+  }
+  win.opener = null
+  try {
+    win.location.href = withToken(path, (await api.bridgeToken(plugin.value.name)).token)
+  } catch (e) {
+    win.close()
+    push(`无法打开插件页面：${(e as Error).message}`, 'error')
+  }
+}
 
 function mount() {
   host?.destroy()
@@ -81,7 +102,7 @@ onBeforeUnmount(() => host?.destroy())
     <QEmpty v-else-if="plugin && !plugin.enabled" title="插件已禁用" description="启用后才能打开它的页面。" />
     <template v-else-if="plugin">
       <PageHeader :title="title || plugin.ui?.title || plugin.displayName">
-        <a :href="pagePath" target="_blank" rel="noopener"><QButton size="sm" variant="ghost"><ExternalLink class="size-3.5" aria-hidden="true" />新窗口打开</QButton></a>
+        <QButton size="sm" variant="ghost" @click="openInNewWindow"><ExternalLink class="size-3.5" aria-hidden="true" />新窗口打开</QButton>
       </PageHeader>
       <iframe
         v-if="src"

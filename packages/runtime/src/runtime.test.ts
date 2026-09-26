@@ -1152,6 +1152,15 @@ describe('切换机器人', () => {
     expect(env.KV.store.has('rt:bot')).toBe(false)
   })
 
+  it('只配了 BOT_SECRET、没配 BOT_APPID：凭证实际来自 KV，状态如实报 kv，也能切换', async () => {
+    const { env, call } = setup(undefined, createEnv({ BOT_APPID: undefined }))
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+    expect((await call('GET', '/status')).body.bot).toMatchObject({ appId: '222', source: 'kv' })
+    expect((await call('POST', '/bot/switch', { appId: '111' })).status).toBe(200)
+    expect(JSON.parse(env.KV.store.get('rt:bot')!).appId).toBe('111')
+  })
+
   it('老快照的机器人资料没标 appId：按属于当前机器人处理，换号时跟着存下来', async () => {
     const { env, call } = setup()
     env.KV.store.set('rt:bot', JSON.stringify({ appId: '111', secret: 'secret-111' }))

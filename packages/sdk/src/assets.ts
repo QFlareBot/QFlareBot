@@ -1,6 +1,9 @@
 import type { Route, RouteInput } from './plugin.js'
 
-/** 内联静态资源：`qqbot-plugin build` 会把 `ui/` 目录的构建产物生成为这张表 */
+/**
+ * 内联静态资源表。`qqbot-plugin build` 目前不生成它：插件作者自己把前端构建产物转成这张表、
+ * 作为普通模块提交进仓库（构建机不跑前端构建），做法可参照面板的 `packages/ui/scripts/pack.mjs`。
+ */
 export interface AssetFile {
   body: string
   type: string

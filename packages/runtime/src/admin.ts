@@ -24,6 +24,7 @@ import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
 import type { Sender } from './session.js'
 import {
+  botFromSecrets,
   profileOf,
   readSavedBots,
   readSnapshot,
@@ -274,7 +275,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       bot: scope.bot
         ? {
             appId: scope.bot.appId,
-            source: scope.env.BOT_SECRET ? 'secret' : 'kv',
+            source: botFromSecrets(scope.env) ? 'secret' : 'kv',
             name: profileOf(scope.snapshot, scope.bot.appId)?.name ?? '',
           }
         : null,
@@ -451,7 +452,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
 
   if (sub === '/bot/switch' && method === 'POST') {
     // Worker Secret 优先于 KV，这时切了也不生效，不如直说
-    if (scope.env.BOT_APPID && scope.env.BOT_SECRET) {
+    if (botFromSecrets(scope.env)) {
       return error('当前机器人由 Worker Secret（BOT_APPID / BOT_SECRET）提供，面板切换不会生效；删掉这两个 Secret 后再切换', 409)
     }
     const body = await readJson<{ appId?: string }>(request)

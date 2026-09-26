@@ -9,13 +9,14 @@
 
 ## 首次部署：引导工作流（推荐）
 
-仓库根目录的 [`.github/workflows/bootstrap.yml`](../.github/workflows/bootstrap.yml) 会把资源创建、
+仓库根目录的 [`.github/workflows/bootstrap.yml`](../../.github/workflows/bootstrap.yml) 会把资源创建、
 部署、密钥写入一次做完。**幂等可重跑、零 Git 污染**：资源按名字复用，全程不向你的 fork 产生任何提交。
 
 1. Fork 本仓库。
 2. 运行 **Bootstrap** 工作流（Actions → Bootstrap → Run workflow），两种模式自动选择：
-   - **网页引导**（什么都没配时）：工作流起一个临时网页（Quick Tunnel），点开 run 页 Summary
-     里的链接，跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
+   - **网页引导**（什么都没配时）：工作流起一个临时网页（Quick Tunnel），网址打在「网页引导」这一步的
+     实时日志里（Summary 要等这一步结束才显示，步骤见[快速部署](https://qflarebot.github.io/deploy)），
+     跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
      （缺哪个权限当场点名），然后建资源、看进度、连接仓库、创建构建 token。
    - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，后续步骤写进
      run 页 Summary。`ADMIN_TOKEN` 必须自己定（它就是面板登录密钥，只有你知道明文）；缺任一个
@@ -119,7 +120,7 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
    | 变量 | 说明 |
    | --- | --- |
    | `MANIFEST_FALLBACK` | 默认不设。**只在应急时**设成 `1`：允许清单拉取失败后回退到仓库内置清单 |
-   | `CF_WORKERS_DEV` | 设 `0` 关掉 workers.dev。绑了自定义域名之后没必要继续把面板与 `/webhook` 暴露在默认域名上；版本预览地址由 `preview_urls` 单独控制，与它无关 |
+   | `CF_WORKERS_DEV` | **一般别设。** 设 `0` 会在生成配置里写 `workers_dev: false`，只在降级为 `wrangler deploy` 时生效（Versions API 不碰这项）。而构建机拉清单用的 `MANIFEST_URL` 指向 workers.dev，关掉它之后装插件、更新插件的构建都会失败——真要关，先把构建环境变量 `MANIFEST_URL` 改成自定义域名。版本预览地址由 `preview_urls` 单独控制，与它无关 |
 
    > **清单拉不到 = 构建失败**（除非上面那个 `MANIFEST_FALLBACK=1`）。这是故意的：继续构建只会打包
    > 仓库内置清单，D1 里装的插件会从 Worker 上消失（数据还在 D1，插件不跑了），而构建却报成功——

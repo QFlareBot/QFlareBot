@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 文档
+    url: https://qflarebot.github.io
+    about: 部署步骤、插件开发指南与常见问题
+  - name: 登记插件
+    url: https://github.com/QFlareBot/plugins
+    about: 想把插件放进插件市场，到插件目录仓库提 PR

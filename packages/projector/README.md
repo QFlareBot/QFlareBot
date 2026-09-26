@@ -94,7 +94,7 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 
 ## 已知限制
 
-- **尚未对 Cloudflare 线上 API 实测**，请求格式按官方文档编写（multipart `metadata` + 模块部分、`exports` 声明 sqlite DO、`percentage` 部署策略），首次接线时请留意错误信封
+- 上传版本 → 预览健康检查 → 切流量这条路已在线上跑通（seed 自部署用的就是它）；带插件 DO 的 `exports` 声明还没在线上实测过
 - 含 Durable Object 的 Worker 平台不生成版本预览 URL，因此 `deploy()` 在未显式传 `healthCheck` 时会对含 DO 的投影自动跳过健康检查（显式传对象则强制检查）
 - `wrangler deploy` 路径下，含插件 DO 的投影需要**人工维护 `migrations`**（生成器只校验，缺类即报错）。这是 Cloudflare 的模型决定的：迁移是只追加的历史，平台靠「上次应用过的 tag」算增量，而构建机没有这个状态。通过 Versions API 部署不受影响——那条路用 `exports` 声明 DO 生命周期，`migrations` 与 `exports` 互斥，由平台按 `exports` 自动 reconcile（此路径尚未对线上实测）
 - 版本元数据 bindings 目前只覆盖 KV / D1 / R2 / plain_text / 插件 DO；`vars` 中非字符串值会被 JSON 序列化为文本

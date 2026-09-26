@@ -52,9 +52,13 @@ export function resetSnapshotCache(): void {
   snapshotCache = null
 }
 
+/** 两个 Worker Secret 都配了才算数，这时它们优先于面板保存的凭证 */
+export function botFromSecrets(env: RuntimeEnv): BotConfig | null {
+  return env.BOT_APPID && env.BOT_SECRET ? { appId: env.BOT_APPID, secret: env.BOT_SECRET } : null
+}
+
 export async function readBotConfig(env: RuntimeEnv): Promise<BotConfig | null> {
-  if (env.BOT_APPID && env.BOT_SECRET) return { appId: env.BOT_APPID, secret: env.BOT_SECRET }
-  return readStoredBotConfig(env)
+  return botFromSecrets(env) ?? readStoredBotConfig(env)
 }
 
 /** 只看 KV 里面板保存的那份，不管 Worker Secret */

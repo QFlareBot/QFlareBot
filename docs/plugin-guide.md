@@ -1,6 +1,6 @@
 # 插件开发指南
 
-目标：只看这一篇，就能写出一个能用的插件。API 细节以 `@qqbot/sdk` 的类型注释为准；平台能力对照见 `capabilities.md`。跑在免费版部署上时，第 9 节的平台限额是硬约束，动笔前先扫一眼。
+目标：只看这一篇，就能写出一个能用的插件。API 细节以 `@qqbot/sdk` 的类型注释为准；平台能力对照见[平台能力对照](./capabilities.md)。跑在免费版部署上时，第 9 节的平台限额是硬约束，动笔前先扫一眼。
 
 ## 1. 最小可用插件
 
@@ -72,6 +72,8 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 安装记录钉在具体 commit 上——推了新代码不会自动生效。更新就是换到上游默认分支的最新提交：面板「已装插件」里点「检查全部更新」，勾选要更新的，点「更新选中」——逐个写进清单、**只触发一次构建**（API 上是每个 `POST /admin/manifest/plugins` 带 `"build": false`，最后 `POST /admin/builds`）。单个插件的 `check-update` / `update` 端点照旧可用。
 
 构建失败时线上保持上一次成功的版本，失败原因回报到面板：插件页「未上线的改动」列出所有写进了清单、却还没在线上生效的安装 / 升级 / 卸载，从没装上的可以直接卸载，升级失败的可以改回线上那一版。
+
+调试分两步：逻辑先用 `npm test` 在本地测（不需要机器人）；装上之后用面板「调试」页的事件模拟器，伪造一条消息或一次按键点击，看命中了哪个插件、回了什么。模拟器的回复只记录不发给 QQ，但插件里的存储读写和直接调 `ctx.api` 的请求是真的。
 
 面板的「市场」页列出[插件目录](./market.md)里的插件，勾选几个一起装：逐个预检，按依赖顺序写进清单，最后只构建一次。写好了想让别人用：见[发布插件](./publish.md)，向插件目录提一个 PR。
 
@@ -147,7 +149,7 @@ commands: {
 
 配置 Bot 管理员名单前，先在会话里发内置插件的 `/sid` 查询自己的 openid——openid 按机器人隔离，别处复制来的无效。
 
-常用事件名（完整映射见 `docs/capabilities.md`）：
+常用事件名（完整映射见[平台能力对照](./capabilities.md#事件)）：
 
 | 事件名 | 含义 |
 | --- | --- |
@@ -302,7 +304,7 @@ export default definePlugin({
 
 为什么不能自动：`migrations` 是**只追加的历史**，平台记着「上次应用过的 tag」，下次部署拿它在列表里定位、只应用其后的新增项。构建机每次都是全新环境，没有这个状态，造不出正确的历史——所以投影对它只校验、不合成。而校验发生在构建阶段，不在安装这一步拦住的话，插件已经写进 D1 才炸，并且**此后每一次构建都会炸**（包括之后装别的插件），直到有人想起来把它卸载。
 
-**两条安全阀在 DO 面前会失效**，这是选它之前要接受的代价：DO 类必须静态导出、随主模块求值，所以求值抛错会拖垮整个 Worker，而不是只影响自己（第 3 节「动态 import 隔离」的例外）；另外含 DO 的 Worker 没有版本预览 URL，部署时的 `/healthz` 健康检查会被跳过，坏版本不会在切流量前被拦下。
+**两条安全阀在 DO 面前会失效**，这是选它之前要接受的代价：DO 类必须静态导出、随主模块求值，所以求值抛错会拖垮整个 Worker，而不是只影响自己（插件平时靠动态 `import()` 隔离求值错误，DO 是例外，见[设计决策](./design.md#_3-单-worker-触发构建自部署)的安全阀）；另外含 DO 的 Worker 没有版本预览 URL，部署时的 `/healthz` 健康检查会被跳过，坏版本不会在切流量前被拦下。
 
 卸载同样要手动收尾：类从 bundle 里消失之后，`wrangler.jsonc` 的 `migrations` 里那条 `new_sqlite_classes` 还留着。走 Versions API 的正常部署不受影响，但一旦降级到 `wrangler deploy`，声明了却不存在的类可能被拒（需要补一条 `deleted_classes`）。**这条我没有实测过**，卸载 DO 插件之后留意一下构建日志。
 
@@ -321,18 +323,32 @@ cron: {
 
 `cron` 处理器**没有 session**（不是事件），主动推送用 `ctx.api.sendMessage`。群聊主动消息需要群主在群里打开机器人的「主动消息」权限，见[配置 QQ 开放平台](./deploy-qq#_5-在群里打开权限)。`ctx.api` 上还有 `raw(method, path, body)`（框架未封装的接口直接调，永远可用）与 `group.*`（群管理）。
 
-## 8. HTTP 路由与插件页面
+## 8. 自带 Web 页面与 HTTP 接口
+
+插件可以自己提供网页和 HTTP 接口：`routes` 里声明的路由挂在 `https://<机器人域名>/p/<插件名>/` 下，处理器拿到的是标准 `Request`，返回标准 `Response`，里面照常用 `ctx.kv` / `ctx.db` / `ctx.api`。
 
 ```ts
-ui: { path: '/ui/', title: '我的页面' },   // 面板侧栏出现入口
+ui: { path: '/ui/', title: '我的页面' },   // 面板侧栏「插件页面」下出现入口
 routes: [
-  // auth: 'admin' 接受面板会话或本插件的桥接令牌；默认 public（任何人可访问）
-  { method: 'GET', path: '/ui/*', auth: 'admin', handler: () => new Response('<h1>…</h1>', { headers: { 'content-type': 'text/html' } }) },
+  // auth: 'admin' 接受面板会话或本插件的桥接令牌；不写就是 public，任何人都能访问
+  { method: 'GET', path: '/ui/*', auth: 'admin', handler: () => new Response('<h1>…</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
   { method: 'GET', path: '/api/data', auth: 'admin', handler: async ({ ctx }) => Response.json(await ctx.kv.getJSON('data') ?? {}) },
 ],
 ```
 
-`path` 支持 `:param` 与末尾 `/*` 通配（键为 `*`）。插件页面跑在面板的 sandbox iframe 里，用 `@qqbot/ui-bridge` 拿令牌、主题与 resize，见 `docs/ui.md` 与 `plugins/keyboard` 示例。
+`path` 支持 `:param` 与末尾 `/*` 通配（值在 `params['*']`）。插件被停用时它的路由全部返回 404。
+
+常见的三种用法：
+
+- **面板里的管理页**：声明 `ui` 并配 `auth: 'admin'` 的路由，面板在 sandbox iframe 里打开它，页面用 `/bridge.js` 拿令牌、跟随主题、自动撑高。示例是内置的 `plugins/keyboard`（按键点击记录）与 `plugins/t2i`（渲染测试）。细节见[面板与插件页面](./ui.md#插件页面-解耦方案)。
+- **给所有人看的公开页**：不写 `auth` 的路由谁都能打开，比如 `https://bot.example.com/p/rank/` 的排行榜，把链接发到群里即可。不需要声明 `ui`；想和面板同样的配色，页面里引 `/tokens.css`。
+- **接收外部回调**：公开的 `POST` 路由可以接 GitHub、支付平台这类 webhook，收到后用 `ctx.api.sendMessage` 推到群里。公开路由谁都能调，**签名要自己验**。处理器的 `authenticated` 告诉你这次请求有没有登录，公开路由也能据此区分管理员。
+
+页面简单的话，直接在处理器里返回一段 HTML 字符串，内置插件都是这么做的。要用 Vue / React 这类有构建步骤的前端：
+
+- **构建机不跑前端构建**（只装 `dependencies`、不跑安装脚本），所以前端要在你本地构建好，把产物转成 `serveAssets` 认的资源表（`{ files: { 'index.html': { body, type }, … } }`，二进制用 `encoding: 'base64'`），作为普通模块提交进仓库，再 `serveAssets('/ui/*', assets)` 一行托管。`qqbot-plugin build` 目前不会替你生成这张表，面板自己的 `packages/ui/scripts/pack.mjs` 可以照着改。
+- **`serveAssets` 默认是 `auth: 'admin'`**，而桥接令牌只在打开页面的第一个请求里（`?token=`）：页面再去加载的 JS / CSS 带不上令牌，会 401。所以要么把前端打成**单个 HTML 文件**（脚本、样式都内联），要么静态资源用 `serveAssets('/ui/*', assets, { auth: 'public' })` 公开、只把 `/api/*` 设成 `auth: 'admin'`。
+- 前端产物和插件代码一起打进 Worker，算在整个机器人的脚本体积里（上限见 Cloudflare 官方 limits 页），图片等大文件放 R2 或外链。
 
 ## 9. 平台限额：免费版的硬预算
 
@@ -380,4 +396,4 @@ Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟
 | `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |
 | `ctx.plugin` / `ctx.botId` | 自己的名字与版本 / 机器人 AppID |
 
-有疑问先看三份代码：`templates/plugin/src/index.ts`（起步示例）、`plugins/keyboard`（按键 + 插件页面）、`@qqbot/sdk` 的类型注释（字段级真相）。
+有疑问先看三份代码：[`templates/plugin/src/index.ts`](https://github.com/QFlareBot/QFlareBot/blob/main/templates/plugin/src/index.ts)（起步示例）、[`plugins/keyboard`](https://github.com/QFlareBot/QFlareBot/tree/main/plugins/keyboard)（按键 + 插件页面）、[`@qqbot/sdk`](https://github.com/QFlareBot/QFlareBot/tree/main/packages/sdk/src) 的类型注释（字段级真相）。其他内置插件各演示了什么见[内置插件](./builtin-plugins.md)。

@@ -1,0 +1,40 @@
+name: 问题反馈
+description: 部署、插件或面板出了问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先看一下[快速部署](https://qflarebot.github.io/deploy)和[配置 QQ 开放平台 · 常见问题](https://qflarebot.github.io/deploy-qq#常见问题)。
+
+        **别贴隐私**：`ADMIN_TOKEN`、AppSecret、API token、账户 ID 请打码后再贴。
+  - type: dropdown
+    id: area
+    attributes:
+      label: 哪一块
+      options:
+        - 引导工作流 / 首次部署
+        - 自定义域名 / QQ 开放平台回调
+        - 插件安装、更新、构建
+        - 面板
+        - 插件开发（SDK / 构建工具）
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 做了哪几步、期望看到什么、实际看到什么。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错与日志
+      description: 报错文字、Actions 日志、Workers Builds 构建日志或截图。文字请直接粘贴。
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: 你的 Fork 同步到了哪个提交
+      description: Fork 仓库首页显示的最新提交，或者「与上游相差几个提交」。

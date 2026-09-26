@@ -25,6 +25,13 @@ export default defineConfig({
         ],
       },
       {
+        text: '使用',
+        items: [
+          { text: '内置插件', link: '/builtin-plugins' },
+          { text: '升级与运维', link: '/maintenance' },
+        ],
+      },
+      {
         text: '插件开发',
         items: [
           { text: '插件开发指南', link: '/plugin-guide' },

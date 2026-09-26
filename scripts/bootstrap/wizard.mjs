@@ -547,7 +547,7 @@ server.listen(PORT, '127.0.0.1', async () => {
   try {
     const tunnelUrl = await startTunnel()
     const fullUrl = `${tunnelUrl}/?sid=${sessionId}`
-    const notice = `::notice::🚀 引导向导已就绪：${fullUrl} （请在 run 页 Summary 里点开，跟着网页完成部署）`
+    const notice = `::notice::🚀 引导向导已就绪：${fullUrl} （尽快打开：第一个打开的浏览器会独占向导。Summary 要等这一步结束才显示，别在那里等）`
     console.log(notice)
     if (env.GITHUB_STEP_SUMMARY) {
       await writeFile(

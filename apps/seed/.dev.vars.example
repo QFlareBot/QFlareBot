@@ -1,7 +1,10 @@
 # 复制为 .dev.vars 供 wrangler dev 使用；线上用 `wrangler secret put` 写入
-BOT_APPID=你的AppID
-BOT_SECRET=你的AppSecret
 ADMIN_TOKEN=随机长字符串
+
+# QQ 机器人凭证可以不填，到面板「设置」里保存。填了就优先于面板保存的凭证，
+# 面板上不能再切换或扫码新建机器人
+# BOT_APPID=你的AppID
+# BOT_SECRET=你的AppSecret
 
 # —— 自部署（Worker 触发 Workers Builds 重建；设置步骤见 README）——
 # 构建清单端点 /admin/build-manifest 的专用令牌；不配置时该端点走 ADMIN_TOKEN 鉴权
