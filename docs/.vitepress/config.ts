@@ -15,7 +15,14 @@ export default defineConfig({
       { text: '插件开发', link: '/plugin-guide' },
     ],
     sidebar: [
-      { text: '开始', items: [{ text: '快速部署', link: '/deploy' }] },
+      {
+        text: '开始',
+        items: [
+          { text: '快速部署', link: '/deploy' },
+          { text: '绑定自定义域名', link: '/deploy-domain' },
+          { text: '配置 QQ 开放平台', link: '/deploy-qq' },
+        ],
+      },
       {
         text: '插件开发',
         items: [
