@@ -368,6 +368,12 @@ type InstallOutcome =
 export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
 
 /**
+ * depends 的服务没有提供者。面板批量安装时靠它认出「提供者就在这一批里、按顺序装就行」：
+ * 预检不写 D1，同一批里排在后面的使用者预检时还看不到提供者
+ */
+export const DEPENDENCIES_MISSING = 'dependencies_missing'
+
+/**
  * 声明了 Durable Object 的插件，装进来之前必须先往仓库的 wrangler.jsonc 补一条 migrations。
  *
  * 为什么非拦不可：migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有
@@ -465,7 +471,12 @@ function blockingProblem(inspected: Inspected, deps: AdminDeps): Failure | null 
     (d) => !allNames.has(d) && !deps.registry.providerOf(d) && !services.has(d),
   )
   if (missingDeps.length > 0) {
-    return { ok: false, error: `依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`, status: 400 }
+    return {
+      ok: false,
+      status: 400,
+      code: DEPENDENCIES_MISSING,
+      error: `依赖未满足：${missingDeps.join('、')}（需先安装提供者，或由内置插件提供该服务）`,
+    }
   }
   return null
 }

@@ -52,7 +52,7 @@ function importSpecifiers(code: string): string[] {
 let dir: string
 
 async function writePlugin(source: string, pkg: Record<string, unknown> = {}): Promise<void> {
-  const packageJson = { name: 'qqbot-plugin-demo', version: '1.2.3', type: 'module', ...pkg }
+  const packageJson = { name: 'qflarebot-plugin-demo', version: '1.2.3', type: 'module', ...pkg }
   await writeFile(path.join(dir, 'package.json'), JSON.stringify(packageJson))
   await mkdir(path.join(dir, 'src'), { recursive: true })
   await writeFile(path.join(dir, 'src/index.ts'), source)
@@ -210,7 +210,7 @@ describe('extractPluginManifest', () => {
   })
 
   it('name 与包名不一致时报错', async () => {
-    await writePlugin(PLUGIN_SOURCE, { name: 'qqbot-plugin-other' })
+    await writePlugin(PLUGIN_SOURCE, { name: 'qflarebot-plugin-other' })
     const err: unknown = await extractPluginManifest({ cwd: dir, alias }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ManifestValidationError)
     expect((err as ManifestValidationError).errors).toEqual([
@@ -219,11 +219,16 @@ describe('extractPluginManifest', () => {
   })
 
   it('带 scope 的包名去掉 scope 与前缀后比对', async () => {
-    await writePlugin(PLUGIN_SOURCE, { name: '@me/qqbot-plugin-demo' })
+    await writePlugin(PLUGIN_SOURCE, { name: '@me/qflarebot-plugin-demo' })
     expect((await extractPluginManifest({ cwd: dir, alias })).name).toBe('demo')
   })
 
-  it('包名不带 qqbot-plugin- 前缀时要求与 name 完全一致', async () => {
+  it('改名前的 qqbot-plugin- 前缀照样认', async () => {
+    await writePlugin(PLUGIN_SOURCE, { name: 'qqbot-plugin-demo' })
+    expect((await extractPluginManifest({ cwd: dir, alias })).name).toBe('demo')
+  })
+
+  it('包名不带约定前缀时要求与 name 完全一致', async () => {
     await writePlugin(PLUGIN_SOURCE, { name: 'demo' })
     expect((await extractPluginManifest({ cwd: dir, alias })).name).toBe('demo')
 
@@ -234,10 +239,13 @@ describe('extractPluginManifest', () => {
 
 describe('expectedPluginName', () => {
   it.each([
+    ['qflarebot-plugin-hello', 'hello'],
+    ['@me/qflarebot-plugin-hello', 'hello'],
     ['qqbot-plugin-hello', 'hello'],
     ['@me/qqbot-plugin-hello', 'hello'],
     ['@scope/my-plugin', 'my-plugin'],
     ['hello', 'hello'],
+    ['qflarebot-plugin-', ''],
     ['qqbot-plugin-', ''],
   ])('%s → %s', (pkgName, expected) => {
     expect(expectedPluginName(pkgName)).toBe(expected)

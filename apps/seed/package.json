@@ -9,7 +9,7 @@
     "dev": "pnpm -w --filter @qqbot/ui build && wrangler dev",
     "deploy": "pnpm -w --filter @qqbot/ui build && wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "project": "pnpm -w -r --filter 'qqbot-plugin-*' --filter @qqbot/runtime --filter @qqbot/ui build && qqbot-project build --manifest qqbot.manifest.json --wrangler wrangler.jsonc --out dist",
+    "project": "pnpm -w -r --filter 'qflarebot-plugin-*' --filter @qqbot/runtime --filter @qqbot/ui build && qqbot-project build --manifest qqbot.manifest.json --wrangler wrangler.jsonc --out dist",
     "deploy:projected": "pnpm project && wrangler deploy --config wrangler.generated.jsonc",
     "deploy:check": "wrangler deploy --dry-run --config wrangler.generated.jsonc",
     "manifest:prepare": "node scripts/build-deploy.mjs prepare",
@@ -20,12 +20,12 @@
     "@qqbot/runtime": "workspace:*",
     "@qqbot/sdk": "workspace:*",
     "@qqbot/ui": "workspace:*",
-    "qqbot-plugin-echo": "workspace:*",
-    "qqbot-plugin-image": "workspace:*",
-    "qqbot-plugin-keyboard": "workspace:*",
-    "qqbot-plugin-multi-reply": "workspace:*",
-    "qqbot-plugin-sid": "workspace:*",
-    "qqbot-plugin-t2i": "workspace:*"
+    "qflarebot-plugin-echo": "workspace:*",
+    "qflarebot-plugin-image": "workspace:*",
+    "qflarebot-plugin-keyboard": "workspace:*",
+    "qflarebot-plugin-multi-reply": "workspace:*",
+    "qflarebot-plugin-sid": "workspace:*",
+    "qflarebot-plugin-t2i": "workspace:*"
   },
   "devDependencies": {
     "@qqbot/plugin-cli": "workspace:*",

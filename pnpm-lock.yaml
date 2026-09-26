@@ -38,22 +38,22 @@ importers:
       '@qqbot/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      qqbot-plugin-echo:
+      qflarebot-plugin-echo:
         specifier: workspace:*
         version: link:../../plugins/echo
-      qqbot-plugin-image:
+      qflarebot-plugin-image:
         specifier: workspace:*
         version: link:../../plugins/image
-      qqbot-plugin-keyboard:
+      qflarebot-plugin-keyboard:
         specifier: workspace:*
         version: link:../../plugins/keyboard
-      qqbot-plugin-multi-reply:
+      qflarebot-plugin-multi-reply:
         specifier: workspace:*
         version: link:../../plugins/multi-reply
-      qqbot-plugin-sid:
+      qflarebot-plugin-sid:
         specifier: workspace:*
         version: link:../../plugins/sid
-      qqbot-plugin-t2i:
+      qflarebot-plugin-t2i:
         specifier: workspace:*
         version: link:../../plugins/t2i
     devDependencies:

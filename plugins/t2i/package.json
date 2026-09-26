@@ -1,10 +1,10 @@
 {
-  "name": "qqbot-plugin-t2i",
+  "name": "qflarebot-plugin-t2i",
   "version": "0.1.0",
   "description": "内置插件：AstrBot T2I HTML 渲染服务，导出 t2i 服务给其他插件",
   "license": "MIT",
   "type": "module",
-  "keywords": ["qqbot-plugin"],
+  "keywords": ["qflarebot-plugin"],
   "exports": "./src/index.ts",
   "scripts": {
     "build": "qqbot-plugin build",

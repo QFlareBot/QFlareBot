@@ -13,6 +13,8 @@ export const router = createRouter({
         { path: '', component: () => import('./pages/OverviewPage.vue') },
         { path: 'plugins', component: () => import('./pages/PluginsPage.vue') },
         { path: 'plugins/:name', component: () => import('./pages/PluginDetailPage.vue') },
+        // 不放在 plugins/ 下面：会和叫 market 的插件的详情页撞路由
+        { path: 'market', component: () => import('./pages/MarketPage.vue') },
         { path: 'plugin-ui/:name', component: () => import('./pages/PluginUiPage.vue') },
         { path: 'storage', component: () => import('./pages/StoragePage.vue') },
         { path: 'debug', component: () => import('./pages/DebugPage.vue') },

@@ -71,15 +71,17 @@ async function readPackageJson(cwd: string): Promise<{ name?: string; version?: 
   }
 }
 
-const PLUGIN_PKG_PREFIX = 'qqbot-plugin-'
+/** 约定的包名前缀：`qflarebot-plugin-` 是现在的写法，`qqbot-plugin-` 是改名前的，照样认 */
+const PLUGIN_PKG_PREFIXES = ['qflarebot-plugin-', 'qqbot-plugin-']
 
 /**
- * 由包名推出插件 name：去掉 `@scope/`，再去掉约定的 `qqbot-plugin-` 前缀。
- * `@me/qqbot-plugin-hello` 与 `qqbot-plugin-hello` 都得到 `hello`；不带前缀的包名原样返回。
+ * 由包名推出插件 name：去掉 `@scope/`，再去掉约定的前缀（见 PLUGIN_PKG_PREFIXES）。
+ * `@me/qflarebot-plugin-hello`、`qflarebot-plugin-hello`、`qqbot-plugin-hello` 都得到 `hello`；不带前缀的包名原样返回。
  */
 export function expectedPluginName(pkgName: string): string {
   const unscoped = pkgName.startsWith('@') ? pkgName.slice(pkgName.indexOf('/') + 1) : pkgName
-  return unscoped.startsWith(PLUGIN_PKG_PREFIX) ? unscoped.slice(PLUGIN_PKG_PREFIX.length) : unscoped
+  const prefix = PLUGIN_PKG_PREFIXES.find((p) => unscoped.startsWith(p))
+  return prefix ? unscoped.slice(prefix.length) : unscoped
 }
 
 function isPluginDefinition(value: unknown): value is PluginDefinition<unknown> {
@@ -134,7 +136,7 @@ export async function extractPluginManifest(options: ExtractManifestOptions = {}
     if (manifest.name !== expected) {
       errors.push(
         `name 与包名不一致：package.json 是 "${pkg.name}"，期望 name 为 "${expected}"，实际为 "${manifest.name}"。` +
-          `约定包名为 qqbot-plugin-<name>，definePlugin 里用去掉前缀的短名`,
+          `约定包名为 qflarebot-plugin-<name>，definePlugin 里用去掉前缀的短名`,
       )
     }
   }

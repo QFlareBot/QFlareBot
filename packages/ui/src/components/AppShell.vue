@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, Database, FlaskConical, LayoutDashboard, LogOut, Moon, PanelsTopLeft, Settings, Sun } from 'lucide-vue-next'
+import { Blocks, Database, FlaskConical, LayoutDashboard, LogOut, Moon, PanelsTopLeft, Settings, Store, Sun } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth.js'
@@ -14,6 +14,7 @@ const router = useRouter()
 const nav = [
   { to: '/', label: '概览', icon: LayoutDashboard },
   { to: '/plugins', label: '插件', icon: Blocks },
+  { to: '/market', label: '市场', icon: Store },
   { to: '/storage', label: '存储', icon: Database },
   { to: '/debug', label: '调试', icon: FlaskConical },
   { to: '/settings', label: '设置', icon: Settings },

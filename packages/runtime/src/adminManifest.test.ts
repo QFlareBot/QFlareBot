@@ -1067,11 +1067,12 @@ describe('dryRun 预检', () => {
     expect(data.durableObjects.message).toContain('"new_sqlite_classes": ["P_game_Room", "P_game_Lobby"]')
   })
 
-  it('硬规则照旧拒绝：依赖缺失', async () => {
+  it('硬规则照旧拒绝：依赖缺失，带上 code 供面板批量安装识别', async () => {
     const { call } = setup()
     const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-needy@c3d4e5f6a7', dryRun: true })
     expect(res.status).toBe(400)
     expect(data.error).toContain('依赖未满足：greet')
+    expect(data.code).toBe('dependencies_missing')
   })
 })
 

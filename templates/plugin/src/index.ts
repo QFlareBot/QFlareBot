@@ -6,7 +6,7 @@ export interface Config {
 }
 
 export default definePlugin<Config>({
-  // 包名去掉 qqbot-plugin- 前缀的短名，同时是 KV 前缀、D1 表前缀与路由 /p/<name>/
+  // 包名去掉 qflarebot-plugin- 前缀的短名，同时是 KV 前缀、D1 表前缀与路由 /p/<name>/
   // 构建时会校验它与 package.json 的 name 对得上
   name: 'example',
   displayName: '示例插件',

@@ -1,10 +1,10 @@
 {
-  "name": "qqbot-plugin-keyboard",
+  "name": "qflarebot-plugin-keyboard",
   "version": "0.1.0",
   "description": "示例插件：内嵌按键面板与回调处理",
   "license": "MIT",
   "type": "module",
-  "keywords": ["qqbot-plugin"],
+  "keywords": ["qflarebot-plugin"],
   "exports": "./src/index.ts",
   "scripts": {
     "build": "qqbot-plugin build",

@@ -1,11 +1,11 @@
 {
-  "name": "qqbot-plugin-example",
+  "name": "qflarebot-plugin-example",
   "version": "0.1.0",
   "description": "QQ 机器人插件示例：命令、正则与事件",
   "license": "MIT",
   "type": "module",
   "keywords": [
-    "qqbot-plugin"
+    "qflarebot-plugin"
   ],
   "scripts": {
     "build": "qqbot-plugin build",

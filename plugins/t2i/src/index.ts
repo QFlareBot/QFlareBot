@@ -4,7 +4,7 @@ import type { T2IConfig } from './t2i.js'
 import { DEFAULT_T2I_URL } from './t2i.js'
 import { PAGE_HTML } from './page.js'
 
-// 供其他插件 `import type { T2I, ... } from 'qqbot-plugin-t2i'` 使用
+// 供其他插件 `import type { T2I, ... } from 'qflarebot-plugin-t2i'` 使用
 export { DEFAULT_T2I_URL, T2I } from './t2i.js'
 export type {
   T2IConfig,

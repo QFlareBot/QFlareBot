@@ -41,6 +41,9 @@ export class ApiError extends Error {
 /** 插件声明了 Durable Object，需要先往仓库 wrangler.jsonc 补 migrations 再确认安装 */
 export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
 
+/** depends 的服务没人提供；批量安装时提供者可能就在同一批里（老版本 Worker 不带这个 code） */
+export const DEPENDENCIES_MISSING = 'dependencies_missing'
+
 export const session = {
   get: () => localStorage.getItem(SESSION_KEY),
   set: (token: string) => localStorage.setItem(SESSION_KEY, token),

@@ -1,10 +1,10 @@
 {
-  "name": "qqbot-plugin-multi-reply",
+  "name": "qflarebot-plugin-multi-reply",
   "version": "0.1.0",
   "description": "示例插件：同一条消息连续被动回复（msg_seq）",
   "license": "MIT",
   "type": "module",
-  "keywords": ["qqbot-plugin"],
+  "keywords": ["qflarebot-plugin"],
   "exports": "./src/index.ts",
   "scripts": {
     "build": "qqbot-plugin build",

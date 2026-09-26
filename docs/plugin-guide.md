@@ -13,7 +13,7 @@ interface Config {
 }
 
 export default definePlugin<Config>({
-  // 包名 qqbot-plugin-hello 去掉前缀的短名；构建时校验与 package.json 一致
+  // 包名 qflarebot-plugin-hello 去掉前缀的短名；构建时校验与 package.json 一致
   name: 'hello',
   displayName: '问好',
   description: '最小示例：命令 + 配置 + KV',
@@ -59,7 +59,7 @@ export default definePlugin<Config>({
 ```bash
 git clone https://github.com/QFlareBot/QFlareBot
 (cd QFlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
-cd qqbot-plugin-hello    # 与 QFlareBot 同级
+cd qflarebot-plugin-hello    # 与 QFlareBot 同级
 npm install
 
 npm run build            # 生成 dist/plugin.js + dist/manifest.json
@@ -73,6 +73,8 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 构建失败时线上保持上一次成功的版本，失败原因回报到面板：插件页「未上线的改动」列出所有写进了清单、却还没在线上生效的安装 / 升级 / 卸载，从没装上的可以直接卸载，升级失败的可以改回线上那一版。
 
+面板的「市场」页列出[插件目录](./market.md)里的插件，勾选几个一起装：逐个预检，按依赖顺序写进清单，最后只构建一次。写好了想让别人用：见[发布插件](./publish.md)，向插件目录提一个 PR。
+
 ## 2. 规则
 
 - **零运行时 import**：插件不 import 运行时，所有能力从处理器入参的 `ctx` / `session` 上取。`cloudflare:workers` 需在处理器内部 `import()`。
@@ -83,7 +85,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   3. 能在 Workers 里运行：不依赖 Node 内置模块（`fs`、`net`、`child_process`……，构建时就会报找不到）、不用 `eval` / `new Function`（运行到那一行才报错）。另外依赖的体积和初始化耗时算在全机器人共享的 CPU 里（见第 9 节），别拿大库做小事；只在浏览器里能加载的包（顶层就碰 `window` 之类）要在处理器里按需 `import()`，因为构建机是在 Node 里执行入口抽清单的。
 
   构建机只装插件自己声明的依赖，而且在机器人仓库外面构建：以前「先在机器人仓库 `pnpm add` 再重建」的做法不再有效。没有第三方依赖的插件不走安装，与以前一样。
-- **命名**：包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。
+- **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
 

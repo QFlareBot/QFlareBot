@@ -1,10 +1,10 @@
 {
-  "name": "qqbot-plugin-image",
+  "name": "qflarebot-plugin-image",
   "version": "0.1.0",
   "description": "示例插件：富媒体图片发送",
   "license": "MIT",
   "type": "module",
-  "keywords": ["qqbot-plugin"],
+  "keywords": ["qflarebot-plugin"],
   "exports": "./src/index.ts",
   "scripts": {
     "build": "qqbot-plugin build",

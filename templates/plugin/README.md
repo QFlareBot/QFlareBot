@@ -1,4 +1,4 @@
-# qqbot-plugin-example
+# qflarebot-plugin-example
 
 运行在 Cloudflare Workers 上的 QQ 机器人插件模板。复制本目录、改掉包名即可开始开发。
 
@@ -11,7 +11,7 @@
 ```bash
 git clone https://github.com/QFlareBot/QFlareBot
 (cd QFlareBot && pnpm install --filter '@qqbot/plugin-cli...' && pnpm --filter '@qqbot/plugin-cli...' build)
-cd qqbot-plugin-hello    # 与 QFlareBot 同级
+cd qflarebot-plugin-hello    # 与 QFlareBot 同级
 npm install
 ```
 
@@ -23,16 +23,16 @@ CI 按同样的布局拉取并构建 QFlareBot。机器人的构建机不装 `de
 - 模板本身是 MIT，随便复制；复制后把 `LICENSE` 的署名和 `package.json` 的 `license` 换成你自己的（协议不限，不必跟框架一样用 GPL）。
 ### 命名约定
 
-仓库名 = 包名 = `qqbot-plugin-<name>`（或 `@scope/qqbot-plugin-<name>`），`definePlugin({ name })` 用**去掉前缀的短名**：
+仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`definePlugin({ name })` 用**去掉前缀的短名**：
 
 | package.json 的 `name` | `definePlugin({ name })` |
 | --- | --- |
-| `qqbot-plugin-hello` | `hello` |
-| `@me/qqbot-plugin-hello` | `hello` |
+| `qflarebot-plugin-hello` | `hello` |
+| `@me/qflarebot-plugin-hello` | `hello` |
 
 `name` 只能用小写字母、数字、`-`、`_`，因为它同时是路由前缀 `/p/<name>/`、KV 前缀 `p:<name>:`、D1 表前缀 `p_<name>_`，也是安装时的撞名检测键。`qqbot-plugin build` 会校验这层关系，不一致直接报错。
 
-不带 `qqbot-plugin-` 前缀也行，但那样包名必须与 `name` 完全相同。
+改名前的 `qqbot-plugin-<name>` 前缀照样认。不带前缀也能构建，但那样包名必须与 `name` 完全相同，也登记不进[插件目录](https://github.com/QFlareBot/plugins)。
 
 ### 关于 `permissions`
 
@@ -85,7 +85,7 @@ CI（`.github/workflows/ci.yml`）在每次 push 时构建、校验声明清单�
 ```bash
 curl -X POST https://<机器人域名>/admin/manifest/plugins \
   -H "Authorization: Bearer <管理密钥>" -H "content-type: application/json" \
-  -d '{"source": "git:me/qqbot-plugin-example@a1b2c3d4e5f6"}'
+  -d '{"source": "git:me/qflarebot-plugin-example@a1b2c3d4e5f6"}'
 ```
 
 只支持**公开的** GitHub 仓库：安装时匿名读仓库里的 `manifest.json`，构建机也是匿名下载源码。

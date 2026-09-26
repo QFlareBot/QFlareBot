@@ -13,6 +13,7 @@ export default defineConfig({
     nav: [
       { text: '快速部署', link: '/deploy' },
       { text: '插件开发', link: '/plugin-guide' },
+      { text: '插件市场', link: '/market' },
     ],
     sidebar: [
       {
@@ -29,6 +30,8 @@ export default defineConfig({
           { text: '插件开发指南', link: '/plugin-guide' },
           { text: '平台能力对照', link: '/capabilities' },
           { text: '面板与插件页面', link: '/ui' },
+          { text: '发布插件', link: '/publish' },
+          { text: '插件市场', link: '/market' },
         ],
       },
       {
