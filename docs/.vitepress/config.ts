@@ -24,7 +24,13 @@ export default defineConfig({
           { text: '面板与插件页面', link: '/ui' },
         ],
       },
-      { text: '深入', items: [{ text: '设计决策', link: '/design' }] },
+      {
+        text: '深入',
+        items: [
+          { text: '设计决策', link: '/design' },
+          { text: '参与开发', link: '/development' },
+        ],
+      },
     ],
     socialLinks: [{ icon: 'github', link: repo }],
     editLink: { pattern: `${repo}/edit/main/docs/:path`, text: '在 GitHub 上编辑此页' },
