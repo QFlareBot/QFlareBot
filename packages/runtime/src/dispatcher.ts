@@ -197,7 +197,7 @@ function collectCandidates(
     ? parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
     : null
 
-  /** 投递回复并检查结果：SendResult 被丢掉时只剩 rt_events 里一个失败计数，定位不到是谁、为什么 */
+  /** 投递回复并检查结果：SendResult 被丢掉时只剩事件摘要里一个失败计数，定位不到是谁、为什么 */
   const send = async (plugin: string, stage: string, payload: ReplyPayload): Promise<void> => {
     for (const result of await deliverReply(session, payload)) {
       if (!result.ok) hooks.onSendFailure(plugin, stage, result)
@@ -365,8 +365,8 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   /**
    * 平台拒收（限频、内容审核、令牌失效）。
    *
-   * 出站调用本身是有计数的：scope.ts 的 counting sender 会把失败累加进 rt_events.failed，
-   * 所以「这次事件有一条没发出去」在库里查得到。缺的是**归属与原因**——不知道是哪个插件、
+   * 出站调用本身是有计数的：scope.ts 的 counting sender 会把失败累加进事件摘要的 failed，
+   * 所以「这次事件有一条没发出去」在日志里查得到。缺的是**归属与原因**——不知道是哪个插件、
    * 哪条规则，也不知道平台回了什么状态码，wrangler tail 上更是一行都没有。这里补上。
    */
   const failSend = (plugin: string, stage: string, result: SendResult) => {

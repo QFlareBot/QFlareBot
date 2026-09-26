@@ -3,7 +3,12 @@ import type { DispatchReport } from './dispatcher.js'
 import { errorInfo } from './logger.js'
 import type { RuntimeEnv } from './types.js'
 
-/** 每个事件一行分发摘要，供面板概览与调试页查询；不存完整原文 */
+/**
+ * 每个事件一行分发摘要，供面板概览查询；不存完整原文。
+ *
+ * 平时事件只进 Workers Logs（见 logs.ts），D1 一行都不写。面板点了「实时调试」才写进
+ * 这里：最多 LIVE_SLOTS 条，满了覆盖最老的一条，带消息正文。
+ */
 export interface EventRecord {
   id: string
   ts: number
@@ -19,26 +24,33 @@ export interface EventRecord {
   failed: number
 }
 
-const TABLE = 'rt_events'
+/**
+ * 旧的事件表 rt_events（一行一个事件，随机裁到 2000 条）已停写。表留着：回滚到旧版本时它还要用，
+ * 表结构只增不删。
+ */
+const TABLE = 'rt_live_events'
+/** 实时调试开关与序号，只有 id = 1 一行 */
+const STATE_TABLE = 'rt_live_debug'
 const CONTENT_LIMIT = 200
-const MAX_ROWS = 2000
+/** 最多留这么多条，第 n 条写进 n % LIVE_SLOTS 号格子，覆盖的一定是最老的那条 */
+export const LIVE_SLOTS = 50
+/** 面板每 LIVE_RENEW_MS 续一次期；续期停了（页面关掉、断网、切到后台）最多这么久就不再写 */
+export const LIVE_TTL_MS = 60_000
 
-const SCHEMA = `CREATE TABLE IF NOT EXISTS ${TABLE} (
-  id TEXT PRIMARY KEY,
-  ts INTEGER NOT NULL,
-  event TEXT NOT NULL,
-  scene TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  content TEXT NOT NULL,
-  matched TEXT NOT NULL,
-  errors TEXT NOT NULL,
-  outbox INTEGER NOT NULL,
-  failed INTEGER NOT NULL DEFAULT 0
-)`
+const COLUMNS = ['id', 'ts', 'event', 'scene', 'user_id', 'target_id', 'content', 'matched', 'errors', 'outbox', 'failed'] as const
 
-/** 后加的列：CREATE TABLE IF NOT EXISTS 不会补列，这里逐个尝试 ADD COLUMN，已存在则忽略 */
-const ADDED_COLUMNS = ['failed INTEGER NOT NULL DEFAULT 0']
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS ${STATE_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), until INTEGER NOT NULL, seq INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS ${TABLE} (slot INTEGER PRIMARY KEY, seq INTEGER NOT NULL, id TEXT NOT NULL, ts INTEGER NOT NULL, event TEXT NOT NULL, scene TEXT NOT NULL, user_id TEXT NOT NULL, target_id TEXT NOT NULL, content TEXT NOT NULL, matched TEXT NOT NULL, errors TEXT NOT NULL, outbox INTEGER NOT NULL, failed INTEGER NOT NULL)`,
+  `INSERT OR IGNORE INTO ${STATE_TABLE} (id, until, seq) VALUES (1, 0, 0)`,
+]
+
+/**
+ * 开着实时调试才写：先把序号加一，再按新序号写进对应格子。两条放进同一个 batch（D1 当事务执行），
+ * 并发的事件拿到的序号不会重复。没开时两条都改动 0 行，不花写入额度，也不用先单独读一次开关
+ */
+const BUMP_SQL = `UPDATE ${STATE_TABLE} SET seq = seq + 1 WHERE id = 1 AND until > ?`
+const INSERT_SQL = `INSERT INTO ${TABLE} (slot, seq, ${COLUMNS.join(', ')}) SELECT seq % ${LIVE_SLOTS}, seq, ${COLUMNS.map(() => '?').join(', ')} FROM ${STATE_TABLE} WHERE id = 1 AND until > ? ON CONFLICT(slot) DO UPDATE SET seq = excluded.seq, ${COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')}`
 
 let schemaReady: Promise<void> | null = null
 
@@ -47,13 +59,7 @@ function ensureSchema(env: RuntimeEnv): Promise<void> | null {
   const db = env.DB
   if (!db) return null
   schemaReady ??= (async () => {
-    await db.exec(SCHEMA.replace(/\n\s*/g, ' '))
-    await db.exec(`CREATE INDEX IF NOT EXISTS ${TABLE}_ts ON ${TABLE}(ts DESC)`)
-    for (const column of ADDED_COLUMNS) {
-      await db.exec(`ALTER TABLE ${TABLE} ADD COLUMN ${column}`).catch((err: unknown) => {
-        if (!String(err).includes('duplicate column')) throw err
-      })
-    }
+    for (const sql of SCHEMA) await db.exec(sql)
   })().catch((err) => {
     schemaReady = null
     throw err
@@ -79,12 +85,12 @@ export async function recordEvent(env: RuntimeEnv, input: RecordInput, logger: L
   if (!ready || !env.DB) return
   try {
     await ready
-    await env.DB.prepare(
-      `INSERT OR REPLACE INTO ${TABLE} (id, ts, event, scene, user_id, target_id, content, matched, errors, outbox, failed) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    )
-      .bind(
+    const now = Date.now()
+    await env.DB.batch([
+      env.DB.prepare(BUMP_SQL).bind(now),
+      env.DB.prepare(INSERT_SQL).bind(
         input.id,
-        Date.now(),
+        now,
         input.event,
         input.scene,
         input.userId,
@@ -94,19 +100,22 @@ export async function recordEvent(env: RuntimeEnv, input: RecordInput, logger: L
         JSON.stringify(input.report.errors),
         input.outbox,
         input.failed,
-      )
-      .run()
-    // 1% 概率顺手裁掉最老的记录，避免表无限增长
-    if (Math.random() < 0.01) {
-      await env.DB.prepare(
-        `DELETE FROM ${TABLE} WHERE id IN (SELECT id FROM ${TABLE} ORDER BY ts DESC LIMIT -1 OFFSET ?)`,
-      )
-        .bind(MAX_ROWS)
-        .run()
-    }
+        now,
+      ),
+    ])
   } catch (err) {
-    logger.warn('事件记录写入失败', errorInfo(err))
+    logger.warn('实时调试记录写入失败', errorInfo(err))
   }
+}
+
+/** 开启（续期）或关闭实时调试；返回写到什么时候为止，关闭时为 0 */
+export async function setLiveDebug(env: RuntimeEnv, on: boolean): Promise<number | null> {
+  const ready = ensureSchema(env)
+  if (!ready || !env.DB) return null
+  await ready
+  const until = on ? Date.now() + LIVE_TTL_MS : 0
+  await env.DB.prepare(`UPDATE ${STATE_TABLE} SET until = ? WHERE id = 1`).bind(until).run()
+  return until
 }
 
 export async function listEvents(
@@ -116,28 +125,13 @@ export async function listEvents(
   const ready = ensureSchema(env)
   if (!ready || !env.DB) return []
   await ready
-  const limit = Math.min(200, Math.max(1, options.limit ?? 50))
+  const limit = Math.min(LIVE_SLOTS, Math.max(1, options.limit ?? LIVE_SLOTS))
+  const fields = COLUMNS.join(', ')
   const stmt = options.before
-    ? env.DB.prepare(`SELECT * FROM ${TABLE} WHERE ts < ? ORDER BY ts DESC LIMIT ?`).bind(options.before, limit)
-    : env.DB.prepare(`SELECT * FROM ${TABLE} ORDER BY ts DESC LIMIT ?`).bind(limit)
+    ? env.DB.prepare(`SELECT ${fields} FROM ${TABLE} WHERE ts < ? ORDER BY seq DESC LIMIT ?`).bind(options.before, limit)
+    : env.DB.prepare(`SELECT ${fields} FROM ${TABLE} ORDER BY seq DESC LIMIT ?`).bind(limit)
   const { results } = await stmt.all<EventRecord>()
   return results
-}
-
-export async function eventStats(env: RuntimeEnv): Promise<{ total: number; last24h: number; errors24h: number } | null> {
-  const ready = ensureSchema(env)
-  if (!ready || !env.DB) return null
-  await ready
-  const since = Date.now() - 24 * 3600 * 1000
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS last24h,
-            SUM(CASE WHEN ts >= ? AND (errors != '[]' OR failed > 0) THEN 1 ELSE 0 END) AS errors24h
-     FROM ${TABLE}`,
-  )
-    .bind(since, since)
-    .first<{ total: number; last24h: number | null; errors24h: number | null }>()
-  return { total: row?.total ?? 0, last24h: row?.last24h ?? 0, errors24h: row?.errors24h ?? 0 }
 }
 
 export async function clearEvents(env: RuntimeEnv): Promise<void> {

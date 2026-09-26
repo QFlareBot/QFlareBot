@@ -29,18 +29,32 @@ export function createKV(): KVNamespace & { readonly store: Map<string, string> 
   return kv as unknown as KVNamespace & { readonly store: Map<string, string> }
 }
 
+interface FakeD1Extras {
+  /** 实时调试记录表 rt_live_events：格子号 → 行（含 seq） */
+  readonly rows: Array<Record<string, unknown>>
+  /** 去重格子 rt_seen_ring：格子号 → 事件 id */
+  readonly ring: Map<number, string>
+  /** 实时调试开关 rt_live_debug 那一行 */
+  readonly live: { until: number; seq: number }
+  /** 升级前的旧去重表 rt_seen_events；null 表示这个库从没建过它 */
+  readonly legacySeen: Array<{ id: string; ts: number }> | null
+}
+
 /**
- * 极简假 D1：只认运行时 events.ts 与 dedupe.ts 用到的几条语句，把行存进数组。
- * 其他 SQL 直接抛错，避免测试静默通过。
+ * 极简假 D1：只认运行时 events.ts 与 dedupe.ts 用到的几条语句。其他 SQL 直接抛错，避免测试静默通过。
  *
- * 注意它只能验证语句的**逻辑**（冲突时 changes 为 0），证明不了 D1 在并发
- * isolate 下的原子性——那是平台保证，只有真 D1 才测得到。
+ * 注意它只能验证语句的**逻辑**（格子里已是同一个 id 时 changes 为 0、开关关着时一行不写），
+ * 证明不了 D1 在并发 isolate 下的原子性——那是平台保证，只有真 D1 才测得到。
+ *
+ * `legacySeen` 模拟升级前的老库：旧去重表里还留着几行。
  */
-export function createD1(): D1Database & { readonly rows: Array<Record<string, unknown>> } {
-  const rows: Array<Record<string, unknown>> = []
+export function createD1(options: { legacySeen?: Array<{ id: string; ts: number }> } = {}): D1Database & FakeD1Extras {
+  const slots = new Map<number, Record<string, unknown>>()
+  const ring = new Map<number, string>()
+  const live = { until: 0, seq: 0 }
+  const legacySeen = options.legacySeen ? [...options.legacySeen] : null
   const columns = ['id', 'ts', 'event', 'scene', 'user_id', 'target_id', 'content', 'matched', 'errors', 'outbox', 'failed']
-  /** 去重表与事件表分开存，两者都以 id 为主键 */
-  const seen: Array<Record<string, unknown>> = []
+  const noLegacy = () => new Error('D1_ERROR: no such table: rt_seen_events: SQLITE_ERROR')
   const prepare = (sql: string) => {
     let params: unknown[] = []
     const stmt = {
@@ -49,56 +63,77 @@ export function createD1(): D1Database & { readonly rows: Array<Record<string, u
         return stmt
       },
       async run() {
-        if (sql.startsWith('INSERT OR REPLACE')) {
-          const row = Object.fromEntries(columns.map((c, i) => [c, params[i]]))
-          const i = rows.findIndex((r) => r.id === row.id)
-          if (i >= 0) rows[i] = row
-          else rows.push(row)
+        // 格子里已经是这个 id 就不改，changes 为 0——dedupe 靠这个语义判断是不是首次
+        if (sql.startsWith('INSERT INTO rt_seen_ring')) {
+          const [slot, id] = params as [number, string]
+          if (ring.get(slot) === id) return { meta: { changes: 0 } }
+          ring.set(slot, id)
           return { meta: { changes: 1 } }
         }
-        // 主键冲突即忽略，changes 为 0——dedupe 靠这个语义判断是不是首次
-        if (sql.startsWith('INSERT OR IGNORE')) {
-          const [id, ts] = params as [string, number]
-          if (seen.some((r) => r.id === id)) return { meta: { changes: 0 } }
-          seen.push({ id, ts })
-          return { meta: { changes: 1 } }
-        }
-        if (sql.includes('DELETE FROM rt_seen_events')) {
+        if (sql.startsWith('DELETE FROM rt_seen_events WHERE ts < ?')) {
+          if (!legacySeen) throw noLegacy()
           const cutoff = params[0] as number
-          const before = seen.length
-          for (let i = seen.length - 1; i >= 0; i--) {
-            if ((seen[i]!.ts as number) < cutoff) seen.splice(i, 1)
-          }
-          return { meta: { changes: before - seen.length } }
+          const before = legacySeen.length
+          for (let i = legacySeen.length - 1; i >= 0; i--) if (legacySeen[i]!.ts < cutoff) legacySeen.splice(i, 1)
+          return { meta: { changes: before - legacySeen.length } }
         }
-        if (sql.startsWith('DELETE FROM')) return { meta: { changes: 0 } }
+        if (sql.startsWith('UPDATE rt_live_debug SET seq = seq + 1 WHERE id = 1 AND until > ?')) {
+          if (!(live.until > (params[0] as number))) return { meta: { changes: 0 } }
+          live.seq++
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('INSERT INTO rt_live_events')) {
+          if (!(live.until > (params[columns.length] as number))) return { meta: { changes: 0 } }
+          slots.set(live.seq % 50, { slot: live.seq % 50, seq: live.seq, ...Object.fromEntries(columns.map((c, i) => [c, params[i]])) })
+          return { meta: { changes: 1 } }
+        }
+        if (sql.startsWith('UPDATE rt_live_debug SET until = ? WHERE id = 1')) {
+          live.until = params[0] as number
+          return { meta: { changes: 1 } }
+        }
         throw new Error(`fake D1 不支持：${sql}`)
       },
       async all() {
-        if (!sql.startsWith('SELECT *')) throw new Error(`fake D1 不支持：${sql}`)
-        const before = sql.includes('ts <') ? (params.shift() as number) : Infinity
-        const limit = params[0] as number
-        const results = [...rows].filter((r) => (r.ts as number) < before).sort((a, b) => (b.ts as number) - (a.ts as number)).slice(0, limit)
+        if (!sql.includes('FROM rt_live_events')) throw new Error(`fake D1 不支持：${sql}`)
+        const before = sql.includes('ts <') ? (params[0] as number) : Infinity
+        const limit = params.at(-1) as number
+        const results = [...slots.values()]
+          .filter((r) => (r.ts as number) < before)
+          .sort((a, b) => (b.seq as number) - (a.seq as number))
+          .slice(0, limit)
+          .map(({ slot: _slot, seq: _seq, ...row }) => row)
         return { results }
       },
       async first() {
-        if (!sql.startsWith('SELECT COUNT')) throw new Error(`fake D1 不支持：${sql}`)
-        const since = params[0] as number
-        const recent = rows.filter((r) => (r.ts as number) >= since)
-        return { total: rows.length, last24h: recent.length, errors24h: recent.filter((r) => r.errors !== '[]' || (r.failed as number) > 0).length }
+        if (sql.startsWith('SELECT COUNT(*) AS n FROM rt_seen_events')) {
+          if (!legacySeen) throw noLegacy()
+          return { n: legacySeen.length }
+        }
+        throw new Error(`fake D1 不支持：${sql}`)
       },
     }
     return stmt
   }
   return {
-    rows,
+    get rows() {
+      return [...slots.values()]
+    },
+    ring,
+    live,
+    legacySeen,
     prepare,
-    async exec() {
+    async exec(sql: string) {
+      if (sql === 'DELETE FROM rt_live_events') slots.clear()
       return { count: 0, duration: 0 }
     },
-    batch: async () => [],
+    // D1 的 batch 在一个事务里按顺序执行
+    async batch(statements: Array<{ run(): Promise<unknown> }>) {
+      const results = []
+      for (const s of statements) results.push(await s.run())
+      return results
+    },
     dump: async () => new ArrayBuffer(0),
-  } as unknown as D1Database & { readonly rows: Array<Record<string, unknown>> }
+  } as unknown as D1Database & FakeD1Extras
 }
 
 export function createExecutionContext(): ExecutionContext & { flush(): Promise<void> } {
@@ -207,7 +242,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
           return { meta: { changes: 1 } }
         }
         if (sql.startsWith('DELETE FROM rt_installs')) return { meta: { changes: 0 } }
-        // Cron 顺手清去重表；这个假库不存事件，删零行即可
+        // Cron 顺手清升级前的旧去重表；这个假库不存事件，删零行即可（随后的 COUNT 走下面的 first）
         if (sql.startsWith('DELETE FROM rt_seen_events')) return { meta: { changes: 0 } }
         if (sql.startsWith('DELETE FROM rt_manifest_plugins')) {
           plugins.delete(params[0] as string)

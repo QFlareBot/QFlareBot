@@ -10,7 +10,8 @@ ADMIN_TOKEN=随机长字符串
 # 构建清单端点 /admin/build-manifest 的专用令牌；不配置时该端点走 ADMIN_TOKEN 鉴权
 # BUILD_TOKEN=随机长字符串
 # CF_ACCOUNT_ID=Cloudflare 账号 ID
-# CF_BUILDS_TOKEN=user-scoped API token（Workers Builds Configuration Edit + Workers Scripts Read）
+# CF_BUILDS_TOKEN=user-scoped API token（Workers Builds Configuration Edit + Workers Scripts Read；
+#   再加 Workers Observability Edit，面板才能从 Workers Logs 读最近事件）
 # CF_WORKER_TAG / CF_TRIGGER_UUID 可省略：运行时按 vars.WORKER_NAME 自发现并缓存进 KV
 #   （要求仓库已连接 Workers Builds）。想写死：tag 是 GET /accounts/.../workers/scripts 的 tag 字段（id 是名字）
 # CF_BUILD_BRANCH 可省略：默认用 Workers Builds 里连接仓库时选的生产分支，查不到才用 main

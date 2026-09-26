@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { claimEvent, pruneSeenEvents, resetDedupeSchema } from './dedupe.js'
+import { claimEvent, dedupeSlot, pruneSeenEvents, resetDedupeSchema } from './dedupe.js'
 import { createD1, createKV } from './testing/mocks.js'
 import type { RuntimeEnv } from './types.js'
 
@@ -58,14 +58,59 @@ describe('claimEvent（无 D1 时的 KV 降级）', () => {
   })
 })
 
-describe('pruneSeenEvents', () => {
-  it('删掉超过保留期的行，保留期内的不动', async () => {
+describe('去重格子', () => {
+  /** 找一个和 base 落在同一格子的 id */
+  function collidingWith(base: string): string {
+    const slot = dedupeSlot(base)
+    for (let i = 0; ; i++) if (dedupeSlot(`c-${i}`) === slot) return `c-${i}`
+  }
+
+  it('格子号稳定且在范围内', () => {
+    expect(dedupeSlot('GROUP_MESSAGE_CREATE:abc')).toBe(dedupeSlot('GROUP_MESSAGE_CREATE:abc'))
+    for (const id of ['', 'a', '中文 id', 'x'.repeat(500)]) {
+      expect(dedupeSlot(id)).toBeGreaterThanOrEqual(0)
+      expect(dedupeSlot(id)).toBeLessThan(65536)
+    }
+  })
+
+  it('每个事件只占一个格子，不随事件数增长', async () => {
+    const env = { KV: createKV(), DB: createD1() } as unknown as RuntimeEnv & { DB: ReturnType<typeof createD1> }
+    for (let i = 0; i < 100; i++) await claimEvent(env, `evt-${i}`, 600)
+    await claimEvent(env, 'evt-0', 600)
+    expect(env.DB.ring.size).toBeLessThanOrEqual(100)
+  })
+
+  it('撞上同一格子时只会重复处理，不会把新事件误判成重复', async () => {
     const env = envWithD1()
-    await claimEvent(env, 'old', 600)
-    await claimEvent(env, 'fresh', 600)
-    // 保留期 0 会被抬到 60 秒，此时两行都还很新
+    const other = collidingWith('a')
+    expect(await claimEvent(env, 'a', 600)).toBe(true)
+    expect(await claimEvent(env, other, 600)).toBe(true)
+    // a 被挤掉了：它的重投会被当成新事件
+    expect(await claimEvent(env, 'a', 600)).toBe(true)
+    expect(await claimEvent(env, 'a', 600)).toBe(false)
+  })
+})
+
+describe('pruneSeenEvents（清升级前的旧去重表）', () => {
+  it('删掉超过保留期的行，保留期内的不动', async () => {
+    const now = Date.now()
+    const db = createD1({ legacySeen: [{ id: 'old', ts: now - 3600_000 }, { id: 'fresh', ts: now }] })
+    const env = { KV: createKV(), DB: db } as unknown as RuntimeEnv
+    expect(await pruneSeenEvents(env, 600)).toBe(1)
+    expect(db.legacySeen).toEqual([{ id: 'fresh', ts: now }])
+  })
+
+  it('清空之后不再查', async () => {
+    const db = createD1({ legacySeen: [] })
+    const env = { KV: createKV(), DB: db } as unknown as RuntimeEnv
     expect(await pruneSeenEvents(env, 600)).toBe(0)
-    expect(await claimEvent(env, 'old', 600)).toBe(false)
+    db.legacySeen!.push({ id: 'late', ts: 0 })
+    expect(await pruneSeenEvents(env, 600)).toBe(0)
+    expect(db.legacySeen).toHaveLength(1)
+  })
+
+  it('新部署没有旧表时是空操作', async () => {
+    expect(await pruneSeenEvents(envWithD1(), 600)).toBe(0)
   })
 
   it('没有 D1 时是空操作', async () => {

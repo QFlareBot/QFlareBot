@@ -4,7 +4,7 @@ import type { AssetBundle } from './assets.js'
 /** Worker 绑定：种子的 wrangler.jsonc 与投影器生成的元数据都遵循这些名字 */
 export interface RuntimeEnv {
   KV: KVNamespace
-  /** 可选：缺省时事件记录关闭、插件 ctx.db 调用抛错（免费版 D1 配额有限） */
+  /** 可选：缺省时去重退回 KV、实时调试不可用、插件 ctx.db 调用抛错（免费版 D1 配额有限） */
   DB?: D1Database
   R2?: R2Bucket
   /** 优先用 secret；未设置时回退到 KV 中面板保存的配置 */
@@ -17,7 +17,10 @@ export interface RuntimeEnv {
   /** —— 自部署：由 Worker 触发 Workers Builds 重建（见 seed README 的设置步骤）—— */
   /** Cloudflare 账号 ID */
   CF_ACCOUNT_ID?: string
-  /** Builds API 的 user-scoped API token（权限：Workers Builds Configuration Edit + Workers Scripts Read） */
+  /**
+   * Builds API 的 user-scoped API token（权限：Workers Builds Configuration Edit + Workers Scripts Read）。
+   * 再加 Workers Observability Edit，面板才能从 Workers Logs 读最近事件与统计（缺了只是看不到，不影响构建）
+   */
   CF_BUILDS_TOKEN?: string
   /** Worker 的 tag（GET /accounts/.../workers/scripts 返回的 tag，不是名字）。与 CF_TRIGGER_UUID
    *  一起可省略：省略时运行时按 WORKER_NAME 自发现并缓存进 KV（要求仓库已连接 Workers Builds） */

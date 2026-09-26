@@ -4,6 +4,7 @@ import { authenticate, issueBridge, issueSession, signToken, verifyToken } from 
 import { resetEventsSchema } from './events.js'
 import { matchPath } from './http.js'
 import { resetLifecycle } from './lifecycle.js'
+import { resetLogsCache } from './logs.js'
 import { createRuntime } from './runtime.js'
 import { resetSnapshotCache } from './store.js'
 import { createEnv, createExecutionContext, groupMessagePayload, signedRequest } from './testing/mocks.js'
@@ -15,6 +16,7 @@ beforeEach(() => {
   resetSnapshotCache()
   resetLifecycle()
   resetEventsSchema()
+  resetLogsCache()
 })
 
 describe('auth 令牌', () => {
@@ -67,7 +69,8 @@ describe('登录与面板资源', () => {
     const { session } = (await ok.json()) as { session: string }
     const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: { authorization: `Bearer ${session}` } }), env, createExecutionContext())
     expect(status.status).toBe(200)
-    expect(await status.json()).toMatchObject({ ok: true, webhookPath: '/webhook', stats: { total: 0 } })
+    // 没配构建 token：查不了 Workers Logs，统计为 null
+    expect(await status.json()).toMatchObject({ ok: true, webhookPath: '/webhook', stats: null })
   })
 
   it('传入 ui 时根路径返回 index，带指纹的资源不可变缓存，SPA 回退，保留路径不受影响', async () => {
@@ -138,40 +141,110 @@ describe('插件路由鉴权与通配', () => {
   })
 })
 
+const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {})
+vi.spyOn(console, 'warn').mockImplementation(() => {})
+vi.spyOn(console, 'error').mockImplementation(() => {})
+
 describe('事件记录', () => {
-  it('真实 webhook 分发后写入 D1，/admin/events 可查，stats 统计错误', async () => {
-    const echo = definePlugin({
-      name: 'echo',
-      version: '1.0.0',
-      commands: { echo: { async handler({ session, argText }) { await session.reply(argText) } } },
-      regex: [{ pattern: '^boom$', async handler() { throw new Error('boom') } }],
-    })
-    const qq = { fetchImpl: (async () => new Response(JSON.stringify({ access_token: 't', expires_in: 7200, id: 'm' }), { status: 200 })) as typeof fetch }
-    const runtime = createRuntime({ plugins: [echo], fetchImpl: qq.fetchImpl })
+  const echo = definePlugin({
+    name: 'echo',
+    version: '1.0.0',
+    commands: { echo: { async handler({ session, argText }) { await session.reply(argText) } } },
+    regex: [{ pattern: '^boom$', async handler() { throw new Error('boom') } }],
+  })
+  const admin = { authorization: `Bearer ${SECRET}` }
+  const qqFetch = (async () => new Response(JSON.stringify({ access_token: 't', expires_in: 7200, id: 'm' }), { status: 200 })) as typeof fetch
+
+  async function deliver(runtime: ReturnType<typeof createRuntime>, env: ReturnType<typeof createEnv>, content: string, id: string) {
+    const ctx = createExecutionContext()
+    await runtime.fetch!(await signedRequest(`${BASE}/webhook`, groupMessagePayload(content, id)), env, ctx)
+    await ctx.flush()
+  }
+
+  it('每个事件打一行 kind=dispatch 的摘要日志，不带正文；D1 不写', async () => {
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qqFetch })
     const env = createEnv()
+    consoleLog.mockClear()
+    await deliver(runtime, env, '/echo hi', 'e1')
+    await deliver(runtime, env, 'boom', 'e2')
+    expect(env.DB.rows).toHaveLength(0)
 
-    for (const [content, id] of [['/echo hi', 'e1'], ['boom', 'e2']] as const) {
-      const ctx = createExecutionContext()
-      await runtime.fetch!(await signedRequest(`${BASE}/webhook`, groupMessagePayload(content, id)), env, ctx)
-      await ctx.flush()
-    }
-    expect(env.DB.rows).toHaveLength(2)
+    const lines = consoleLog.mock.calls.map(([line]) => JSON.parse(String(line))).filter((l) => l.data?.kind === 'dispatch')
+    expect(lines.map((l) => l.data)).toEqual([
+      {
+        kind: 'dispatch',
+        id: 'GROUP_AT_MESSAGE_CREATE:e1',
+        event: 'qq.group.at_message',
+        scene: 'group',
+        userId: 'U1',
+        targetId: 'G1',
+        matched: [{ plugin: 'echo', kind: 'command', name: 'echo' }],
+        outbox: 1,
+        failed: 0,
+        ok: true,
+      },
+      expect.objectContaining({ id: 'GROUP_AT_MESSAGE_CREATE:e2', ok: false, errors: [expect.objectContaining({ plugin: 'echo', message: 'boom' })] }),
+    ])
+    expect(JSON.stringify(lines)).not.toContain('/echo hi')
+  })
 
-    const res = await runtime.fetch!(new Request(`${BASE}/admin/events?limit=10`, { headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
+  it('开了实时调试才写进 D1，/admin/events 可查正文', async () => {
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qqFetch })
+    const env = createEnv()
+    await deliver(runtime, env, '/echo before', 'e0')
+
+    const on = await runtime.fetch!(new Request(`${BASE}/admin/live`, { method: 'POST', headers: admin, body: JSON.stringify({ on: true }) }), env, createExecutionContext())
+    expect((await on.json()) as { until: number }).toMatchObject({ ok: true, until: expect.any(Number) })
+    await deliver(runtime, env, '/echo hi', 'e1')
+    await deliver(runtime, env, 'boom', 'e2')
+
+    const res = await runtime.fetch!(new Request(`${BASE}/admin/events?limit=10`, { headers: admin }), env, createExecutionContext())
     const { events } = (await res.json()) as { events: Array<{ id: string; content: string; matched: string; errors: string; outbox: number }> }
     expect(events.map((e) => e.id)).toEqual(['GROUP_AT_MESSAGE_CREATE:e2', 'GROUP_AT_MESSAGE_CREATE:e1'])
     expect(events[1]).toMatchObject({ content: '/echo hi', outbox: 1 })
     expect(JSON.parse(events[1]!.matched)).toEqual([{ plugin: 'echo', kind: 'command', name: 'echo' }])
     expect(JSON.parse(events[0]!.errors)[0]).toMatchObject({ plugin: 'echo', message: 'boom' })
 
-    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: { authorization: `Bearer ${SECRET}` } }), env, createExecutionContext())
-    expect((await status.json()).stats).toEqual({ total: 2, last24h: 2, errors24h: 1 })
+    await runtime.fetch!(new Request(`${BASE}/admin/live`, { method: 'POST', headers: admin, body: JSON.stringify({ on: false }) }), env, createExecutionContext())
+    await deliver(runtime, env, '/echo after', 'e3')
+    expect(env.DB.rows).toHaveLength(2)
+
+    const bad = await runtime.fetch!(new Request(`${BASE}/admin/live`, { method: 'POST', headers: admin, body: '{}' }), env, createExecutionContext())
+    expect(bad.status).toBe(400)
+  })
+
+  it('/admin/logs 与统计走 Workers Logs；没权限时如实说明', async () => {
+    let allowed = true
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes('/workers/observability/telemetry/query')) return qqFetch(input, init)
+      if (!allowed) return new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), { status: 403 })
+      const body = JSON.parse(String(init?.body)) as { view: string }
+      const result =
+        body.view === 'calculations'
+          ? { calculations: [{ aggregates: [{ groups: [{ value: 'true' }], count: 5 }, { groups: [{ value: 'false' }], count: 1 }] }] }
+          : { events: { events: [{ timestamp: 1, source: { data: { kind: 'dispatch', id: 'e1', event: 'qq.group.message' } } }] } }
+      return new Response(JSON.stringify({ success: true, result }), { status: 200 })
+    }) as typeof fetch
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({ CF_ACCOUNT_ID: 'acc', CF_BUILDS_TOKEN: 'tok' })
+
+    const logs = await runtime.fetch!(new Request(`${BASE}/admin/logs?limit=1`, { headers: admin }), env, createExecutionContext())
+    expect(await logs.json()).toMatchObject({ ok: true, available: true, sampled: false, events: [{ id: 'e1', content: '' }] })
+    // status 不等日志查询：第一次先给 null，后台查回来后下一次就有了
+    const first = createExecutionContext()
+    const pending = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: admin }), env, first)
+    expect((await pending.json()).stats).toBeNull()
+    await first.flush()
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: admin }), env, createExecutionContext())
+    expect((await status.json()).stats).toEqual({ total: 6, last24h: 6, errors24h: 1 })
+
+    allowed = false
+    const denied = await runtime.fetch!(new Request(`${BASE}/admin/logs`, { headers: admin }), env, createExecutionContext())
+    expect(await denied.json()).toMatchObject({ ok: true, available: false, reason: 'no-permission', events: [] })
+    const noToken = await runtime.fetch!(new Request(`${BASE}/admin/logs`, { headers: admin }), createEnv(), createExecutionContext())
+    expect(await noToken.json()).toMatchObject({ available: false, reason: 'no-token' })
   })
 })
-
-vi.spyOn(console, 'log').mockImplementation(() => {})
-vi.spyOn(console, 'warn').mockImplementation(() => {})
-vi.spyOn(console, 'error').mockImplementation(() => {})
 
 describe('未绑定 D1', () => {
   it('事件不记录、status.bindings.d1=false、events 返回空、插件 ctx.db 报可读错误', async () => {

@@ -132,7 +132,7 @@
       <li>复制生成的 token 粘贴到下面，粘贴后会自动验证一次，通过后点「完成引导」。</li>
     </ol>
     <a id="builds-token-link" class="btn ghost" target="_blank" rel="noopener">打开预填的构建 Token 创建页 ↗</a>
-    <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这两项即可：<b>Workers 构建配置（编辑）</b>（英文界面叫 Workers Builds Configuration，也可能显示为 Workers CI）与 <b>Workers 脚本（读取）</b>，账户范围选本账户。</div>
+    <div id="builds-token-fallback" class="hint" style="margin-top: 8px;">链接里的权限没有自动勾上的话，手动勾这三项即可：<b>Workers 构建配置（编辑）</b>（英文界面叫 Workers Builds Configuration，也可能显示为 Workers CI）、<b>Workers 脚本（读取）</b>与 <b>Workers Observability（编辑）</b>（面板概览读最近事件用，缺了不影响构建），账户范围选本账户。</div>
     <label>构建 Token</label>
     <textarea id="builds-token-input" placeholder="粘贴构建 token（留空可跳过——之后也能补配）"></textarea>
     <div id="builds-status-msg" class="msg hidden"></div>

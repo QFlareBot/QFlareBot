@@ -71,7 +71,8 @@ export interface Status {
   webhookPath: string
   bindings: { kv: boolean; d1: boolean; r2: boolean }
   snapshot: { revision: number; safeMode: boolean }
-  stats: { total: number; last24h: number; errors24h: number } | null
+  /** 来自 Workers Logs；没配构建 token 或缺日志权限时为 null。sampled：平台抽样后的估算值 */
+  stats: { total: number; last24h: number; errors24h: number; sampled?: boolean } | null
   plugins: PluginInfo[]
 }
 
@@ -96,6 +97,11 @@ export interface EventRecord {
   outbox: number
   failed: number
 }
+
+/** GET /logs：从 Workers Logs 查的事件摘要，不带正文（content 为空） */
+export type LogsResult =
+  | { ok: true; available: true; events: EventRecord[]; sampled: boolean }
+  | { ok: true; available: false; reason: 'no-token' | 'no-permission' | 'error'; message: string; events: EventRecord[] }
 
 export interface MatchRecord {
   plugin: string

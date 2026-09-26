@@ -140,12 +140,13 @@ describe('listWorkerSecretNames', () => {
 })
 
 describe('buildsTokenUrl', () => {
-  it('预填 Workers 构建配置（workers_ci，Edit）与 Workers 脚本（Read），账户限定为本账户', () => {
+  it('预填 Workers 构建配置（workers_ci，Edit）、Workers 脚本（Read）与 Workers Observability（Edit），账户限定为本账户', () => {
     // workers_builds 不是有效 key：控制台静默忽略，建出来的 token 缺 Builds 权限、列 trigger 必然 403
     const url = new URL(buildsTokenUrl('acc', 'qqbot-builds'))
     expect(JSON.parse(url.searchParams.get('permissionGroupKeys'))).toEqual([
       { key: 'workers_ci', type: 'edit' },
       { key: 'workers_scripts', type: 'read' },
+      { key: 'workers_observability', type: 'edit' },
     ])
     expect(url.searchParams.get('accountId')).toBe('acc')
     expect(url.searchParams.get('name')).toBe('qqbot-builds')

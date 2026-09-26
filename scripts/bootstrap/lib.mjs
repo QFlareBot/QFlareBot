@@ -355,11 +355,15 @@ export function mergePathExcludes(existing) {
  * Builds 权限的 key 是 `workers_ci`（控制台显示为「Workers 构建配置」，已实测）。
  * 早先写的 `workers_builds` 不是有效 key，控制台静默忽略，建出来的 token 只有
  * Workers Scripts 读权限，列 trigger 必然 403。
+ *
+ * `workers_observability`（Workers Observability 编辑，已实测能自动勾上）给面板读 Workers Logs：
+ * 最近事件与 24 小时统计都从日志查，查询接口只认编辑权限。缺了只是看不到，不影响构建。
  */
 export function buildsTokenUrl(accountId, tokenName) {
   const groups = [
     { key: 'workers_ci', type: 'edit' },
     { key: 'workers_scripts', type: 'read' },
+    { key: 'workers_observability', type: 'edit' },
   ]
   const params = new URLSearchParams()
   params.set('permissionGroupKeys', JSON.stringify(groups))
@@ -605,10 +609,10 @@ export function renderSummary(result, { redactSecrets = false, publicView = fals
   }
   if (buildsTokenWritten) {
     lines.push('')
-    lines.push('   构建凭证 `CF_BUILDS_TOKEN` 已写入 Worker，装插件时自动触发重建。')
+    lines.push('   构建凭证 `CF_BUILDS_TOKEN` 已写入 Worker，装插件时自动触发重建；token 带 Workers Observability 编辑权限时，面板概览还能读到最近事件。')
   } else {
     lines.push('')
-    lines.push('   **尚未配置 `CF_BUILDS_TOKEN`**（Worker 触发重建用）：创建一个 user token（权限：Workers Builds Configuration Edit + Workers Scripts Read，账户范围限本账户），`wrangler secret put CF_BUILDS_TOKEN` 写入，或重跑引导时带上。配置后到面板装一个插件即可验证重建链路。')
+    lines.push('   **尚未配置 `CF_BUILDS_TOKEN`**（Worker 触发重建、面板读最近事件用）：创建一个 user token（权限：Workers Builds Configuration Edit + Workers Scripts Read + Workers Observability Edit，账户范围限本账户），`wrangler secret put CF_BUILDS_TOKEN` 写入，或重跑引导时带上。配置后到面板装一个插件即可验证重建链路。')
   }
   lines.push('')
   if (warnings.length) {

@@ -17,8 +17,9 @@ import {
 } from './adminManifest.js'
 import { purgeOrphan, storageReport } from './adminStorage.js'
 import { validateConfig, withConfigDefaults } from './configSchema.js'
-import { clearEvents, eventStats, listEvents } from './events.js'
+import { clearEvents, listEvents, setLiveDebug } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
+import { dispatchStats, listDispatchLogs, LogsUnavailable } from './logs.js'
 import { listManifestPluginRecords, type ManifestPluginRecord } from './manifestStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
@@ -196,7 +197,7 @@ function normalizeGroups(value: unknown): GroupScope | null | undefined {
 /**
  * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
  * POST /admin/login                 用管理密钥换 7 天会话令牌
- * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、事件统计
+ * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、24 小时事件统计（来自 Workers Logs）
  * GET  /admin/snapshot              读取快照
  * PUT  /admin/snapshot              整体覆盖快照
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority / groups（groups: null 恢复所有群）
@@ -207,8 +208,11 @@ function normalizeGroups(value: unknown): GroupScope | null | undefined {
  * GET  /admin/bot/saved             换下来的机器人（AppID、名字、换下时间；不含 AppSecret）
  * POST /admin/bot/switch            { appId } 切回一个已保存的机器人（重新验证，当前的换进列表）
  * DELETE /admin/bot/saved/:appId    删掉一个已保存的机器人（只删这里的凭证，QQ 开放平台上的机器人不受影响）
- * GET  /admin/events?limit&before   最近事件的分发摘要
- * DELETE /admin/events              清空事件记录
+ * GET  /admin/events?limit&before   实时调试记下的事件（带正文，最多 50 条）
+ * DELETE /admin/events              清空实时调试记录
+ * POST /admin/live                  { on } 开启 / 续期 / 关闭实时调试；开着时事件才写进 D1，60 秒不续期自动停
+ * GET  /admin/logs?limit&before     从 Workers Logs 查最近事件的分发摘要（不带正文）；
+ *                                   查不了时 available: false 并给出 reason（no-token / no-permission / error）
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
  * GET  /admin/qq/panels             查看当前 QQ 指令面板（需 scope=c2c|group|channel|dm，游标分页）
@@ -254,7 +258,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   if (!(await authenticate(request, token)).admin) return error('未授权', 401)
 
   if (method === 'GET' && sub === '/status') {
-    const stats = await eventStats(scope.env).catch(() => null)
+    const stats = await dispatchStats(scope.env, deps.options.fetchImpl, (p) => scope.execCtx.waitUntil(p))
     // 哪些插件是「装进来的」（D1 清单里有记录）：面板据此决定是否显示卸载入口。
     // 仓库内置插件卸载会被 404 挡掉，给个按钮只会误导。D1 读不到就降级为「都不可卸载」并留日志。
     let records: ManifestPluginRecord[] = []
@@ -329,6 +333,26 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     if (method === 'DELETE') {
       await clearEvents(scope.env)
       return json({ ok: true })
+    }
+  }
+
+  if (sub === '/live' && method === 'POST') {
+    const body = await readJson<{ on?: unknown }>(request)
+    if (typeof body?.on !== 'boolean') return error('需要 { on: true | false }', 400)
+    const until = await setLiveDebug(scope.env, body.on)
+    if (until === null) return error('未绑定 D1，实时调试不可用', 503)
+    return json({ ok: true, until })
+  }
+
+  if (sub === '/logs' && method === 'GET') {
+    const limit = Number(url.searchParams.get('limit')) || 50
+    const before = Number(url.searchParams.get('before')) || undefined
+    try {
+      const { events, sampled } = await listDispatchLogs(scope.env, deps.options.fetchImpl, { limit, ...(before ? { before } : {}) })
+      return json({ ok: true, available: true, events, sampled })
+    } catch (err) {
+      if (!(err instanceof LogsUnavailable)) throw err
+      return json({ ok: true, available: false, reason: err.reason, message: err.message, events: [] })
     }
   }
 

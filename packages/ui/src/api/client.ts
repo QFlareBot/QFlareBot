@@ -6,6 +6,7 @@ import type {
   InstallPluginResult,
   InstallPreview,
   InstallRecord,
+  LogsResult,
   ManagedPluginsResult,
   SavedBot,
   Snapshot,
@@ -55,13 +56,19 @@ export function setUnauthorizedHandler(handler: () => void): void {
   onUnauthorized = handler
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** keepalive：页面关闭时发出的请求也要送达（sendBeacon 带不了 authorization 头） */
+async function request<T>(method: string, path: string, body?: unknown, init: { keepalive?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = {}
   const token = session.get()
   if (token) headers.authorization = `Bearer ${token}`
   if (body !== undefined) headers['content-type'] = 'application/json'
 
-  const res = await fetch(`/admin${path}`, { method, headers, body: body === undefined ? null : JSON.stringify(body) })
+  const res = await fetch(`/admin${path}`, {
+    method,
+    headers,
+    body: body === undefined ? null : JSON.stringify(body),
+    ...(init.keepalive ? { keepalive: true } : {}),
+  })
   const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; fields?: FieldError[]; code?: string }
   if (res.status === 401 && path !== '/login') {
     session.clear()
@@ -91,6 +98,9 @@ export const api = {
   events: (limit = 50, before?: number) =>
     request<{ ok: true; events: EventRecord[] }>('GET', `/events?limit=${limit}${before ? `&before=${before}` : ''}`),
   clearEvents: () => request<{ ok: true }>('DELETE', '/events'),
+  /** 开启 / 续期 / 关闭实时调试；60 秒不续期服务端自己停 */
+  live: (on: boolean, keepalive = false) => request<{ ok: true; until: number }>('POST', '/live', { on }, { keepalive }),
+  logs: (limit = 20, before?: number) => request<LogsResult>('GET', `/logs?limit=${limit}${before ? `&before=${before}` : ''}`),
   testEvent: (body: Record<string, unknown>) => request<TestEventResult>('POST', '/test-event', body),
   send: (scene: string, targetId: string, message: unknown) =>
     request<{ ok: boolean; result: { ok: boolean; status: number; messageId?: string; error?: string } }>('POST', '/send', { scene, targetId, message }),

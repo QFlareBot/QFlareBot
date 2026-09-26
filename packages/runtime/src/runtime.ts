@@ -88,7 +88,7 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
     async scheduled(event, env, execCtx) {
       const scope = await RequestScope.create(env, execCtx, registry, resolved, logger)
 
-      // 去重表没有 TTL，只能定期清；安全模式下也要清，否则表会一直涨
+      // 新的去重表是覆盖式的格子，不用清；这里只把升级前的旧去重表清空，清完就不再查
       execCtx.waitUntil(
         pruneSeenEvents(env, resolved.dedupeTtlSec)
           .then((removed) => {

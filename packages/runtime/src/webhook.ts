@@ -4,6 +4,7 @@ import { claimEvent } from './dedupe.js'
 import { recordEvent } from './events.js'
 import { error, json } from './http.js'
 import { errorInfo } from './logger.js'
+import { DISPATCH_KIND } from './logs.js'
 import type { RequestScope } from './scope.js'
 import type { ResolvedOptions } from './types.js'
 
@@ -82,11 +83,20 @@ export async function handleWebhook(
     scope.execCtx.waitUntil(
       scope.dispatchPayload(payload).then(
         async ({ session, report, outbox, failed }) => {
+          // 面板的「最近事件」和 24 小时统计按 kind 从 Workers Logs 查（logs.ts），改字段要两边一起改。
+          // 不带正文：正文只在面板开着实时调试时写进 D1
           logger.info('事件已分发', {
+            kind: DISPATCH_KIND,
             id,
             event: session.event,
+            scene: session.scene,
+            userId: session.userId,
+            targetId: session.targetId,
             matched: report.matched,
             errors: report.errors.length ? report.errors : undefined,
+            outbox,
+            failed,
+            ok: report.errors.length === 0 && failed === 0,
           })
           await recordEvent(
             scope.env,
