@@ -156,7 +156,13 @@ watch(
   { immediate: true },
 )
 
-async function saveSnapshot(patch: { safeMode?: boolean; commandPrefixes?: string[]; admins?: string[]; permissionDeniedReply?: string }) {
+async function saveSnapshot(patch: {
+  safeMode?: boolean
+  logContent?: boolean
+  commandPrefixes?: string[]
+  admins?: string[]
+  permissionDeniedReply?: string
+}) {
   savingSnap.value = true
   try {
     const { snapshot } = await api.snapshot()
@@ -392,6 +398,20 @@ async function saveMenu() {
               <p class="text-xs text-fg-muted">开启后跳过全部插件，只保留验签与回调确认。排查问题时用。</p>
             </div>
             <QSwitch :model-value="status?.snapshot.safeMode ?? false" label="安全模式" :disabled="savingSnap" @update:model-value="saveSnapshot({ safeMode: $event })" />
+          </div>
+          <div class="mt-4 flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-fg">日志里记录消息正文</p>
+              <p class="text-xs text-fg-muted">
+                事件摘要日志带上消息正文（前 200 字），Cloudflare 后台点开日志、面板概览不开实时调试都能看到。日志保留 3 天（付费版 7 天）、删不掉，能进这个 Cloudflare 账户的人都看得到。
+              </p>
+            </div>
+            <QSwitch
+              :model-value="status?.snapshot.logContent ?? false"
+              label="日志里记录消息正文"
+              :disabled="savingSnap || status?.snapshot.logContent === undefined"
+              @update:model-value="saveSnapshot({ logContent: $event })"
+            />
           </div>
           <form class="mt-4 flex flex-col gap-3" @submit.prevent="saveSnapshot({ commandPrefixes: prefixes.split(/\s+/).filter(Boolean) })">
             <QField id="prefixes" label="命令前缀" hint="空格分隔，如「/ ! 。」；消息以任一前缀开头才会解析为命令">

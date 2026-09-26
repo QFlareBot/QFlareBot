@@ -211,7 +211,7 @@ function normalizeGroups(value: unknown): GroupScope | null | undefined {
  * GET  /admin/events?limit&before   实时调试记下的事件（带正文，最多 50 条）
  * DELETE /admin/events              清空实时调试记录
  * POST /admin/live                  { on } 开启 / 续期 / 关闭实时调试；开着时事件才写进 D1，60 秒不续期自动停
- * GET  /admin/logs?limit&before     从 Workers Logs 查最近事件的分发摘要（不带正文）；
+ * GET  /admin/logs?limit&before     从 Workers Logs 查最近事件的分发摘要（设置里开了 logContent 才带正文）；
  *                                   查不了时 available: false 并给出 reason（no-token / no-permission / error）
  * POST /admin/test-event            注入模拟事件（消息或按键点击）并返回插件的出站动作（不真正发送）
  * POST /admin/send                  以机器人身份真实发送一条主动消息 { scene, targetId, message }
@@ -285,7 +285,11 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
         : null,
       webhookPath: deps.options.webhookPath,
       bindings: { kv: true, d1: !!scope.env.DB, r2: !!scope.env.R2 },
-      snapshot: { revision: scope.snapshot.revision, safeMode: scope.snapshot.safeMode ?? false },
+      snapshot: {
+        revision: scope.snapshot.revision,
+        safeMode: scope.snapshot.safeMode ?? false,
+        logContent: scope.snapshot.logContent ?? false,
+      },
       stats,
       plugins: deps.registry.all().map((p) => {
         const state = scope.snapshot.plugins[p.manifest.name]

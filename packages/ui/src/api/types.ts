@@ -70,7 +70,8 @@ export interface Status {
   bot: { appId: string; source: 'secret' | 'kv'; name?: string } | null
   webhookPath: string
   bindings: { kv: boolean; d1: boolean; r2: boolean }
-  snapshot: { revision: number; safeMode: boolean }
+  /** logContent：老运行时没有这个字段 */
+  snapshot: { revision: number; safeMode: boolean; logContent?: boolean }
   /** 来自 Workers Logs；没配构建 token 或缺日志权限时为 null。sampled：平台抽样后的估算值 */
   stats: { total: number; last24h: number; errors24h: number; sampled?: boolean } | null
   plugins: PluginInfo[]
@@ -98,7 +99,7 @@ export interface EventRecord {
   failed: number
 }
 
-/** GET /logs：从 Workers Logs 查的事件摘要，不带正文（content 为空） */
+/** GET /logs：从 Workers Logs 查的事件摘要；设置里没开「日志里记录消息正文」时 content 为空 */
 export type LogsResult =
   | { ok: true; available: true; events: EventRecord[]; sampled: boolean }
   | { ok: true; available: false; reason: 'no-token' | 'no-permission' | 'error'; message: string; events: EventRecord[] }
@@ -136,6 +137,8 @@ export interface Snapshot {
   admins?: string[]
   /** 权限不足时的统一回复文案；未设置则静默跳过 */
   permissionDeniedReply?: string
+  /** 事件摘要日志里带上消息正文（截到 200 字），默认关 */
+  logContent?: boolean
 }
 
 /** —— 自部署（安装与构建账本），与 runtime 的 manifestStore.ts 保持一致 —— */

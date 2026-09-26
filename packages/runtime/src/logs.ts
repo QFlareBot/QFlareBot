@@ -102,7 +102,7 @@ async function query(env: RuntimeEnv, fetchImpl: typeof fetch, body: Record<stri
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 const num = (v: unknown) => (typeof v === 'number' ? v : 0)
 
-/** 日志里的事件摘要换成面板认得的 EventRecord；日志里不带正文 */
+/** 日志里的事件摘要换成面板认得的 EventRecord；设置里没开 logContent 时日志不带正文，content 为空 */
 function toRecord(e: TelemetryEvent): EventRecord | null {
   const d = e.source?.data
   if (!d || typeof d.id !== 'string') return null
@@ -113,7 +113,7 @@ function toRecord(e: TelemetryEvent): EventRecord | null {
     scene: str(d.scene),
     user_id: str(d.userId),
     target_id: str(d.targetId),
-    content: '',
+    content: str(d.content),
     matched: JSON.stringify(Array.isArray(d.matched) ? d.matched : []),
     errors: JSON.stringify(Array.isArray(d.errors) ? d.errors : []),
     outbox: num(d.outbox),

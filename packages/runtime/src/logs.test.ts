@@ -38,7 +38,7 @@ function logEvent(ts: number, data: Record<string, unknown>) {
 beforeEach(() => resetLogsCache())
 
 describe('listDispatchLogs', () => {
-  it('按 Worker 名与 kind 过滤，日志字段换成 EventRecord（不带正文）', async () => {
+  it('按 Worker 名与 kind 过滤，日志字段换成 EventRecord', async () => {
     const { fetchImpl, calls } = telemetry([
       {
         events: {
@@ -81,7 +81,12 @@ describe('listDispatchLogs', () => {
       failed: 0,
     })
     // 老日志缺的字段按空值补齐
-    expect(events[1]).toMatchObject({ id: 'e1', scene: '', matched: '[]', errors: '[]', outbox: 0 })
+    expect(events[1]).toMatchObject({ id: 'e1', scene: '', content: '', matched: '[]', errors: '[]', outbox: 0 })
+  })
+
+  it('设置里开了记录正文时，日志里的正文带到 content', async () => {
+    const { fetchImpl } = telemetry([{ events: { events: [logEvent(1, { id: 'e1', content: '今天吃什么' })] } }])
+    expect((await listDispatchLogs(env, fetchImpl, { limit: 1 })).events[0]!.content).toBe('今天吃什么')
   })
 
   it('由近到远三段同时查，段与段不重叠，合并后取最新的 limit 条', async () => {

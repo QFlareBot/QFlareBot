@@ -31,7 +31,8 @@ export interface EventRecord {
 const TABLE = 'rt_live_events'
 /** 实时调试开关与序号，只有 id = 1 一行 */
 const STATE_TABLE = 'rt_live_debug'
-const CONTENT_LIMIT = 200
+/** 正文最多记这么多字（实时调试记录与日志里的正文都是） */
+export const CONTENT_LIMIT = 200
 /** 最多留这么多条，第 n 条写进 n % LIVE_SLOTS 号格子，覆盖的一定是最老的那条 */
 export const LIVE_SLOTS = 50
 /** 面板每 LIVE_RENEW_MS 续一次期；续期停了（页面关掉、断网、切到后台）最多这么久就不再写 */

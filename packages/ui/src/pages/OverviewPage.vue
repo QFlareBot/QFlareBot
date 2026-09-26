@@ -17,7 +17,7 @@ const { push } = useToast()
 
 /**
  * 最近事件有两个来源：
- * - 平时：Workers Logs 里的分发摘要（约 15 秒延迟、不带正文），D1 一行不写；
+ * - 平时：Workers Logs 里的分发摘要（约 15 秒延迟；设置里开了「日志里记录消息正文」才带正文），D1 一行不写；
  * - 实时调试：开着时事件连同正文写进 D1（最多 50 条），页面每 30 秒续一次期。
  *   关掉开关、离开页面、切到后台都会停；没来得及说停的（断网、崩溃），60 秒后服务端自己停。
  */
@@ -127,8 +127,12 @@ async function clear() {
 const eventsDescription = computed(() =>
   live.value
     ? '实时调试中：新事件连同正文写进 D1，最多留 50 条；关掉页面或切到后台即停止'
-    : '来自 Workers Logs，约 15 秒延迟，不含消息正文；要看正文请开实时调试',
+    : status.value?.snapshot.logContent
+      ? '来自 Workers Logs，约 15 秒延迟；正文按设置记在日志里'
+      : '来自 Workers Logs，约 15 秒延迟，不含消息正文；要看正文请开实时调试，或在设置里让日志记录正文',
 )
+/** 实时调试总带正文；日志里有正文（设置开过）时也显示这一列 */
+const showContent = computed(() => live.value || events.value.some((e) => e.content))
 /** 查不了日志时给的说明 */
 const logsHint = computed(() => {
   const l = logs.value
@@ -265,13 +269,13 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
       />
       <div v-else class="overflow-x-auto">
         <table class="qb-table">
-          <thead><tr><th>时间</th><th>事件</th><th>场景</th><th v-if="live">内容</th><th>命中</th><th>结果</th></tr></thead>
+          <thead><tr><th>时间</th><th>事件</th><th>场景</th><th v-if="showContent">内容</th><th>命中</th><th>结果</th></tr></thead>
           <tbody>
             <tr v-for="e in events" :key="e.id">
               <td class="font-mono text-xs text-fg-muted">{{ fmtTime(e.ts) }}</td>
               <td class="font-mono text-xs">{{ e.event.replace(/^qq\./, '') }}</td>
               <td class="text-fg-muted">{{ sceneLabel[e.scene] ?? (e.scene || '—') }}</td>
-              <td v-if="live" class="max-w-64 truncate" :title="e.content">{{ e.content || '—' }}</td>
+              <td v-if="showContent" class="max-w-64 truncate" :title="e.content">{{ e.content || '—' }}</td>
               <td>
                 <span class="flex flex-wrap gap-1">
                   <QBadge v-for="m in matched(e)" :key="m.plugin + m.name" tone="neutral">{{ m.plugin }}<span class="text-fg-subtle">/{{ m.name }}</span></QBadge>

@@ -162,7 +162,7 @@ describe('事件记录', () => {
     await ctx.flush()
   }
 
-  it('每个事件打一行 kind=dispatch 的摘要日志，不带正文；D1 不写', async () => {
+  it('每个事件打一行 kind=dispatch 的摘要日志，默认不带正文；D1 不写', async () => {
     const runtime = createRuntime({ plugins: [echo], fetchImpl: qqFetch })
     const env = createEnv()
     consoleLog.mockClear()
@@ -190,6 +190,35 @@ describe('事件记录', () => {
     // Cloudflare 后台日志列表的 Message 列显示的就是这行
     expect(lines[0].message).toBe('group.at_message · 群 G1 · 用户 U1 → echo/echo · 回复 1 条')
     expect(lines[1].message).toMatch(/^group\.at_message · 群 G1 · 用户 U1 → echo\/.+ · 1 个错误：echo boom$/)
+  })
+
+  it('设置里开了 logContent 才把正文（截到 200 字）放进日志的 data，message 那行仍不带', async () => {
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qqFetch })
+    const env = createEnv()
+    const dispatchLines = () =>
+      consoleLog.mock.calls.map(([line]) => JSON.parse(String(line))).filter((l) => l.data?.kind === 'dispatch')
+
+    consoleLog.mockClear()
+    await deliver(runtime, env, '/echo off', 'c0')
+    expect(dispatchLines()[0].data).not.toHaveProperty('content')
+
+    const { snapshot } = (await (await runtime.fetch!(new Request(`${BASE}/admin/snapshot`, { headers: admin }), env, createExecutionContext())).json()) as {
+      snapshot: Record<string, unknown>
+    }
+    await runtime.fetch!(
+      new Request(`${BASE}/admin/snapshot`, { method: 'PUT', headers: admin, body: JSON.stringify({ ...snapshot, logContent: true }) }),
+      env,
+      createExecutionContext(),
+    )
+    const status = await runtime.fetch!(new Request(`${BASE}/admin/status`, { headers: admin }), env, createExecutionContext())
+    expect((await status.json()).snapshot.logContent).toBe(true)
+
+    consoleLog.mockClear()
+    await deliver(runtime, env, `/echo ${'长'.repeat(300)}`, 'c1')
+    const [line] = dispatchLines()
+    expect(line.data.content).toHaveLength(200)
+    expect(line.data.content.startsWith('/echo 长')).toBe(true)
+    expect(line.message).not.toContain('长')
   })
 
   it('摘要里的长 openid 只留开头，没命中、发送失败都写清楚', () => {

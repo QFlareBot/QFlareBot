@@ -2,7 +2,7 @@ import { OpCode, signCallback, verifyEvent, type CallbackVerifyData, type Webhoo
 import type { Logger } from '@qqbot/sdk'
 import { claimEvent } from './dedupe.js'
 import type { DispatchReport } from './dispatcher.js'
-import { recordEvent } from './events.js'
+import { CONTENT_LIMIT, recordEvent } from './events.js'
 import { error, json } from './http.js'
 import { errorInfo } from './logger.js'
 import { DISPATCH_KIND } from './logs.js'
@@ -45,7 +45,7 @@ const short = (id: string) => (id.length > 8 ? `${id.slice(0, 8)}…` : id)
 
 /**
  * 事件摘要日志的 message：Cloudflare 后台日志列表的 Message 列就显示它，所以写成一眼能看懂的一行。
- * 不带消息正文。面板按 data.kind 查，这行文字随便改不影响查询
+ * 这一行永远不带消息正文（开了 logContent 正文也只放进 data）。面板按 data.kind 查，这行文字随便改不影响查询
  */
 export function dispatchMessage(
   event: string,
@@ -115,7 +115,7 @@ export async function handleWebhook(
       scope.dispatchPayload(payload).then(
         async ({ session, report, outbox, failed }) => {
           // 面板的「最近事件」和 24 小时统计按 kind 从 Workers Logs 查（logs.ts），改字段要两边一起改。
-          // 不带正文：正文只在面板开着实时调试时写进 D1
+          // 正文默认不进日志（设置里开了 logContent 才带）；面板开着实时调试时另写进 D1
           const summary = dispatchMessage(session.event, session.scene, session.targetId, session.userId, report, outbox, failed)
           logger.info(summary, {
             kind: DISPATCH_KIND,
@@ -124,6 +124,7 @@ export async function handleWebhook(
             scene: session.scene,
             userId: session.userId,
             targetId: session.targetId,
+            ...(scope.snapshot.logContent && session.content ? { content: session.content.slice(0, CONTENT_LIMIT) } : {}),
             matched: report.matched,
             errors: report.errors.length ? report.errors : undefined,
             outbox,
