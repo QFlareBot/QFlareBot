@@ -55,4 +55,17 @@ pnpm dev
 
 ## 提交
 
-问题与建议请提 [Issue](https://github.com/QFlareBot/QFlareBot/issues)。提交 PR 前请确保 `pnpm build && pnpm -r typecheck && pnpm test` 通过。
+问题与建议请提 [Issue](https://github.com/QFlareBot/QFlareBot/issues)。提交 PR 前请确保 `pnpm build && pnpm -r typecheck && pnpm test` 通过。PR 的约定（向后兼容、提交信息格式等）见仓库 [README · 参与贡献](https://github.com/QFlareBot/QFlareBot#参与贡献)。
+
+## 发版
+
+框架只有一个版本号，写在根 `package.json`、`packages/*`、`apps/seed`、运行时的 `RUNTIME_VERSION` 与 `qqbot.manifest.json` 的 `core` / `ui` 里（面板显示的是 `RUNTIME_VERSION`）。内置插件各有各的版本，不跟着变。
+
+```bash
+node scripts/version.mjs set 0.2.0          # 一次改齐，node scripts/version.mjs 核对
+git commit -am "chore: 0.2.0" && git push
+git tag -a v0.2.0 -m "这一版的主要变化"      # 附注会写进 Release 说明
+git push origin v0.2.0
+```
+
+推 tag 后 `.github/workflows/release.yml` 会核对版本号与 tag 一致、跑一遍构建与测试，再建 GitHub Release（自带源码包）。说明是 tag 附注加上与上一个 tag 之间的提交列表。带 `-` 的版本（如 `0.2.0-beta.1`）标成预发布。框架和插件都不发 npm。

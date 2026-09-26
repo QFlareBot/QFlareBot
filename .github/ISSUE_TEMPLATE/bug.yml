@@ -36,5 +36,5 @@ body:
   - type: input
     id: version
     attributes:
-      label: 你的 Fork 同步到了哪个提交
-      description: Fork 仓库首页显示的最新提交，或者「与上游相差几个提交」。
+      label: 版本
+      description: 面板概览页「运行时」显示的版本；最好再附上 Fork 同步到的提交，或者「与上游相差几个提交」。

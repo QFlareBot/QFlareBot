@@ -1,5 +1,6 @@
 # QFlareBot
 
+[![Release](https://img.shields.io/github/v/release/QFlareBot/QFlareBot?sort=semver&include_prereleases)](https://github.com/QFlareBot/QFlareBot/releases)
 [![CI](https://github.com/QFlareBot/QFlareBot/actions/workflows/ci.yml/badge.svg)](https://github.com/QFlareBot/QFlareBot/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-qflarebot.github.io-blue)](https://qflarebot.github.io)
 [![License](https://img.shields.io/github/license/QFlareBot/QFlareBot)](LICENSE)
@@ -36,7 +37,18 @@
 
 ## 状态
 
-早期版本（0.1）。自部署链路已在线上验证，但目前只在**个人使用**的场景下测过：一个人部署、机器人进自己的群。问题与建议请提 [Issue](https://github.com/QFlareBot/QFlareBot/issues)。
+早期版本（0.x）。自部署链路已在线上验证，但目前只在**个人使用**的场景下测过：一个人部署、机器人进自己的群。各版本的改动见 [Releases](https://github.com/QFlareBot/QFlareBot/releases)。
+
+## 参与贡献
+
+- **问题与建议**：提 [Issue](https://github.com/QFlareBot/QFlareBot/issues)，按模板填上出错的步骤和日志，密钥记得打码。
+- **提 PR**：Fork 后从 `main` 拉分支，改完先在本地跑 `pnpm build && pnpm -r typecheck && pnpm test`，再向 `main` 提 PR。CI 会跑同样的检查，外加种子应用投影和部署配置的 dry-run。环境搭建见[参与开发](https://qflarebot.github.io/development)。
+- **保持向后兼容**：已部署的机器人靠同步上游升级，中间不会有人手动迁移。改管理接口、D1 表结构、构建脚本时，要让旧部署同步之后直接能跑：接口只加字段不删改，表结构只增不改，新旧构建脚本与 Worker 互相认得。
+- **提交信息**：`类型(范围): 说明`，例如 `feat(bootstrap): …`、`fix: …`、`docs: …`。
+- **写插件不用往这里提 PR**：插件放在你自己的仓库，到 [QFlareBot/plugins](https://github.com/QFlareBot/plugins) 登记就能出现在插件市场，见[发布插件](https://qflarebot.github.io/publish)。
+- **改文档**：文档在 `docs/`，文档站每页底部都有「在 GitHub 上编辑此页」。
+
+贡献的代码按所在目录的协议发布，见下一节。
 
 ## 协议
 

@@ -1,0 +1,73 @@
+# 发版：推 v* tag 时核对版本号、跑一遍检查，再建 GitHub Release。
+# Release 自带源码包，不另传制品；框架与插件都不发 npm。
+#
+#   node scripts/version.mjs set 0.2.0     # 统一改版本号，提交推送
+#   git tag -a v0.2.0 -m "这一版的说明"     # 附注写进 Release 说明
+#   git push origin v0.2.0
+#
+# 说明 = tag 附注 + 与上一个 tag 之间的提交列表（直接提交 main、不走 PR，GitHub 的自动生成说明是空的）。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Fork 里推 tag 不发版
+    if: github.repository == 'QFlareBot/QFlareBot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # checkout 会把附注 tag 取成轻量 tag，重新拉一次才读得到附注
+      - run: git fetch --force --tags
+
+      - name: 核对版本号与 tag 一致
+        run: node scripts/version.mjs check "$GITHUB_REF_NAME"
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm -r typecheck
+      - run: pnpm test
+
+      - name: 生成 Release 说明
+        run: |
+          tag="$GITHUB_REF_NAME"
+          {
+            if [ "$(git cat-file -t "$tag")" = tag ]; then
+              git tag -l --format='%(contents)' "$tag"
+              echo
+            fi
+            prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+            if [ -n "$prev" ]; then
+              echo "## 提交"
+              echo
+              git log --no-merges --format='- %s (%h)' "$prev..$tag"
+              echo
+              echo "完整对比：https://github.com/$GITHUB_REPOSITORY/compare/$prev...$tag"
+            fi
+          } > notes.md
+          cat notes.md
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          # 带 - 的版本（如 0.2.0-beta.1）标成预发布
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md "${flags[@]}"
