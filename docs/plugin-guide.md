@@ -317,7 +317,7 @@ cron: {
 },
 ```
 
-`cron` 处理器**没有 session**（不是事件），主动推送用 `ctx.api.sendMessage`。群聊主动消息需要平台白名单。`ctx.api` 上还有 `raw(method, path, body)`（框架未封装的接口直接调，永远可用）与 `group.*`（群管理）。
+`cron` 处理器**没有 session**（不是事件），主动推送用 `ctx.api.sendMessage`。群聊主动消息需要群主在群里打开机器人的「主动消息」权限，见[配置 QQ 开放平台](./deploy-qq#_5-在群里打开权限)。`ctx.api` 上还有 `raw(method, path, body)`（框架未封装的接口直接调，永远可用）与 `group.*`（群管理）。
 
 ## 8. HTTP 路由与插件页面
 

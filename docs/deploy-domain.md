@@ -14,8 +14,6 @@ QQ 开放平台访问不到 `*.workers.dev`（实测回调地址校验不通过�
 
 ## 绑定到 Worker
 
-<!-- 截图：Worker → Settings → Domains & Routes → Add → Custom domain 的对话框 -->
-
 1. 打开 Cloudflare 后台，进入 **Workers & Pages**（计算），点你的 Worker（默认叫 `qqbot`）。
 2. 切到 **Settings** 标签页，找到 **Domains & Routes**，点 **Add**，选 **Custom domain**。
 3. 输入域名，如 `bot.example.com`，点 **Add domain**。

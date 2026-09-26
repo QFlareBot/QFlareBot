@@ -15,7 +15,7 @@
 | 引用回复 `message_reference` | `{ quote: true }` 引用当前消息；`{ quote: refIndex }` 引用指定 | `session.refIndex` / `SendResult.refIndex` |
 | 被动回复 `msg_id` + `msg_seq` | `session.reply()` | `msg_seq` 集中分配，默认上限 5 |
 | **被动回复 `event_id`** | `session.reply()` | 对 `GROUP_ADD_ROBOT`、`INTERACTION_CREATE`、`*_MSG_RECEIVE`、`FRIEND_ADD` 自动改用 event_id，不消耗主动额度；`session.canReply` 可判断 |
-| 主动消息 | `session.send(msg, target?)` / `ctx.api.sendMessage()` | 群聊需白名单；单聊有频控 |
+| 主动消息 | `session.send(msg, target?)` / `ctx.api.sendMessage()` | 群聊需群主打开机器人的「主动消息」权限；单聊有频控 |
 | 互动召回 `is_wakeup` | `ctx.api.sendMessage(t, msg, { wakeup: true })` | 仅单聊 |
 | 输入中状态 `input_notify` | `session.typing(seconds)` | 仅单聊，≤60s |
 | **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊；群聊自动退化为 end 时一次性回复 |
