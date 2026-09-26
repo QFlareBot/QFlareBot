@@ -7,6 +7,7 @@ import { resetLifecycle } from './lifecycle.js'
 import { resetLogsCache } from './logs.js'
 import { createRuntime } from './runtime.js'
 import { resetSnapshotCache } from './store.js'
+import { dispatchMessage } from './webhook.js'
 import { createEnv, createExecutionContext, groupMessagePayload, signedRequest } from './testing/mocks.js'
 
 const BASE = 'https://bot.test'
@@ -186,6 +187,19 @@ describe('事件记录', () => {
       expect.objectContaining({ id: 'GROUP_AT_MESSAGE_CREATE:e2', ok: false, errors: [expect.objectContaining({ plugin: 'echo', message: 'boom' })] }),
     ])
     expect(JSON.stringify(lines)).not.toContain('/echo hi')
+    // Cloudflare 后台日志列表的 Message 列显示的就是这行
+    expect(lines[0].message).toBe('group.at_message · 群 G1 · 用户 U1 → echo/echo · 回复 1 条')
+    expect(lines[1].message).toMatch(/^group\.at_message · 群 G1 · 用户 U1 → echo\/.+ · 1 个错误：echo boom$/)
+  })
+
+  it('摘要里的长 openid 只留开头，没命中、发送失败都写清楚', () => {
+    const report = { matched: [], errors: [] }
+    expect(dispatchMessage('qq.c2c.message', 'c2c', 'ABCDEF0123456789', 'ABCDEF0123456789', report, 0, 0)).toBe(
+      'c2c.message · 单聊 ABCDEF01… · 用户 ABCDEF01… → 无插件命中 · 无回复',
+    )
+    expect(dispatchMessage('qq.group.member_added', 'group', 'G1', '', { matched: [{ plugin: 'hi', kind: 'event', name: 'qq.group.member_added' }], errors: [] }, 1, 1)).toBe(
+      'group.member_added · 群 G1 → hi/qq.group.member_added · 发送失败 1 条',
+    )
   })
 
   it('开了实时调试才写进 D1，/admin/events 可查正文', async () => {
