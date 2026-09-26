@@ -38,6 +38,31 @@ describe('T2I Class', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renderUrl 让服务端存图，只拼出图片地址', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 0, message: 'success', data: { id: 'data/rendered_1_abc.jpeg' } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { url } = await new T2I({ url: 'https://t2i.example.com/' }).renderUrl('<p>hi</p>')
+
+    expect(url).toBe('https://t2i.example.com/text2img/data/rendered_1_abc.jpeg')
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string).json).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it('renderUrl 没拿到 id 时报错并带上服务的说明', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ code: 1, message: 'template error' }) }),
+    )
+    await expect(new T2I({ url: 'https://t2i.example.com' }).renderUrl('<p>hi</p>')).rejects.toThrow('template error')
+    vi.unstubAllGlobals()
+  })
+
   it('ping 成功返回耗时，失败返回错误信息', async () => {
     vi.stubGlobal('fetch', mockFetchOnce())
     const ok = await new T2I({ url: 'https://t2i.example.com' }).ping()

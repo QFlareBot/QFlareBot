@@ -39,6 +39,11 @@ export interface T2IRenderBase64Result {
   byteSize: number
 }
 
+export interface T2IRenderUrlResult {
+  /** 图片存在 T2I 服务上，可直接放进 `{ image: { url } }` 交给 QQ 拉取 */
+  url: string
+}
+
 export interface T2IPingResult {
   ok: boolean
   /** 端到端渲染耗时（毫秒）；失败时为 0 */
@@ -84,8 +89,17 @@ export class T2I {
     return `${this.baseUrl}/text2img/generate`
   }
 
-  /** HTML → 图片二进制 */
-  async render(html: string, options: T2IRenderOptions = {}): Promise<T2IRenderResult> {
+  /**
+   * POST /text2img/generate。`json` 为 false 时响应体就是图片；为 true 时服务端把图存下来，
+   * 只回 `{ code, message, data: { id } }`，图片在 `<服务地址>/text2img/<id>`（2026-09 实测）。
+   * 超时覆盖读响应体的时间。
+   */
+  private async generate<T>(
+    html: string,
+    options: T2IRenderOptions,
+    json: boolean,
+    read: (response: Response) => Promise<T>,
+  ): Promise<T> {
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -96,7 +110,7 @@ export class T2I {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           html,
-          json: false,
+          json,
           options: {
             type: options.type ?? 'jpeg',
             quality: options.quality ?? 85,
@@ -114,7 +128,20 @@ export class T2I {
         const errorText = await response.text().catch(() => '')
         throw new Error(`T2I 服务响应错误 (HTTP ${response.status}): ${errorText.slice(0, 300)}`)
       }
+      return await read(response)
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error(`T2I 渲染超时 (${timeoutMs}ms)，请检查 T2I 节点健康状态`)
+      }
+      throw err
+    } finally {
+      clearTimeout(timer)
+    }
+  }
 
+  /** HTML → 图片二进制 */
+  async render(html: string, options: T2IRenderOptions = {}): Promise<T2IRenderResult> {
+    return this.generate(html, options, false, async (response) => {
       const data = await response.arrayBuffer()
       if (!data || data.byteLength === 0) {
         throw new Error('T2I 服务返回了空数据')
@@ -124,14 +151,22 @@ export class T2I {
         contentType: response.headers.get('content-type') ?? 'image/jpeg',
         byteSize: data.byteLength,
       }
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new Error(`T2I 渲染超时 (${timeoutMs}ms)，请检查 T2I 节点健康状态`)
+    })
+  }
+
+  /**
+   * HTML → 图片地址：图存在 T2I 服务上，QQ 直接去拉，图片字节不经过 Worker。
+   * 发图优先用它；renderBase64 要在 Worker 里编码，吃的是全机器人共享的 CPU
+   */
+  async renderUrl(html: string, options: T2IRenderOptions = {}): Promise<T2IRenderUrlResult> {
+    return this.generate(html, options, true, async (response) => {
+      const body = (await response.json().catch(() => null)) as { message?: unknown; data?: { id?: unknown } } | null
+      const id = body?.data?.id
+      if (typeof id !== 'string' || !id) {
+        throw new Error(`T2I 服务没有返回图片地址${typeof body?.message === 'string' ? `: ${body.message.slice(0, 300)}` : ''}`)
       }
-      throw err
-    } finally {
-      clearTimeout(timer)
-    }
+      return { url: `${this.baseUrl}/text2img/${id.replace(/^\/+/, '')}` }
+    })
   }
 
   /** HTML → Base64，可直接用于回复消息的 `image.base64` */

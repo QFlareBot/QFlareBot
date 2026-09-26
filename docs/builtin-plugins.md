@@ -43,6 +43,8 @@
 
 没有命令。它给别的插件提供一个 `t2i` 服务：把 HTML 渲染成图片，适合做海报、排行榜这类图文消息。用法是在插件里声明 `depends: { t2i: '*' }`，再 `ctx.service('t2i')` 取出来调用（见[插件开发指南 · 要读别的插件的数据](./plugin-guide.md#要读别的插件的数据)）。
 
+发图用 `renderUrl(html)`：图存在渲染服务上，只回一个地址，放进 `{ image: { url } }` 让 QQ 自己去拉，图片不经过 Worker。`renderBase64(html)` 要在 Worker 里把整张图编码一遍，吃的是全机器人共享的 CPU，只在拿不到地址时用。
+
 渲染不在 Worker 里做（CPU 不够），而是调用外部的 [AstrBot T2I](https://github.com/AstrBotDevs/AstrBot) 渲染服务：
 
 | 配置 | 说明 |

@@ -13,6 +13,7 @@ export type {
   T2IRenderBase64Result,
   T2IRenderOptions,
   T2IRenderResult,
+  T2IRenderUrlResult,
 } from './t2i.js'
 
 /** 面板配置（configSchema / defaultConfig 的形状） */
