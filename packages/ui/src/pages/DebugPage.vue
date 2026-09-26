@@ -119,7 +119,7 @@ const rawOptions = ['GROUP_ADD_ROBOT', 'GROUP_DEL_ROBOT', 'GROUP_MEMBER_ADD', 'G
 <template>
   <div>
     <PageHeader title="调试" description="事件模拟器是干跑，不碰 QQ；下面的主动发消息会真的发出去。" />
-    <div class="grid gap-4 lg:grid-cols-[360px_1fr]">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <QCard title="事件模拟器">
         <form class="flex flex-col gap-4" @submit.prevent="run">
           <QField id="kind" label="类型"><QSelect id="kind" v-model="kind" :options="kindOptions" /></QField>

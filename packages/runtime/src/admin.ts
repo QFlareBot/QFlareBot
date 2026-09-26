@@ -1,4 +1,4 @@
-import { QQBotClient, createBindTask, createTokenProvider, pollBindResult, type WebhookPayload } from '@qqbot/api'
+import { QQApiError, QQBotClient, createBindTask, createTokenProvider, pollBindResult, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
 import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
@@ -178,6 +178,24 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
   if (JSON.stringify(current) !== JSON.stringify(profile)) await writeSnapshot(scope.env, profile ? { ...snapshot, bot: profile } : snapshot)
   deps.logger.info('机器人凭证已更新', { appId, ...(archive ? { archived: archive.appId } : {}) })
   return null
+}
+
+type BotApi = NonNullable<RequestScope['api']>
+
+/**
+ * QQ 全局配置接口（指令面板、菜单、分享链接）的透传。换 token 失败（凭证不对、平台抽风）时 raw 会直接抛，
+ * 不接住的话面板只看到一个 500「Internal Error」；这里转成和平台报错一样的形状，面板照常显示原因。
+ * status 给 0：换 token 失败时平台可能回的是 HTTP 200，不能让面板误以为成功
+ */
+async function qqRaw(api: BotApi, ...args: Parameters<BotApi['raw']>): Promise<{ status: number; data: unknown }> {
+  try {
+    return await api.raw(...args)
+  } catch (err) {
+    const qq = err instanceof QQApiError ? err : null
+    const body = qq?.body && typeof qq.body === 'object' ? qq.body : {}
+    const status = qq && (qq.status < 200 || qq.status >= 300) ? qq.status : 0
+    return { status, data: { ...body, message: (err as Error).message } }
+  }
 }
 
 /**
@@ -517,14 +535,14 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       if (cursor) q.set('cursor', cursor)
       const limit = url.searchParams.get('limit')
       if (limit) q.set('limit', limit)
-      const { status, data } = await scope.api.raw('GET', `/v2/panels?${q}`)
+      const { status, data } = await qqRaw(scope.api, 'GET', `/v2/panels?${q}`)
       deps.logger.info('查询 QQ 指令面板', { scope: scopeVal, status })
       return json({ ok: status > 0 && status < 300, status, data })
     }
     const body = await readJson<{ scope?: string; target_type?: string; panel?: unknown }>(request)
     if (!body || !SCOPES.includes(body.scope ?? '')) return error('需要 scope=c2c|group|channel|dm', 400)
     if (typeof body.panel !== 'object' || !body.panel) return error('需要 panel 配置', 400)
-    const { status, data } = await scope.api.raw('POST', '/v2/panels', body)
+    const { status, data } = await qqRaw(scope.api, 'POST', '/v2/panels', body)
     deps.logger.info('创建 QQ 指令面板', { scope: body.scope, status })
     return json({ ok: status > 0 && status < 300, status, data })
   }
@@ -532,7 +550,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   const panelRemove = matchPath('/qq/panels/:panelId', sub)
   if (panelRemove && method === 'DELETE') {
     if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
-    const { status, data } = await scope.api.raw('DELETE', `/v2/panels/${panelRemove.panelId}`)
+    const { status, data } = await qqRaw(scope.api, 'DELETE', `/v2/panels/${panelRemove.panelId}`)
     deps.logger.info('删除 QQ 指令面板', { panelId: panelRemove.panelId, status })
     return json({ ok: status > 0 && status < 300, status, data })
   }
@@ -541,12 +559,12 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   if (sub === '/qq/menu' && (method === 'GET' || method === 'PUT')) {
     if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
     if (method === 'GET') {
-      const { status, data } = await scope.api.raw('GET', '/v2/menu')
+      const { status, data } = await qqRaw(scope.api, 'GET', '/v2/menu')
       return json({ ok: status > 0 && status < 300, status, data })
     }
     const body = await readJson<{ menu?: unknown }>(request)
     if (!body || typeof body.menu !== 'object' || !body.menu) return error('需要 menu 配置（items 传空数组即可清空菜单）', 400)
-    const { status, data } = await scope.api.raw('PUT', '/v2/menu', body)
+    const { status, data } = await qqRaw(scope.api, 'PUT', '/v2/menu', body)
     deps.logger.info('保存 QQ 自定义菜单', { status })
     return json({ ok: status > 0 && status < 300, status, data })
   }
@@ -554,7 +572,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   if (sub === '/qq/url-link' && method === 'POST') {
     if (!scope.api) return error('机器人尚未配置 AppID/AppSecret', 503)
     const body = (await readJson(request)) ?? {}
-    const { status, data } = await scope.api.raw('POST', '/v2/generate_url_link', body)
+    const { status, data } = await qqRaw(scope.api, 'POST', '/v2/generate_url_link', body)
     deps.logger.info('生成分享链接', { status })
     return json({ ok: status > 0 && status < 300, status, data })
   }

@@ -166,7 +166,7 @@ async function uninstall() {
         <p class="font-mono text-xs text-danger">{{ plugin.error }}</p>
       </QCard>
 
-      <div class="grid gap-4 lg:grid-cols-[1fr_320px]">
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <QCard title="配置" description="保存后写入快照，无需重新部署">
           <form class="flex flex-col gap-4" @submit.prevent="save">
             <SchemaForm v-if="plugin.configSchema" v-model="config" :schema="plugin.configSchema" :errors="fieldErrors" />

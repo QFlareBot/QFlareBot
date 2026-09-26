@@ -1242,6 +1242,22 @@ describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
     expect(await res.json()).toMatchObject({ ok: true, data: { url: 'https://q.qq.com/bot/invite' } })
   })
 
+  it('换 token 失败（凭证不对）时照样回 200 并带上原因，不是一个 500', async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) =>
+      String(input).includes('getAppAccessToken')
+        ? new Response(JSON.stringify({ code: 100016, message: 'invalid appid or secret' }), { status: 200 })
+        : new Response('{}')) as typeof fetch
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv()
+    for (const req of [adminRequest('POST', '/qq/url-link', {}), adminRequest('GET', '/qq/panels?scope=group')]) {
+      const res = await runtime.fetch!(req, env, createExecutionContext())
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { ok: boolean; status: number; data: { message: string } }
+      expect(body.ok).toBe(false)
+      expect(body.data.message).toContain('invalid appid or secret')
+    }
+  })
+
   it('机器人未配置时返回 503', async () => {
     const runtime = createRuntime({ plugins: [], fetchImpl: (async () => new Response('{}')) as typeof fetch })
     const env = createEnv({ BOT_SECRET: undefined, BOT_APPID: undefined })

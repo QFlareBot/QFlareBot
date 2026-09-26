@@ -70,12 +70,12 @@
 
 | 能力 | QQ 端点 | 管理 API | 面板入口 |
 | --- | --- | --- | --- |
-| **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：从已启用插件的命令一键生成请求体，声明了 `permission` 的命令自动带 `only_admin: true` |
-| **分享/邀请链接**（点击直达机器人会话；请求体可为空，响应 `{ retcode, msg, data: { url } }`） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接 |
+| **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：列出已启用插件的命令，勾选、改名称与描述（实时显示宽度），声明了 `permission` 的命令自动带 `only_admin: true`；能查看、删除已有面板；特殊配置可展开直接编辑请求体 |
+| **分享/邀请链接**（点击直达机器人会话；请求体可为空，响应 `{ retcode, msg, data: { url } }`） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接：一键生成，显示链接、复制按钮与二维码 |
 | **自定义菜单**（仅单聊，全局一份；`menu.items` ≤10：switch/send_message/link/menu，子菜单 ≤5，PUT 5 QPM） | `GET/PUT /v2/menu` | `GET` / `PUT /admin/qq/menu` | 设置 → 自定义菜单（查看回填 + JSON 编辑保存） |
 | 频道 API 权限申请 | — | 暂 raw | — |
 
-指令面板创建请求体（官方 schema 摘录）：`{ scope, target_type?, group_openids?/user_openids?, panel: { items: [{ type: 'command'|'link', name, desc, only_admin?, link? }], remark?, version? } }` → 响应 `{ panel_id }`。`target_type=specific`（仅 c2c/group）配合 openid 列表可按群/用户定点生效。列表查询响应 `{ records: PanelRecord[], next_cursor, is_end }`。`items[].name` ≤14 字符、`desc` ≤30 字符。
+指令面板创建请求体（官方 schema 摘录）：`{ scope, target_type?, group_openids?/user_openids?, panel: { items: [{ type: 'command'|'link', name, desc, only_admin?, link? }], remark?, version? } }` → 响应 `{ panel_id }`。`target_type=specific`（仅 c2c/group）配合 openid 列表可按群/用户定点生效。列表查询响应 `{ records: PanelRecord[], next_cursor, is_end }`。`items[].name` 显示宽度 ≤14、`desc` ≤30，**按宽度算不按字符数**：汉字算 2、英文数字算 1，也就是名称约 7 个汉字、描述约 15 个汉字（社区实测）。超了平台同样回 30013「超出数量限制」，看着像是面板数量满了，其实多半是某一项太长。名称要和命令名或别名一致，点了才对得上，所以面板生成时名称放不下就换别名、不截断。
 
 ## 错误语义
 

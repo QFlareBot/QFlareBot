@@ -5,11 +5,12 @@ import { renderSVG } from 'uqr'
 import { api } from '../api/client.js'
 import type { SavedBot } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
+import QQPanelEditor from '../components/QQPanelEditor.vue'
+import QQShareLink from '../components/QQShareLink.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
-import QSelect from '../components/ui/QSelect.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
 import StatusDot from '../components/ui/StatusDot.vue'
@@ -196,82 +197,6 @@ function savePermission() {
   })
 }
 
-// —— QQ 指令面板与分享链接：字段按官方文档（2026-09 实测核对）——
-
-const panelsScope = ref('group')
-const panelsBody = ref('')
-const panelsResult = ref('')
-const panelsBusy = ref(false)
-
-/** 把已启用插件注册的命令按官方 schema 拼成创建面板请求体；name≤14 字、desc≤30 字、最多 20 项 */
-function draftPanels() {
-  const items = (status.value?.plugins ?? [])
-    .filter((p) => p.enabled)
-    .flatMap((p) =>
-      p.commands.map((c) => ({
-        type: 'command',
-        name: c.name.slice(0, 14),
-        desc: (c.description ?? `${p.displayName || p.name} 的指令`).slice(0, 30),
-        // 声明了权限的命令映射为平台原生的"仅管理员可点击"
-        only_admin: c.permission === 'bot_admin' || c.permission === 'group_admin',
-      })),
-    )
-    .slice(0, 20)
-  panelsBody.value = JSON.stringify(
-    {
-      scope: panelsScope.value,
-      target_type: 'all',
-      panel: { remark: '由 QFlareBot 面板同步', items },
-    },
-    null,
-    2,
-  )
-}
-
-async function sendPanels() {
-  panelsBusy.value = true
-  panelsResult.value = ''
-  try {
-    const res = await api.sendQQPanels(JSON.parse(panelsBody.value))
-    panelsResult.value = JSON.stringify(res, null, 2)
-    push(res.ok ? '指令面板已创建' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
-  } catch (e) {
-    panelsResult.value = String((e as Error).message)
-  } finally {
-    panelsBusy.value = false
-  }
-}
-
-async function viewPanels() {
-  panelsBusy.value = true
-  panelsResult.value = ''
-  try {
-    panelsResult.value = JSON.stringify(await api.qqPanels(panelsScope.value), null, 2)
-  } catch (e) {
-    panelsResult.value = String((e as Error).message)
-  } finally {
-    panelsBusy.value = false
-  }
-}
-
-const urlLinkBody = ref('{}')
-const urlLinkResult = ref('')
-const urlLinkBusy = ref(false)
-
-async function createLink() {
-  urlLinkBusy.value = true
-  urlLinkResult.value = ''
-  try {
-    const res = await api.createUrlLink(JSON.parse(urlLinkBody.value))
-    urlLinkResult.value = JSON.stringify(res, null, 2)
-    push(res.ok ? '已请求生成链接' : `平台返回 ${res.status}`, res.ok ? 'success' : 'error')
-  } catch (e) {
-    urlLinkResult.value = String((e as Error).message)
-  } finally {
-    urlLinkBusy.value = false
-  }
-}
-
 // —— 自定义菜单：仅单聊场景、全局一份，PUT 整体覆盖（5 QPM）——
 
 const menuBody = ref('')
@@ -310,7 +235,8 @@ async function saveMenu() {
 <template>
   <div>
     <PageHeader title="设置" />
-    <div class="grid gap-4 lg:grid-cols-2">
+    <!-- grid-cols-1 = minmax(0,1fr)：不写的话单列会被卡片描述（不换行）撑到比屏幕还宽 -->
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <QCard title="机器人凭证" :description="status?.bot?.source === 'secret' ? '当前由 Worker Secret 提供，这里保存的值不会覆盖它' : '保存前会先向 QQ 开放平台换取 AccessToken 验证'">
         <div class="mb-4 flex items-center justify-between gap-3 text-sm">
           <span class="text-fg-muted">当前机器人</span>
@@ -434,37 +360,9 @@ async function saveMenu() {
             <div><QButton type="submit" :loading="savingSnap">保存权限设置</QButton></div>
           </form>
         </QCard>
-        <QCard
-          title="QQ 指令面板"
-          description="用户点机器人看到的可点指令列表（scope 支持 c2c/group/channel/dm，一个面板最多 20 项，机器人最多 20 个面板）。声明了权限的命令会自动带上 only_admin"
-        >
-          <form class="flex flex-col gap-3" @submit.prevent="sendPanels">
-            <QField id="panels-scope" label="生效场景">
-              <template #default>
-                <QSelect id="panels-scope" v-model="panelsScope" :options="[{ label: '群聊（group）', value: 'group' }, { label: '单聊（c2c）', value: 'c2c' }]" />
-              </template>
-            </QField>
-            <QField id="panels-body" label="请求体（JSON，可编辑）">
-              <template #default="{ describedBy }"><QTextarea id="panels-body" v-model="panelsBody" mono :rows="10" :described-by="describedBy" /></template>
-            </QField>
-            <div class="flex gap-2">
-              <QButton type="button" :disabled="panelsBusy" @click="draftPanels">从已启用插件生成</QButton>
-              <QButton type="button" variant="secondary" :loading="panelsBusy" @click="viewPanels">查看当前面板</QButton>
-              <QButton type="submit" variant="primary" :loading="panelsBusy" :disabled="!panelsBody.trim()">发送到 QQ</QButton>
-            </div>
-            <pre v-if="panelsResult" class="max-h-56 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ panelsResult }}</pre>
-          </form>
-        </QCard>
+        <QQPanelEditor :plugins="status?.plugins ?? []" />
 
-        <QCard title="分享链接" description="生成一条点击直达机器人会话的邀请链接（/v2/generate_url_link）；请求体字段以官方文档为准">
-          <form class="flex flex-col gap-3" @submit.prevent="createLink">
-            <QField id="url-link-body" label="请求体（JSON）">
-              <template #default="{ describedBy }"><QTextarea id="url-link-body" v-model="urlLinkBody" mono :rows="3" :described-by="describedBy" /></template>
-            </QField>
-            <div><QButton type="submit" variant="primary" :loading="urlLinkBusy">生成链接</QButton></div>
-            <pre v-if="urlLinkResult" class="max-h-40 overflow-auto rounded-md bg-surface p-3 font-mono text-xs text-fg-muted">{{ urlLinkResult }}</pre>
-          </form>
-        </QCard>
+        <QQShareLink />
 
         <QCard
           title="自定义菜单"
