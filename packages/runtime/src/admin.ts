@@ -21,6 +21,7 @@ import { clearEvents, listEvents, setLiveDebug } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
 import { dispatchStats, listDispatchLogs, LogsUnavailable } from './logs.js'
 import { listManifestPluginRecords, type ManifestPluginRecord } from './manifestStore.js'
+import { parseSavedItems, readSavedPanel, writeSavedPanel } from './qqPanelStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
 import type { Sender } from './session.js'
@@ -236,6 +237,8 @@ function normalizeGroups(value: unknown): GroupScope | null | undefined {
  * GET  /admin/qq/panels             查看当前 QQ 指令面板（需 scope=c2c|group|channel|dm，游标分页）
  * POST /admin/qq/panels             创建指令面板 { scope, target_type?, group_openids?, user_openids?, panel }
  * DELETE /admin/qq/panels/:panelId  删除指令面板
+ * GET  /admin/qq/panels/saved?scope 上次发送的面板（勾选与手改的名称、描述；存 D1，没绑 D1 时 persist: false）
+ * PUT  /admin/qq/panels/saved       { scope, items } 面板发送成功后存一份
  * GET  /admin/qq/menu               查看当前自定义菜单（仅单聊场景，全局一份）
  * PUT  /admin/qq/menu               保存自定义菜单 { menu: { items: [...] } }，整体覆盖（5 QPM）
  * POST /admin/qq/url-link           生成机器人分享/邀请链接（/v2/generate_url_link 透传）
@@ -545,6 +548,22 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const { status, data } = await qqRaw(scope.api, 'POST', '/v2/panels', body)
     deps.logger.info('创建 QQ 指令面板', { scope: body.scope, status })
     return json({ ok: status > 0 && status < 300, status, data })
+  }
+
+  // 上次发送的面板（勾选与手改的名称、描述）：面板发送成功后存一份，下次打开设置页接着用
+  if (sub === '/qq/panels/saved' && (method === 'GET' || method === 'PUT')) {
+    const PANEL_SCOPES = ['c2c', 'group']
+    if (method === 'GET') {
+      const scopeVal = url.searchParams.get('scope') ?? ''
+      if (!PANEL_SCOPES.includes(scopeVal)) return error('需要 scope=c2c|group', 400)
+      return json({ ok: true, persist: !!scope.env.DB, saved: await readSavedPanel(scope.env, scopeVal) })
+    }
+    const body = await readJson<{ scope?: string; items?: unknown }>(request)
+    if (!body || !PANEL_SCOPES.includes(body.scope ?? '')) return error('需要 scope=c2c|group', 400)
+    const items = parseSavedItems(body.items)
+    if (!items) return error('items 格式不对：每项要有 key、name、desc、selected', 400)
+    const sentAt = await writeSavedPanel(scope.env, body.scope!, items)
+    return json({ ok: true, persist: sentAt !== null, sentAt })
   }
 
   const panelRemove = matchPath('/qq/panels/:panelId', sub)

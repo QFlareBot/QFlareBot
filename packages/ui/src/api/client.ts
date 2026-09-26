@@ -16,6 +16,7 @@ import type {
   TriggerBuildResult,
   UninstallResult,
 } from './types.js'
+import type { SavedPanel, SavedPanelItem } from '../lib/qqPanel.js'
 
 const SESSION_KEY = 'qqbot.session'
 
@@ -108,6 +109,11 @@ export const api = {
   qqPanels: (scope: string) =>
     request<{ ok: boolean; status: number; data: unknown }>('GET', `/qq/panels?scope=${encodeURIComponent(scope)}`),
   sendQQPanels: (body: unknown) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/panels', body),
+  /** 上次发送的面板；persist 为 false 表示没绑 D1、记不住 */
+  savedQQPanel: (scope: string) =>
+    request<{ ok: true; persist: boolean; saved: SavedPanel | null }>('GET', `/qq/panels/saved?scope=${encodeURIComponent(scope)}`),
+  saveQQPanel: (scope: string, items: SavedPanelItem[]) =>
+    request<{ ok: true; persist: boolean; sentAt: number | null }>('PUT', '/qq/panels/saved', { scope, items }),
   deleteQQPanel: (panelId: string) =>
     request<{ ok: boolean; status: number; data: unknown }>('DELETE', `/qq/panels/${encodeURIComponent(panelId)}`),
   createUrlLink: (body: Record<string, unknown>) => request<{ ok: boolean; status: number; data: unknown }>('POST', '/qq/url-link', body),

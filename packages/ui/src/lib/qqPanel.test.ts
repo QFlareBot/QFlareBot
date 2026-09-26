@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { DESC_MAX, displayWidth, draftItems, explainPlatformError, panelBody, summarizePanels, truncateWidth } from './qqPanel.js'
+import {
+  DESC_MAX,
+  displayWidth,
+  draftItems,
+  explainPlatformError,
+  mergeSaved,
+  panelBody,
+  summarizePanels,
+  toSaved,
+  truncateWidth,
+} from './qqPanel.js'
 
 describe('显示宽度', () => {
   it('汉字算 2，英文数字算 1', () => {
@@ -53,6 +63,46 @@ describe('从插件命令生成面板条目', () => {
     expect(body.panel.items.map((i) => i.name)).toEqual(['今日老婆', 'czqqsj'])
     expect(body.panel.items[1]).toMatchObject({ type: 'command', only_admin: true })
     expect(body.panel.items[0]).not.toHaveProperty('only_admin')
+  })
+})
+
+describe('并入上次发送的记录', () => {
+  const plugins = (names: string[]) => [{ name: 'p', displayName: '插件', enabled: true, commands: names.map((name) => ({ name })) }]
+
+  it('没发送过就原样返回', () => {
+    const fresh = draftItems(plugins(['a']))
+    expect(mergeSaved(fresh, null)).toEqual({ items: fresh, added: [], removed: [] })
+  })
+
+  it('还在的命令沿用上次的勾选和改过的名称、描述；新出现的标新并补选；没了的列出来', () => {
+    const saved = {
+      sentAt: 1,
+      items: [
+        { key: 'p/a', name: 'a', desc: '我改过的描述', selected: true },
+        { key: 'p/b', name: 'b', desc: 'b 的描述', selected: false },
+        { key: 'gone/x', name: 'x', desc: '卸载了', selected: true },
+      ],
+    }
+    const { items, added, removed } = mergeSaved(draftItems(plugins(['a', 'b', 'c'])), saved)
+    expect(items.map((i) => [i.key, i.selected, i.desc, !!i.isNew])).toEqual([
+      ['p/a', true, '我改过的描述', false],
+      ['p/b', false, 'b 的描述', false],
+      ['p/c', true, '插件 的指令', true],
+    ])
+    expect(added.map((i) => i.key)).toEqual(['p/c'])
+    expect(removed.map((i) => i.key)).toEqual(['gone/x'])
+    expect(toSaved(items)[0]).toEqual({ key: 'p/a', name: 'a', desc: '我改过的描述', selected: true })
+  })
+
+  it('新命令补选时也不超过 20 项', () => {
+    const names = Array.from({ length: 22 }, (_, i) => `c${i}`)
+    const saved = { sentAt: 1, items: names.slice(0, 20).map((n) => ({ key: `p/${n}`, name: n, desc: n, selected: true })) }
+    const { items, added } = mergeSaved(draftItems(plugins(names)), saved)
+    expect(items.filter((i) => i.selected)).toHaveLength(20)
+    expect(added.map((i) => [i.key, i.selected])).toEqual([
+      ['p/c20', false],
+      ['p/c21', false],
+    ])
   })
 })
 

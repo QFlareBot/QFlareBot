@@ -10,11 +10,15 @@ import {
   draftItems,
   explainPlatformError,
   ITEMS_MAX,
+  mergeSaved,
   NAME_MAX,
   panelBody,
   summarizePanels,
+  toSaved,
   type PanelDraftItem,
   type PanelSummary,
+  type SavedPanel,
+  type SavedPanelItem,
 } from '../lib/qqPanel.js'
 import QBadge from './ui/QBadge.vue'
 import QButton from './ui/QButton.vue'
@@ -29,19 +33,62 @@ const { push } = useToast()
 
 const scope = ref('group')
 const items = ref<PanelDraftItem[]>([])
-/** 插件列表变了（启用 / 停用、装了新插件）就重新整理；已经手改过的以当前为准，不自动覆盖 */
+/** 已经在页面上动过的以当前为准，插件列表刷新时不自动覆盖 */
 const touched = ref(false)
-watch(
-  () => props.plugins,
-  (plugins) => {
-    if (!touched.value) items.value = draftItems(plugins)
-  },
-  { immediate: true },
-)
-function regenerate() {
-  items.value = draftItems(props.plugins)
+
+/** 上次发送到 QQ 的记录；undefined = 还没读到，null = 没发送过 */
+const saved = ref<SavedPanel | null | undefined>(undefined)
+/** 没绑 D1 时记不住 */
+const persist = ref(true)
+const added = ref<PanelDraftItem[]>([])
+const removed = ref<SavedPanelItem[]>([])
+
+function rebuild() {
+  const merged = mergeSaved(draftItems(props.plugins), saved.value ?? null)
+  items.value = merged.items
+  added.value = merged.added
+  removed.value = merged.removed
   touched.value = false
 }
+
+async function loadSaved() {
+  saved.value = undefined
+  try {
+    const res = await api.savedQQPanel(scope.value)
+    saved.value = res.saved
+    persist.value = res.persist
+  } catch {
+    // 读不到就当没发送过，照样能用
+    saved.value = null
+  }
+  rebuild()
+}
+watch(scope, () => void loadSaved(), { immediate: true })
+watch(
+  () => props.plugins,
+  () => {
+    if (!touched.value && saved.value !== undefined) rebuild()
+  },
+)
+
+/** 丢掉上次的勾选与修改，按插件现在的命令从头生成 */
+function regenerate() {
+  items.value = draftItems(props.plugins)
+  touched.value = true
+}
+
+function fmtTime(ms: number) {
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false })
+}
+
+const changeNote = computed(() => {
+  const parts = [
+    added.value.length ? `新增 ${added.value.map((i) => i.name).join('、')}` : '',
+    removed.value.length ? `已不存在 ${removed.value.map((i) => i.name).join('、')}` : '',
+  ].filter(Boolean)
+  const when = saved.value ? `（${fmtTime(saved.value.sentAt)}）` : ''
+  return `上次发送${when}之后插件有变动：${parts.join('；')}。确认后重新发送，QQ 里的面板才会更新。`
+})
 
 const selectedCount = computed(() => items.value.filter((i) => i.selected).length)
 const nameInvalid = (i: PanelDraftItem) => !i.name.trim() || displayWidth(i.name) > NAME_MAX
@@ -58,7 +105,8 @@ const problems = computed(() => {
 const busy = ref(false)
 const result = ref<{ ok: boolean; text: string } | null>(null)
 
-async function send(body: unknown) {
+/** fromList：按列表发送的才存回去；直接编辑请求体发的不知道对应哪些命令，不存 */
+async function send(body: unknown, fromList = true) {
   busy.value = true
   result.value = null
   try {
@@ -68,6 +116,15 @@ async function send(body: unknown) {
       ? { ok: true, text: `已创建${id ? `（面板 ${String(id)}）` : ''}。手机 QQ 里重新进一次会话就能看到` }
       : { ok: false, text: explainPlatformError(res.status, res.data) }
     push(res.ok ? '指令面板已创建' : '创建失败', res.ok ? 'success' : 'error')
+    if (res.ok && fromList) {
+      const snapshot = toSaved(items.value)
+      const stored = await api.saveQQPanel(scope.value, snapshot).catch(() => null)
+      persist.value = stored?.persist ?? persist.value
+      if (stored?.sentAt) saved.value = { items: snapshot, sentAt: stored.sentAt }
+      for (const i of items.value) i.isNew = false
+      added.value = []
+      removed.value = []
+    }
     if (res.ok) void loadPanels()
   } catch (e) {
     result.value = { ok: false, text: (e as Error).message }
@@ -127,7 +184,7 @@ function sendRaw() {
     result.value = { ok: false, text: '请求体不是合法的 JSON' }
     return
   }
-  void send(body)
+  void send(body, false)
 }
 </script>
 
@@ -147,15 +204,28 @@ function sendRaw() {
         <p class="pb-1.5 text-xs text-fg-muted">
           已选 <span class="tabular-nums" :class="selectedCount > ITEMS_MAX ? 'text-danger' : 'text-fg'">{{ selectedCount }}/{{ ITEMS_MAX }}</span> 项
         </p>
-        <QButton size="sm" variant="ghost" class="ml-auto" @click="regenerate">按已启用插件重新生成</QButton>
+        <QButton size="sm" variant="ghost" class="ml-auto" @click="regenerate">丢掉修改，按插件重新生成</QButton>
+      </div>
+
+      <div
+        v-if="saved !== undefined"
+        class="rounded-md px-3 py-2 text-xs"
+        :class="added.length || removed.length ? 'bg-warning-bg text-warning' : 'bg-surface-muted text-fg-muted'"
+        role="status"
+      >
+        <template v-if="!persist">没有绑定 D1，记不住上次发送的内容，每次都按插件重新生成。</template>
+        <template v-else-if="!saved">还没发送过。发送成功后会记住这里的勾选和修改，插件有变动时也会提醒你重新发送。</template>
+        <template v-else-if="added.length || removed.length">{{ changeNote }}</template>
+        <template v-else>和 {{ fmtTime(saved.sentAt) }} 发送到 QQ 的一致。</template>
       </div>
 
       <p v-if="!items.length" class="text-sm text-fg-muted">已启用的插件里没有命令。</p>
       <ul v-else class="flex flex-col divide-y divide-border rounded-md border border-border">
-        <li v-for="(item, i) in items" :key="i" class="flex flex-col gap-2 p-3 sm:flex-row sm:items-start">
+        <li v-for="(item, i) in items" :key="item.key" class="flex flex-col gap-2 p-3 sm:flex-row sm:items-start">
           <label class="flex shrink-0 items-center gap-2 sm:w-40 sm:pt-1.5">
             <input v-model="item.selected" type="checkbox" class="size-4 accent-(--qb-accent)" :disabled="item.tooWide" @change="touched = true" />
             <span class="min-w-0 truncate text-xs text-fg-muted">{{ item.plugin }}</span>
+            <QBadge v-if="item.isNew" tone="accent">新</QBadge>
           </label>
           <div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <div>

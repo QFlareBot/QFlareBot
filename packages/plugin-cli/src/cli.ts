@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import type { Manifest } from '@qqbot/sdk'
 import { buildPlugin } from './build.js'
 import { extractPluginManifest, ManifestValidationError } from './manifest.js'
+import { panelWarnings } from './panel.js'
 
 const USAGE = `用法：qqbot-plugin <命令> [选项]
 
@@ -34,6 +35,8 @@ function printSummary(manifest: Manifest, size?: number, packages: string[] = []
   // 打进产物的第三方包：机器人的构建机会按 lockfile 装同样的版本，记得把 lockfile 一起提交
   if (packages.length > 0) rows.push(['第三方包', packages.join('、')])
   for (const [label, value] of rows) console.log(`  ${label}：${value}`)
+  // 不拦构建：放不进面板只是少一个点选入口，命令照样能打字触发
+  for (const warning of panelWarnings(manifest)) console.warn(`  ⚠ ${warning}`)
 }
 
 /** esbuild 的 BuildFailure，详细错误已由 esbuild 自己打印 */

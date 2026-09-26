@@ -53,6 +53,8 @@ export function createD1(options: { legacySeen?: Array<{ id: string; ts: number 
   const ring = new Map<number, string>()
   const live = { until: 0, seq: 0 }
   const legacySeen = options.legacySeen ? [...options.legacySeen] : null
+  /** 上次发送的指令面板 rt_qq_panels：场景 → 行 */
+  const panels = new Map<string, { data: string; sent_at: number }>()
   const columns = ['id', 'ts', 'event', 'scene', 'user_id', 'target_id', 'content', 'matched', 'errors', 'outbox', 'failed']
   const noLegacy = () => new Error('D1_ERROR: no such table: rt_seen_events: SQLITE_ERROR')
   const prepare = (sql: string) => {
@@ -91,6 +93,11 @@ export function createD1(options: { legacySeen?: Array<{ id: string; ts: number 
           live.until = params[0] as number
           return { meta: { changes: 1 } }
         }
+        if (sql.startsWith('INSERT INTO rt_qq_panels')) {
+          const [scope, data, sentAt] = params as [string, string, number]
+          panels.set(scope, { data, sent_at: sentAt })
+          return { meta: { changes: 1 } }
+        }
         throw new Error(`fake D1 不支持：${sql}`)
       },
       async all() {
@@ -109,6 +116,7 @@ export function createD1(options: { legacySeen?: Array<{ id: string; ts: number 
           if (!legacySeen) throw noLegacy()
           return { n: legacySeen.length }
         }
+        if (sql.startsWith('SELECT data, sent_at FROM rt_qq_panels')) return panels.get(params[0] as string) ?? null
         throw new Error(`fake D1 不支持：${sql}`)
       },
     }

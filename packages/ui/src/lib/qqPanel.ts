@@ -29,14 +29,31 @@ export function truncateWidth(s: string, max: number): string {
 }
 
 export interface PanelDraftItem {
+  /** 「插件名/命令名」：和上次发送的记录对上号用 */
+  key: string
   /** 面板上显示、点了会发出去的指令：命令名或能放下的别名 */
   name: string
   desc: string
   onlyAdmin: boolean
   selected: boolean
+  /** 插件的显示名，列表里给人看的 */
   plugin: string
   /** 命令名与别名都超宽，放不进面板 */
   tooWide: boolean
+  /** 上次发送之后才出现的命令（新装或新启用的插件） */
+  isNew?: boolean
+}
+
+/** 上次发送到 QQ 时的记录（运行时存在 D1，见 qqPanelStore.ts） */
+export interface SavedPanelItem {
+  key: string
+  name: string
+  desc: string
+  selected: boolean
+}
+export interface SavedPanel {
+  items: SavedPanelItem[]
+  sentAt: number
 }
 
 interface CommandLike {
@@ -67,6 +84,7 @@ export function draftItems(plugins: PluginLike[]): PanelDraftItem[] {
         const selected = !tooWide && picked < ITEMS_MAX
         if (selected) picked++
         return {
+          key: `${p.name}/${c.name}`,
           name: name ?? c.name,
           desc: truncateWidth(c.description?.trim() || `${p.displayName || p.name} 的指令`, DESC_MAX),
           // 声明了权限的命令映射为平台原生的「仅管理员可点击」
@@ -77,6 +95,39 @@ export function draftItems(plugins: PluginLike[]): PanelDraftItem[] {
         }
       }),
     )
+}
+
+/**
+ * 把上次发送的记录并进现在的命令列表：还在的命令沿用当时的勾选和名称、描述；
+ * 之后才出现的标 isNew，按默认规则补选（不超过 ITEMS_MAX）；当时有、现在没了的（插件卸载或停用）列进 removed。
+ * 没发送过（saved 为 null）就原样返回。
+ */
+export function mergeSaved(
+  fresh: PanelDraftItem[],
+  saved: SavedPanel | null,
+): { items: PanelDraftItem[]; added: PanelDraftItem[]; removed: SavedPanelItem[] } {
+  if (!saved) return { items: fresh, added: [], removed: [] }
+  const byKey = new Map(saved.items.map((i) => [i.key, i]))
+  const items = fresh.map((f) => {
+    const s = byKey.get(f.key)
+    if (!s) return { ...f, isNew: true, selected: false }
+    // 命令名、别名都放不下的照旧不能选
+    return { ...f, name: s.name, desc: s.desc, selected: s.selected && !f.tooWide }
+  })
+  let room = ITEMS_MAX - items.filter((i) => i.selected).length
+  for (const i of items) {
+    if (i.isNew && !i.tooWide && room > 0) {
+      i.selected = true
+      room--
+    }
+  }
+  const keys = new Set(fresh.map((f) => f.key))
+  return { items, added: items.filter((i) => i.isNew), removed: saved.items.filter((s) => !keys.has(s.key)) }
+}
+
+/** 存回去的只要这几个字段 */
+export function toSaved(items: PanelDraftItem[]): SavedPanelItem[] {
+  return items.map(({ key, name, desc, selected }) => ({ key, name, desc, selected }))
 }
 
 /** 选中的条目拼成创建面板的请求体（字段按官方 schema，见 docs/capabilities.md） */

@@ -1242,6 +1242,30 @@ describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
     expect(await res.json()).toMatchObject({ ok: true, data: { url: 'https://q.qq.com/bot/invite' } })
   })
 
+  it('上次发送的面板存 D1，按场景分开；格式不对拒收；没绑 D1 时 persist: false', async () => {
+    const runtime = createRuntime({ plugins: [], fetchImpl: createQQFetch().fetchImpl })
+    const env = createEnv()
+    const read = async (e = env) =>
+      (await (await runtime.fetch!(adminRequest('GET', '/qq/panels/saved?scope=group'), e, createExecutionContext())).json()) as {
+        persist: boolean
+        saved: { items: unknown[]; sentAt: number } | null
+      }
+    expect(await read()).toMatchObject({ persist: true, saved: null })
+
+    const items = [{ key: 'echo/echo', name: 'echo', desc: '回显', selected: true }]
+    const put = await runtime.fetch!(adminRequest('PUT', '/qq/panels/saved', { scope: 'group', items }), env, createExecutionContext())
+    expect(await put.json()).toMatchObject({ ok: true, persist: true, sentAt: expect.any(Number) })
+    expect((await read()).saved).toMatchObject({ items, sentAt: expect.any(Number) })
+    const c2c = await runtime.fetch!(adminRequest('GET', '/qq/panels/saved?scope=c2c'), env, createExecutionContext())
+    expect((await c2c.json()).saved).toBeNull()
+
+    const bad = await runtime.fetch!(adminRequest('PUT', '/qq/panels/saved', { scope: 'group', items: [{ key: 1 }] }), env, createExecutionContext())
+    expect(bad.status).toBe(400)
+    expect((await runtime.fetch!(adminRequest('GET', '/qq/panels/saved?scope=x'), env, createExecutionContext())).status).toBe(400)
+
+    expect(await read(createEnv({ DB: undefined }))).toMatchObject({ persist: false, saved: null })
+  })
+
   it('换 token 失败（凭证不对）时照样回 200 并带上原因，不是一个 500', async () => {
     const fetchImpl = (async (input: RequestInfo | URL) =>
       String(input).includes('getAppAccessToken')
