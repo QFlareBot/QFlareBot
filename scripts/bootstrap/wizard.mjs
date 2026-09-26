@@ -7,14 +7,16 @@
  *
  * 安全边界：
  * - token 只在本进程内存里，收到即输出 ::add-mask::（Actions 日志自动打码）
+ * - 账户 ID、workers.dev 子域、资源 id 同样打码；它们与面板地址只在向导页面上显示，
+ *   写进 Step Summary 的是 publicView 版本（公开仓库的 Summary 谁都能看，add-mask 管不到它）
  * - Quick Tunnel 是随机不可猜 URL + HTTPS，但本质是临时公开入口——向导结束后即关闭
  * - 进程在完成或 40 分钟无活动后退出
+ *
+ * QQ 机器人不在向导里建：部署完到面板「设置」里扫码创建或填入凭证。
  *
  * API（全部 JSON）：
  *   GET  /api/init                   页面初始数据（默认值、token 预填链接）
  *   POST /api/verify                 { token, accountId? } 验证主 token + 权限试探
- *   POST /api/qq-bind/start          扫码创建 QQ 机器人：建绑定任务，返回二维码 SVG（密钥留在本进程）
- *   POST /api/qq-bind/poll           轮询一次；扫码完成后凭证留在本进程，部署时自动存进 KV
  *   POST /api/provision              表单提交，启动引导（异步）
  *   GET  /api/progress               进度轮询
  *   GET  /api/builds-connection      连接检测轮询：连上即写构建配置、补跑构建；之后报构建进度
@@ -29,20 +31,17 @@ import { readFile, writeFile, chmod } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSVG } from 'uqr'
 import {
   adminTokenProblem,
   BootstrapError,
   BUILD_COMMAND,
   configureTrigger,
-  createQQBindTask,
   DEPLOY_COMMAND,
   findWorkerTag,
   getBuild,
   listAccounts,
   listTriggers,
   pickProductionTrigger,
-  pollQQBindResult,
   probePermissions,
   renderSummary,
   runBootstrap,
@@ -69,9 +68,7 @@ const state = {
   accounts: [],
   workerName: env.BOOT_WORKER_NAME?.trim() || 'qqbot',
   provision: null, // { lines: [], done, ok, error, result }
-  qqBind: null, // 进行中的扫码任务 { taskId, key }
-  qqBound: null, // 扫码拿到的凭证 { appId, secret }，不下发给浏览器
-  builds: null, // 检测到仓库连接后：{ tag, trigger: { uuid, branch }, configured, error, buildUuid, build, buildError, apiToken }
+  builds: null, // 检测到仓库连接后：{ tag, trigger: { uuid, branch, pathExcludes }, configured, error, buildUuid, build, buildError, apiToken }
   buildsBusy: null, // 进行中的连接检测（轮询会并发打进来）
   completed: false,
   completeTimer: null,
@@ -118,15 +115,6 @@ function readBody(req) {
   })
 }
 
-/** 表单手填优先；AppSecret 留空且 AppID 与扫码结果一致（或也留空）时用扫码拿到的凭证 */
-function resolveQQ(body) {
-  const appId = typeof body.qqAppId === 'string' ? body.qqAppId.trim() : ''
-  const secret = typeof body.qqSecret === 'string' ? body.qqSecret.trim() : ''
-  if (appId && secret) return { appId, secret }
-  if (!secret && state.qqBound && (!appId || appId === state.qqBound.appId)) return state.qqBound
-  return undefined
-}
-
 function json(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
@@ -153,6 +141,7 @@ async function setupTrigger(token) {
     await configureTrigger(token, state.accountId, b.trigger.uuid, {
       manifestUrl: result.manifestUrl,
       buildToken: result.buildToken ?? rotated,
+      pathExcludes: b.trigger.pathExcludes,
     })
     if (rotated) {
       writeSecrets({ repoRoot, token: state.token, accountId: state.accountId, workerName: state.workerName, secrets: { BUILD_TOKEN: rotated } })
@@ -166,10 +155,10 @@ async function setupTrigger(token) {
   b.configured = true
   b.error = null
   b.apiToken = token // 查构建进度沿用写得进配置的这个 token
-  log('构建配置（命令与清单环境变量）已写入 trigger')
+  log('构建配置（命令、清单环境变量与排除路径）已写入 trigger')
   try {
     b.buildUuid = await startBuild(token, state.accountId, b.trigger.uuid, b.trigger.branch)
-    log(`已触发构建 ${b.buildUuid}（分支 ${b.trigger.branch}）`)
+    log(`已触发构建（分支 ${b.trigger.branch}）`)
   } catch (err) {
     b.buildError = err.message
     log(`触发构建失败：${err.message}`)
@@ -195,7 +184,7 @@ async function detectConnection() {
   const trigger = pickProductionTrigger(triggers)
   if (!trigger) return {}
   state.builds = { tag, trigger, configured: false, error: null, buildUuid: null, build: null, buildError: null }
-  log(`检测到仓库已连接 Workers Builds（trigger ${trigger.uuid}，生产分支 ${trigger.branch}）`)
+  log(`检测到仓库已连接 Workers Builds（生产分支 ${trigger.branch}）`)
   await setupTrigger(state.token)
   return {}
 }
@@ -280,7 +269,7 @@ async function startTunnel() {
         cleanup()
         child.stdout.resume()
         child.stderr.resume()
-        log(`Quick Tunnel 就绪：${match[0]}`)
+        log('Quick Tunnel 就绪')
         resolveTunnel(match[0])
       }
     }
@@ -379,6 +368,8 @@ const server = createServer(async (req, res) => {
         }
         state.accountId = accounts[0].id
       }
+      // 之后的日志（包括 wrangler 的输出）里出现账户 ID 都打码；页面上照常显示
+      mask(state.accountId)
       const missing = await probePermissions(token, state.accountId)
       if (missing.length) {
         return json(res, 400, {
@@ -388,33 +379,6 @@ const server = createServer(async (req, res) => {
       state.token = token
       state.accounts = accounts
       json(res, 200, { ok: true, tokenId: identity.id, accountId: state.accountId, accounts })
-      return
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/qq-bind/start') {
-      try {
-        const { taskId, key, qrUrl } = await createQQBindTask()
-        state.qqBind = { taskId, key }
-        json(res, 200, { ok: true, qrUrl, svg: renderSVG(qrUrl, { border: 1 }) })
-      } catch (err) {
-        json(res, 502, { error: err.message })
-      }
-      return
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/qq-bind/poll') {
-      if (!state.qqBind) return json(res, 400, { error: '先获取二维码' })
-      try {
-        const r = await pollQQBindResult(state.qqBind.taskId, state.qqBind.key)
-        if (r.status !== 'created') return json(res, 200, { ok: true, status: r.status })
-        mask(r.secret)
-        state.qqBound = { appId: r.appId, secret: r.secret }
-        state.qqBind = null
-        log(`扫码创建 QQ 机器人成功：AppID ${r.appId}`)
-        json(res, 200, { ok: true, status: 'created', appId: r.appId })
-      } catch (err) {
-        json(res, 502, { error: err.message })
-      }
       return
     }
 
@@ -432,7 +396,6 @@ const server = createServer(async (req, res) => {
       state.provision = provision
       const workerName = (body.workerName || state.workerName).trim() || 'qqbot'
       state.workerName = workerName
-      if (body.qqSecret) mask(body.qqSecret)
       runBootstrap({
         token: state.token,
         accountId: body.accountId?.trim() || state.accountId,
@@ -440,7 +403,6 @@ const server = createServer(async (req, res) => {
         kvName: body.kvName?.trim() || undefined,
         d1Name: body.d1Name?.trim() || undefined,
         r2Name: body.r2Name?.trim() || undefined,
-        qq: resolveQQ(body),
         buildsToken: null, // 构建 token 在连接仓库后的收尾步骤写入
         adminToken,
         repoRoot,
@@ -528,16 +490,19 @@ const server = createServer(async (req, res) => {
       }
       const triggerConfigured = !!state.builds?.configured
       const triggerError = state.builds?.error ?? null
-      const summary = renderSummary({
-        ...state.provision.result,
-        buildsTokenWritten,
-        triggerConfigured,
-      }, { redactSecrets: true })
+      const finalResult = { ...state.provision.result, buildsTokenWritten, triggerConfigured }
+      // run 页的 Summary 是公开的：写不带地址与标识的那一版；完整的只回给向导页面
       if (env.GITHUB_STEP_SUMMARY) {
-        await writeFile(env.GITHUB_STEP_SUMMARY, summary + '\n').catch(() => {})
+        await writeFile(env.GITHUB_STEP_SUMMARY, renderSummary(finalResult, { publicView: true }) + '\n').catch(() => {})
       }
       state.completed = true
-      json(res, 200, { ok: true, summary, triggerConfigured, triggerError, buildsTokenWritten })
+      json(res, 200, {
+        ok: true,
+        summary: renderSummary(finalResult, { redactSecrets: true }),
+        triggerConfigured,
+        triggerError,
+        buildsTokenWritten,
+      })
       // 不再 3 秒强杀 Runner，留出 10 分钟窗口供用户查看/复制配置，用户也可在页面点击“完成并退出”立即释放 Runner
       if (state.completeTimer) clearTimeout(state.completeTimer)
       state.completeTimer = setTimeout(() => {
@@ -577,6 +542,7 @@ const server = createServer(async (req, res) => {
 // ── 启动 ─────────────────────────────────────────────────────────────────
 
 server.listen(PORT, '127.0.0.1', async () => {
+  mask(state.accountId) // 来自 workflow 输入或 secret；输入本来就公开了，secret 的得打码
   log(`向导服务已启动：http://127.0.0.1:${PORT}`)
   try {
     const tunnelUrl = await startTunnel()

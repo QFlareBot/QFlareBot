@@ -15,6 +15,7 @@
   section { background: #171a21; border: 1px solid #2a2f3a; border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
   h2 { font-size: 15px; margin: 0 0 10px; color: #7ab8ff; }
   ol.hint { margin: 8px 0; padding-left: 20px; font-size: 13px; color: #b8bdc7; }
+  div.hint { font-size: 13px; color: #b8bdc7; }
   code { background: #232833; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
   label { display: block; font-size: 13px; color: #9aa0a6; margin: 10px 0 4px; }
   input, textarea, select { width: 100%; background: #0f1115; color: #e6e6e6; border: 1px solid #2a2f3a;
@@ -40,12 +41,6 @@
   .cmd .k { flex: 0 0 9em; font-size: 13px; color: #9aa0a6; }
   .cmd code { flex: 1; min-width: 0; padding: 6px 8px; word-break: break-all; }
   .cmd button { margin: 0; padding: 5px 12px; font-size: 13px; flex-shrink: 0; }
-  .qq-bind { display: flex; gap: 14px; align-items: center; margin-top: 10px; }
-  .qq-bind .qr { flex: 0 0 150px; height: 150px; background: #fff; border-radius: 8px; padding: 4px; }
-  .qq-bind .qr:empty { display: none; }
-  .qq-bind .qr svg { width: 100%; height: 100%; display: block; }
-  .qq-bind .qr.expired { opacity: .3; }
-  .qq-bind .msg { margin-top: 0; }
   pre.log { background: #0b0d11; border: 1px solid #232833; border-radius: 8px; padding: 12px;
             font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0; }
 </style>
@@ -99,14 +94,7 @@
     <input id="f-r2" placeholder="qqbot-artifacts">
     <label>管理面板密码 ADMIN_TOKEN（<b>必填</b>，至少 12 个字符）——自己定、自己记：引导不会代为生成，也不会在任何地方回显</label>
     <input id="f-admin-token" placeholder="至少 12 个字符" type="password" minlength="12" autocomplete="new-password">
-    <label>QQ AppID / AppSecret（可选，现在填就自动存进 KV；也可之后在面板里填）——没有机器人可以直接扫码创建</label>
-    <input id="f-qq-appid" placeholder="AppID">
-    <input id="f-qq-secret" placeholder="AppSecret" type="password">
-    <button id="qq-bind-btn" class="ghost">扫码创建 QQ 机器人</button>
-    <div id="qq-bind" class="qq-bind hidden">
-      <div id="qq-bind-qr" class="qr"></div>
-      <div id="qq-bind-msg" class="msg"></div>
-    </div>
+    <div class="hint" style="margin-top: 10px;">QQ 机器人不用在这里填：部署完、绑好自定义域名后，到面板「设置」里用手机 QQ 扫码创建，或填入已有机器人的 AppID / AppSecret。</div>
     <button id="start-btn">开始部署</button>
     <div id="form-msg" class="msg hidden"></div>
   </section>
@@ -125,7 +113,8 @@
       <li>点下面按钮打开 Worker 设置页，在 <b>Build</b> 一栏点 <b>Connect</b> → 选择这个仓库，分支选默认分支；</li>
       <li><b>Build command 与 Deploy command 照下面填</b>（表单默认的 <code>npx wrangler deploy</code> 在这个仓库里跑不通），其余保持默认。
         填错了也不要紧：向导检测到连接后会自动改正；</li>
-      <li>连好后这里会自动变绿，不用回来点任何按钮。向导会顺手写好 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code>，并补跑一次构建——
+      <li>连好后这里会自动变绿，不用回来点任何按钮。向导会顺手写好 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code>
+        和排除路径（只改文档、模板、工作流时不重建机器人），并补跑一次构建——
         连接那一刻 Cloudflare 自己跑的那次构建如果失败了，不用管。</li>
     </ol>
     <div class="cmd"><span class="k">Build command</span><code id="cmd-build"></code><button class="ghost" data-copy="cmd-build">复制</button></div>
@@ -246,48 +235,6 @@ $('verify-again-btn').onclick = async () => {
   } catch (err) { say('verify-msg', `❌ ${err.message}`, 'err') }
 }
 
-// 扫码创建 QQ 机器人：凭证只留在向导进程里，部署时自动存进 KV
-let qqBindTimer = null
-$('qq-bind-btn').onclick = async () => {
-  clearTimeout(qqBindTimer)
-  $('qq-bind-btn').disabled = true
-  show('qq-bind')
-  $('qq-bind-qr').innerHTML = ''
-  $('qq-bind-qr').classList.remove('expired')
-  say('qq-bind-msg', '正在获取二维码…')
-  try {
-    const { svg } = await api('/api/qq-bind/start', {})
-    $('qq-bind-qr').innerHTML = svg
-    say('qq-bind-msg', '用手机 QQ 扫码，确认后会新建一个 QQ 机器人，AppID 与 AppSecret 自动带入。\n二维码约 3 分钟内有效。')
-    const poll = async () => {
-      try {
-        const r = await api('/api/qq-bind/poll', {})
-        if (r.status === 'pending') { qqBindTimer = setTimeout(poll, 2000); return }
-        $('qq-bind-btn').disabled = false
-        if (r.status === 'expired') {
-          $('qq-bind-qr').classList.add('expired')
-          $('qq-bind-btn').textContent = '刷新二维码'
-          say('qq-bind-msg', '二维码已过期，点上面的按钮刷新', 'err')
-          return
-        }
-        $('qq-bind-qr').innerHTML = ''
-        $('f-qq-appid').value = r.appId
-        $('f-qq-secret').value = ''
-        $('f-qq-secret').placeholder = 'AppSecret 已通过扫码获取，留空即可'
-        $('qq-bind-btn').textContent = '重新扫码创建'
-        say('qq-bind-msg', `✅ 机器人已创建（AppID ${r.appId}），部署时会自动保存凭证`, 'ok')
-      } catch (err) {
-        $('qq-bind-btn').disabled = false
-        say('qq-bind-msg', `❌ ${err.message}`, 'err')
-      }
-    }
-    qqBindTimer = setTimeout(poll, 2000)
-  } catch (err) {
-    $('qq-bind-btn').disabled = false
-    say('qq-bind-msg', `❌ ${err.message}`, 'err')
-  }
-}
-
 $('start-btn').onclick = async () => {
   const adminToken = $('f-admin-token').value.trim()
   // 与 lib.mjs 的 ADMIN_TOKEN_MIN_LENGTH 一致；这里只为早点提示，服务端 /api/provision 同样会拦
@@ -304,8 +251,6 @@ $('start-btn').onclick = async () => {
       kvName: '', d1Name: '', // KV/D1 跟 Worker 名一致，表单只单独暴露 R2
       r2Name: $('f-r2').value.trim(),
       adminToken,
-      qqAppId: $('f-qq-appid').value.trim(),
-      qqSecret: $('f-qq-secret').value.trim(),
     })
     show('step-progress')
     $('step-progress').scrollIntoView({ behavior: 'smooth' })
@@ -351,13 +296,15 @@ function renderResult(r) {
     ['回调地址（QQ 开放平台）', '<code>https://你的域名/webhook</code>——先绑定自定义域名，见下'],
     ['构建清单地址（MANIFEST_URL）', `<code>${esc(r.manifestUrl)}</code>`],
     ['面板登录', '用你在第 ② 步设置的 ADMIN_TOKEN'],
+    ['QQ 机器人', '绑好自定义域名后，到面板「设置」里扫码创建，或填入已有机器人的 AppID / AppSecret'],
   ]
   $('result-table').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')
   $('domains-guide').innerHTML =
     `⚠️ <b>还差一步：绑定自定义域名（必需）</b>。QQ 开放平台访问不到 <code>*.workers.dev</code>，回调必须走你自己的域名：` +
     `到 <a href="${domainsUrl}" target="_blank" rel="noopener">Cloudflare 域名设置页 ↗</a> 的 <b>Custom Domains</b> 添加一个` +
-    `（域名要托管在这个 Cloudflare 账户下，如 <code>bot.yourdomain.com</code>），再把 QQ 开放平台的回调地址填成 <code>https://你的域名/webhook</code>。` +
-    `用新域名打开面板，概览页可以一键复制回调地址。之后的部署都不会改动你绑的域名。`
+    `（域名要托管在这个 Cloudflare 账户下，如 <code>bot.yourdomain.com</code>）。然后用新域名打开面板，在「设置」里创建或绑定 QQ 机器人，` +
+    `再把 QQ 开放平台的回调地址填成 <code>https://你的域名/webhook</code>（概览页可以一键复制）。之后的部署都不会改动你绑的域名。` +
+    `<br><br>这一页的地址和账户信息只在这里显示：run 页的 Summary 是公开的，那里不会写它们。`
 }
 
 // ④ 连接检测：后端用主 token 查 trigger，连上就自动写构建配置并补跑一次构建；之后继续报构建进度
@@ -392,7 +339,7 @@ function pollConnection() {
       else if (s.buildStarted) build = `<span class="spin"></span>已补跑一次构建：${BUILD_STATE[s.buildStatus] || '已提交'}${logs}。构建要几分钟，可以先做下一步。`
       else build = `⚠️ 补跑构建没触发成功（${esc(s.buildError || '未知原因')}），不影响后续：到面板装一个插件时会再触发${logs}。`
       el.className = 'msg ok'
-      el.innerHTML = `✅ 已检测到仓库连接（分支 <code>${esc(s.branch)}</code>），构建命令与 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 已写入。<br>${build}`
+      el.innerHTML = `✅ 已检测到仓库连接（分支 <code>${esc(s.branch)}</code>），构建命令、排除路径与 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 已写入。<br>${build}`
     }
     $('skip-connect-btn').classList.add('hidden')
     if ($('step-builds').classList.contains('hidden')) {
@@ -433,12 +380,16 @@ function renderFinishState(done) {
   el.classList.remove('hidden')
   const parts = []
   if (done?.triggerConfigured) {
-    parts.push('✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 都已写进这个 Worker 的构建 trigger，Cloudflare 后台无需再配置。')
+    parts.push('✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 与排除路径都已写进这个 Worker 的构建 trigger，Cloudflare 后台无需再配置。')
   } else {
-    parts.push(`⚠️ <b>构建配置未自动写入</b>（${esc(done?.triggerError || '仓库还没连接')}）：在补齐之前，装插件不会触发重建。补法见本次工作流 run 页的 Step Summary，里面有可照抄的四项配置。`)
+    parts.push(
+      `⚠️ <b>构建配置未自动写入</b>（${esc(done?.triggerError || '仓库还没连接')}）：在补齐之前，装插件不会触发重建。` +
+      '连上仓库、配好构建 Token 之后，Worker 第一次从面板触发构建时会自动补写；想手动填的话，照 run 页 Summary 里的清单，' +
+      '<code>MANIFEST_URL</code> 用上表的地址（Summary 是公开的，那里只写了占位）。',
+    )
   }
   if (!done?.buildsTokenWritten) {
-    parts.push('⚠️ <b>没有配置构建 Token</b>：在补配之前，面板上装插件会直接失败（提示"自部署未配置"）。补法同样见 Step Summary。')
+    parts.push('⚠️ <b>没有配置构建 Token</b>：在补配之前，面板上装插件会直接失败（提示"自部署未配置"）。补法见 run 页的 Summary。')
   }
   el.className = done?.triggerConfigured && done?.buildsTokenWritten ? 'msg ok' : 'msg'
   el.innerHTML = parts.join('<br><br>')

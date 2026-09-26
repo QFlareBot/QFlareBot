@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { definePlugin, type Manifest } from '@qqbot/sdk'
-import { BUILD_COMMAND, DEPLOY_COMMAND } from '@qqbot/projector'
+import { BUILD_COMMAND, BUILD_PATH_EXCLUDES, DEPLOY_COMMAND } from '@qqbot/projector'
 import { createRuntime } from './runtime.js'
 import { resetManifestSchema } from './manifestStore.js'
 import { resetSnapshotCache } from './store.js'
@@ -62,7 +62,9 @@ function createFetchMock(
       return new Response(JSON.stringify({ success: true, result: { items: builds } }), { status: 200 })
     }
     if (url.endsWith('/builds/workers/tag/triggers')) {
-      return new Response(JSON.stringify({ success: true, result: [{ trigger_uuid: 'trig-1', branch_includes: ['main'] }] }), { status: 200 })
+      // notes/* 是「用户自己在后台加的排除路径」：补写排除路径时不能把它弄丢
+      const trigger = { trigger_uuid: 'trig-1', branch_includes: ['main'], path_excludes: ['notes/*'] }
+      return new Response(JSON.stringify({ success: true, result: [trigger] }), { status: 200 })
     }
     // trigger 配置写入（PATCH）：记下来供断言，注意别和上面的 /builds 触发端点混淆
     if (/\/builds\/triggers\/[^/]+(\/environment_variables)?$/.test(url)) {
@@ -494,7 +496,7 @@ describe('自部署触发与状态同步', () => {
     expect(builds.every((b) => b.buildUuid === 'build-9')).toBe(true)
   })
 
-  it('触发构建时顺手把构建命令与清单环境变量写进 trigger，且只写一次', async () => {
+  it('触发构建时顺手把构建命令、清单环境变量与排除路径写进 trigger，且只写一次', async () => {
     const { call, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
     await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
 
@@ -502,6 +504,7 @@ describe('自部署触发与状态同步', () => {
     expect(commands?.body).toEqual({
       build_command: BUILD_COMMAND,
       deploy_command: DEPLOY_COMMAND,
+      path_excludes: ['notes/*', ...BUILD_PATH_EXCLUDES],
     })
     const envVars = triggerWrites.find((w) => w.url.endsWith('/environment_variables'))
     expect(envVars?.body).toEqual({
@@ -513,6 +516,18 @@ describe('自部署触发与状态同步', () => {
     const before = triggerWrites.length
     await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
     expect(triggerWrites.length).toBe(before)
+  })
+
+  it('老版本写过配置的（标记是时间字符串）：只补一次排除路径，构建命令与环境变量不再动', async () => {
+    const { call, env, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
+    await env.KV.put('rt:cf_trigger_configured', '2026-09-20T08:00:00.000Z')
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+
+    expect(triggerWrites).toEqual([{ url: expect.stringMatching(/\/builds\/triggers\/trig-1$/), body: { path_excludes: ['notes/*', ...BUILD_PATH_EXCLUDES] } }])
+    expect(JSON.parse((await env.KV.get('rt:cf_trigger_configured'))!)).toMatchObject({ version: 2 })
+
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(triggerWrites).toHaveLength(1)
   })
 
   it('拿不到自己的对外地址时不写 trigger——写错的 MANIFEST_URL 比不写更难查', async () => {

@@ -3,23 +3,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   adminTokenProblem,
   BootstrapError,
+  BUILD_PATH_EXCLUDES,
   buildsConnectUrl,
   buildsTokenUrl,
+  cfFetch,
   configureTrigger,
-  createQQBindTask,
   getBuild,
   listTriggers,
   listWorkerSecretNames,
   MANIFEST_PLUGINS_TABLE,
   pickProductionTrigger,
-  pollQQBindResult,
   readInstalledPlugins,
+  redactAccountPath,
   renderSummary,
   resolveBuildToken,
   runBootstrap,
   SETUP_TOKEN_URL,
   startBuild,
   verifyToken,
+  workerDashLink,
 } from './lib.mjs'
 
 const ok = (result) => new Response(JSON.stringify({ success: true, errors: [], result }))
@@ -170,7 +172,6 @@ describe('renderSummary：沿用 BUILD_TOKEN', () => {
     resources: {},
     buildsTokenWritten: false,
     triggerConfigured: false,
-    qqSaved: false,
     warnings: [],
   }
 
@@ -192,7 +193,6 @@ describe('renderSummary：地址与密钥', () => {
     resources: {},
     buildsTokenWritten: true,
     triggerConfigured: true,
-    qqSaved: false,
     warnings: [],
   }
 
@@ -207,7 +207,12 @@ describe('renderSummary：地址与密钥', () => {
     expect(md).toContain('https://你的域名/webhook')
     const domainStep = md.indexOf('绑定自定义域名（必需）')
     expect(domainStep).toBeGreaterThan(-1)
-    expect(domainStep).toBeLessThan(md.indexOf('QQ 开放平台**'))
+    expect(domainStep).toBeLessThan(md.indexOf('创建或绑定 QQ 机器人'))
+  })
+
+  it('QQ 机器人在部署之后到面板里创建或绑定', () => {
+    const md = renderSummary(base, { redactSecrets: true })
+    expect(md).toMatch(/创建或绑定 QQ 机器人\*\*：用新域名打开面板，到「设置」里/)
   })
 
   it('管理密钥不出现在汇总里，哪怕调用方误传了', () => {
@@ -217,35 +222,72 @@ describe('renderSummary：地址与密钥', () => {
   })
 })
 
-describe('扫码创建 QQ 机器人', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  /** 按 q.qq.com 的格式加密：base64(nonce ‖ 密文 ‖ tag) */
-  async function encrypt(secret, key) {
-    const cryptoKey = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64'), 'AES-GCM', false, ['encrypt'])
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(secret))
-    return Buffer.concat([iv, new Uint8Array(sealed)]).toString('base64')
+describe('renderSummary：公开版（写进 Step Summary）', () => {
+  // 公开仓库的 Summary 谁都能看，add-mask 也管不到它：地址、账户、资源标识一律不写
+  const result = {
+    accountId: '0123456789abcdef0123456789abcdef',
+    workerName: 'qqbot',
+    panelUrl: 'https://qqbot.secret-sub.workers.dev/',
+    manifestUrl: 'https://qqbot.secret-sub.workers.dev/admin/build-manifest',
+    buildToken: 'build-token-value',
+    buildTokenReused: false,
+    resources: {
+      kv: { name: 'my-kv', id: 'kv-id-123', created: true },
+      d1: { name: 'my-d1', id: 'd1-id-456', created: false },
+    },
+    buildsTokenWritten: false,
+    triggerConfigured: false,
+    warnings: [],
   }
 
-  it('建任务 → 等待 → 完成并解密', async () => {
-    const qq = (data) => new Response(JSON.stringify({ retcode: 0, data }))
-    const calls = stubFetch(qq({ task_id: 't1' }), qq({ status: 1 }))
-    const task = await createQQBindTask()
-    expect(calls[0]).toMatchObject({ url: 'https://q.qq.com/lite/create_bind_task', body: { key: task.key } })
-    expect(Buffer.from(task.key, 'base64')).toHaveLength(32)
-    expect(task.qrUrl).toBe('https://q.qq.com/qqbot/openclaw/connect.html?task_id=t1&_wv=2')
-    expect(await pollQQBindResult('t1', task.key)).toEqual({ status: 'pending' })
-    expect(calls[1]).toMatchObject({ url: 'https://q.qq.com/lite/poll_bind_result', body: { task_id: 't1' } })
-
-    stubFetch(qq({ status: 2, bot_appid: '1905677019', bot_encrypt_secret: await encrypt('gCsecretRJ', task.key), user_openid: 'U1' }))
-    expect(await pollQQBindResult('t1', task.key)).toEqual({ status: 'created', appId: '1905677019', secret: 'gCsecretRJ', userOpenid: 'U1' })
+  it.each([false, true])('triggerConfigured=%s：不含子域、账户 ID、资源名与 id、令牌', (triggerConfigured) => {
+    const md = renderSummary({ ...result, triggerConfigured }, { publicView: true })
+    for (const leak of ['secret-sub', result.accountId, 'my-kv', 'kv-id-123', 'my-d1', 'd1-id-456', 'build-token-value']) {
+      expect(md).not.toContain(leak)
+    }
+    expect(md).toContain('https://dash.cloudflare.com/?to=/:account/workers/services/view/qqbot/production/settings')
+    expect(md).toContain('| KV | （新建） |')
   })
 
-  it('过期与平台报错', async () => {
-    stubFetch(new Response(JSON.stringify({ retcode: 0, data: { status: 3 } })), new Response(JSON.stringify({ retcode: 1, msg: '频率过快' })))
-    expect(await pollQQBindResult('t1', 'k')).toEqual({ status: 'expired' })
-    await expect(pollQQBindResult('t1', 'k')).rejects.toThrow('频率过快')
+  it('手填清单里的 MANIFEST_URL 只给占位，并带上排除路径', () => {
+    const md = renderSummary(result, { publicView: true })
+    expect(md).toContain('MANIFEST_URL=https://qqbot.<你的子域>.workers.dev/admin/build-manifest')
+    expect(md).toContain(BUILD_PATH_EXCLUDES.join('  '))
+  })
+
+  it('完整版（向导页面用）照常带地址', () => {
+    expect(renderSummary(result)).toContain('https://qqbot.secret-sub.workers.dev/admin/build-manifest')
+  })
+})
+
+describe('公开日志里不带账户标识', () => {
+  it('redactAccountPath 去掉路径里的账户 ID', () => {
+    expect(redactAccountPath('/accounts/0123abc/workers/scripts?per_page=1')).toBe('/accounts/…/workers/scripts?per_page=1')
+    expect(redactAccountPath('/user/tokens/verify')).toBe('/user/tokens/verify')
+  })
+
+  it('cfFetch 的报错不带账户 ID', async () => {
+    stubFetch(new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'denied' }], result: null }), { status: 403 }))
+    const err = await cfFetch('tok', '/accounts/0123abc/d1/database').catch((e) => e)
+    expect(err.message).toBe('Cloudflare API GET /accounts/…/d1/database 失败：[10000] denied')
+  })
+
+  it('多账户时报错不列账户名与 id，改教用 secret 指定', async () => {
+    stubFetch(
+      ok({ id: 'tok-1', status: 'active' }),
+      ok([
+        { id: 'aaaa1111', name: '张三的账户' },
+        { id: 'bbbb2222', name: 'Team' },
+      ]),
+    )
+    const err = await runBootstrap({ token: 'tok', adminToken: 'long-enough-pass', repoRoot: '/nonexistent' }).catch((e) => e)
+    expect(err.message).toBe('Token 能访问 2 个账户，需要指定用哪一个')
+    expect(`${err.message} ${err.hint}`).not.toMatch(/aaaa1111|bbbb2222|张三|Team/)
+    expect(err.hint).toContain('CLOUDFLARE_ACCOUNT_ID')
+  })
+
+  it('workerDashLink 用 :account 占位，不带账户 ID', () => {
+    expect(workerDashLink('my bot', 'builds')).toBe('https://dash.cloudflare.com/?to=/:account/workers/services/view/my%20bot/production/builds')
   })
 })
 
@@ -263,17 +305,21 @@ describe('pickProductionTrigger', () => {
       { trigger_uuid: 'preview', branch_includes: ['*'], branch_excludes: ['main'] },
       { trigger_uuid: 'prod', branch_includes: ['main'], branch_excludes: [] },
     ]
-    expect(pickProductionTrigger(triggers)).toEqual({ uuid: 'prod', branch: 'main' })
+    expect(pickProductionTrigger(triggers)).toEqual({ uuid: 'prod', branch: 'main', pathExcludes: [] })
   })
 
-  it('生产分支按 trigger 实际配置取，不写死 main', () => {
-    expect(pickProductionTrigger([{ trigger_uuid: 't', branch_includes: ['master'] }])).toEqual({ uuid: 't', branch: 'master' })
+  it('生产分支按 trigger 实际配置取，不写死 main；带上现有的排除路径', () => {
+    expect(pickProductionTrigger([{ trigger_uuid: 't', branch_includes: ['master'], path_excludes: ['notes/*', 1] }])).toEqual({
+      uuid: 't',
+      branch: 'master',
+      pathExcludes: ['notes/*'],
+    })
   })
 
   it('只有预览 trigger 或列表为空时返回 null；缺 branch_includes 字段时按生产处理', () => {
     expect(pickProductionTrigger([{ trigger_uuid: 'preview', branch_includes: ['*'] }])).toBeNull()
     expect(pickProductionTrigger([])).toBeNull()
-    expect(pickProductionTrigger([{ uuid: 'u' }])).toEqual({ uuid: 'u', branch: 'main' })
+    expect(pickProductionTrigger([{ uuid: 'u' }])).toEqual({ uuid: 'u', branch: 'main', pathExcludes: [] })
   })
 })
 
@@ -295,9 +341,9 @@ describe('Workers Builds 调用', () => {
     await expect(listTriggers('tok', 'acc', 'tag', '主 Token')).rejects.toThrow('boom')
   })
 
-  it('configureTrigger 写命令与清单变量；startBuild 按分支触发；getBuild 读状态', async () => {
+  it('configureTrigger 写命令、排除路径与清单变量；startBuild 按分支触发；getBuild 读状态', async () => {
     const calls = stubFetch(ok({}), ok({}), ok({ build_uuid: 'b1' }), ok({ status: 'running', build_outcome: null }))
-    await configureTrigger('tok', 'acc', 'trig', { manifestUrl: 'https://x/admin/build-manifest', buildToken: 'bt' })
+    await configureTrigger('tok', 'acc', 'trig', { manifestUrl: 'https://x/admin/build-manifest', buildToken: 'bt', pathExcludes: ['notes/*'] })
     expect(await startBuild('tok', 'acc', 'trig', 'main')).toBe('b1')
     expect(await getBuild('tok', 'acc', 'b1')).toEqual({ status: 'running', outcome: '' })
     expect(calls.map((c) => `${c.method} ${c.url.replace('https://api.cloudflare.com/client/v4', '')}`)).toEqual([
@@ -306,6 +352,8 @@ describe('Workers Builds 调用', () => {
       'POST /accounts/acc/builds/triggers/trig/builds',
       'GET /accounts/acc/builds/builds/b1',
     ])
+    // 用户在后台自己加的排除路径（notes/*）留着，补上本项目的
+    expect(calls[0].body.path_excludes).toEqual(['notes/*', ...BUILD_PATH_EXCLUDES])
     expect(calls[1].body).toEqual({
       MANIFEST_URL: { value: 'https://x/admin/build-manifest', is_secret: false },
       MANIFEST_TOKEN: { value: 'bt', is_secret: true },

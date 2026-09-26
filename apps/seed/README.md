@@ -17,10 +17,16 @@
    - **网页引导**（什么都没配时）：工作流起一个临时网页（Quick Tunnel），点开 run 页 Summary
      里的链接，跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
      （缺哪个权限当场点名），然后建资源、看进度、连接仓库、创建构建 token。
-   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，汇总写进
+   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，后续步骤写进
      run 页 Summary。`ADMIN_TOKEN` 必须自己定（它就是面板登录密钥，只有你知道明文）；缺任一个
      secret 会直接失败并在日志里给出配置指引。
-3. 工作流结束后照 Summary 里的清单收尾：绑定自定义域名、QQ 开放平台填回调地址、连接仓库（网页向导里已做完）。
+3. 工作流结束后照 Summary 里的清单收尾：绑定自定义域名、在面板「设置」里创建或绑定 QQ 机器人、QQ 开放平台填回调地址、连接仓库（网页向导里已做完）。
+
+**日志与 Summary 不带隐私信息。** 公开仓库的 Actions 日志和 Summary 谁都能看：账户 ID、workers.dev 子域、
+KV / D1 的 id 一拿到就经 `::add-mask::` 打码（wrangler 部署时打印的地址也被遮住），Summary 里只写后续步骤，
+不写面板地址、`MANIFEST_URL`、账户与资源标识，后台链接用 `dash.cloudflare.com/?to=/:account/...` 占位。
+面板地址只在网页向导的完成页显示；无 UI 模式到 Cloudflare 后台 Worker → Settings → Domains & Routes 里看。
+多账户时账户 ID 建议配成 secret `CLOUDFLARE_ACCOUNT_ID`：workflow 的 `account_id` 输入会公开显示在运行页。
 
 **自定义域名必须绑，由你自己选、自己绑。** QQ 开放平台访问不到 `*.workers.dev`（已实测，回调验证不通过），
 所以回调必须走你自己的域名。引导只部署到默认的 `<Worker名>.<子域>.workers.dev`（面板与构建机拉清单用它），
@@ -45,7 +51,7 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 
 引导做了什么（无 UI 模式的完整清单）：
 
-- 验证 token 与权限；单账户自动推导账户 ID（多账户要求填 `account_id` 输入）
+- 验证 token 与权限；单账户自动推导账户 ID（多账户要求配 secret `CLOUDFLARE_ACCOUNT_ID`，或填 `account_id` 输入）
 - **幂等创建/复用**同名 KV / D1 / R2（名字可在 workflow 输入里改；R2 未激活时自动降级为
   不绑定，只在后台激活 R2 后重跑即可）
 - 读取 D1 里已安装的插件，与内置清单一起构建 + `wrangler deploy`——重跑引导不会把面板里装的插件
@@ -58,10 +64,9 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
   谁都能看，生成出来的密码没有安全的途径交到你手上）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
   `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
   secret 时再写 `CF_BUILDS_TOKEN`
-- QQ 凭证：无 UI 模式配了 secrets `QQ_APPID`/`QQ_APP_SECRET`、或网页向导表单里填了的话，部署后
-  调 `PUT /admin/bot` 存进 KV（先向 QQ 验证，与管理面板同一条路径）。还没有机器人时，向导表单和
-  面板设置页都能**扫码创建**：手机 QQ 扫码确认即新建一个机器人，AppID/AppSecret 自动带入（协议同 AstrBot）。
-  回调地址扫码给不了，仍要到 QQ 开放平台手填一次
+- **不碰 QQ 凭证**：机器人在部署之后到面板「设置」里建——手机 QQ 扫码确认即新建一个，AppID/AppSecret
+  自动存进 KV（协议同 AstrBot）；已有机器人就填入它的凭证，保存前先向 QQ 验证。回调地址扫码给不了，
+  仍要到 QQ 开放平台手填一次。以前的 secrets `QQ_APPID` / `QQ_APP_SECRET` 不再读取
 
 > R2 在新账户上需要先到后台激活一次（免费额度内不扣费），API 替代不了；向导会在前置检查里提醒。
 
@@ -94,18 +99,20 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 触发一次构建 → 构建机拉源码编译并部署**。设置步骤：
 
 1. 仓库推到 GitHub，在 Cloudflare Dashboard 的 Worker → Settings → Builds 里连接仓库（引导工作流会给出直达链接）。
-2. **构建命令与环境变量不用手填。** 仓库一连上，这四项就会经 Builds API 自动写进 trigger：
+2. **构建命令、环境变量与排除路径不用手填。** 仓库一连上，这几项就会经 Builds API 自动写进 trigger：
 
    | 项 | 值 |
    | --- | --- |
    | Build command | `pnpm build && pnpm --filter @qqbot/seed run manifest:prepare` |
    | Deploy command | `pnpm --filter @qqbot/seed run manifest:deploy` |
+   | Build watch paths → Exclude | `docs/*` `templates/*` `.github/*` `scripts/*` `design-system/*` `*.md` `LICENSE`：只改这些时不重建机器人。在 trigger 已有的排除路径上合并，你自己加的不会丢 |
    | 环境变量 `MANIFEST_URL` | `https://<默认域名>/admin/build-manifest` |
    | 环境变量 `MANIFEST_TOKEN` | Worker 侧 `BUILD_TOKEN` 的同值（引导自动生成） |
 
    写入时机有两处：**网页向导**在你连完仓库、点「完成引导」时写；**无 UI 引导**跑的时候 trigger
    还不存在（仓库尚未连接），改由 Worker 在第一次触发构建、自发现到 trigger 时补写。
-   只写一次，之后你在后台的手动调整不会被覆盖回去。
+   每项只写一次（KV 里记着写到了哪一版），之后你在后台的手动调整不会被覆盖回去。排除路径是后加的：
+   早先部署、已经写过前几项的 Worker，会在下一次从面板触发构建时只补一次排除路径，别的不动。
 
 3. 可选的构建环境变量：
 

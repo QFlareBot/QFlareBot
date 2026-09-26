@@ -32,6 +32,24 @@ export interface CloudflareBuildsApiOptions {
 export const BUILD_COMMAND = 'pnpm build && pnpm --filter @qqbot/seed run manifest:prepare'
 export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
 
+/**
+ * 推送时不必重建机器人的路径（trigger 的 Build watch paths → Exclude）。
+ *
+ * Worker 只由工作区（packages/ plugins/ apps/）和根目录的 package.json、lockfile 构建出来；
+ * 文档站、插件模板、工作流、引导脚本、设计稿与各处 Markdown 都不进 bundle。
+ * 不排除的话，只改文档也会占一次构建时长，还让人白等。一次推送里只要有一个文件不在这里，照样构建。
+ * 与 BUILD_COMMAND 一样，`scripts/bootstrap/lib.mjs` 里有一份副本。
+ */
+export const BUILD_PATH_EXCLUDES = ['docs/*', 'templates/*', '.github/*', 'scripts/*', 'design-system/*', '*.md', 'LICENSE']
+
+/**
+ * 在 trigger 已有的排除路径上补齐 BUILD_PATH_EXCLUDES。
+ * API 没说 PATCH 数组是替换还是合并，按替换处理：先读出已有的并上，用户自己加的不丢
+ */
+export function mergePathExcludes(existing: readonly string[]): string[] {
+  return [...new Set([...existing, ...BUILD_PATH_EXCLUDES])]
+}
+
 /** listBuilds 默认页大小：够账本里最近这些记录回填，又不至于拉回一大页 */
 export const BUILDS_PAGE_SIZE = 50
 
@@ -40,6 +58,7 @@ export interface TriggerConfig {
   build_command?: string
   deploy_command?: string
   root_directory?: string
+  path_excludes?: string[]
 }
 
 /** 构建环境变量的值；`is_secret` 为真时后台不再回显 */
@@ -53,13 +72,15 @@ export interface BuildTrigger {
   uuid: string
   /** 连接仓库时设的分支规则：生产 trigger 是具体分支名，预览 trigger 是 "*" 这类通配；字段缺失时为空 */
   branchIncludes: string[]
+  /** 推送时不触发构建的路径（Build watch paths → Exclude）；字段缺失时为空 */
+  pathExcludes: string[]
 }
 
 /**
  * trigger 的生产分支：branch_includes 里第一个不带通配的名字。
  * 取不到（字段缺失，或只有通配）返回 null，由调用方决定回退——别在这里替人猜 main。
  */
-export function productionBranchOf(trigger: BuildTrigger): string | null {
+export function productionBranchOf(trigger: Pick<BuildTrigger, 'branchIncludes'>): string | null {
   return trigger.branchIncludes.find((b) => b !== '' && !b.includes('*')) ?? null
 }
 
@@ -150,17 +171,17 @@ export class CloudflareBuildsApi {
 
   /** 列出某个 Worker 的 Builds trigger；仓库连上 Workers Builds 之前为空 */
   async listTriggers(workerTag: string): Promise<BuildTrigger[]> {
-    type Raw = { trigger_uuid?: unknown; uuid?: unknown; id?: unknown; branch_includes?: unknown }
+    type Raw = { trigger_uuid?: unknown; uuid?: unknown; id?: unknown; branch_includes?: unknown; path_excludes?: unknown }
     const result = await this.#request<Raw[] | { items?: Raw[] }>(
       'GET',
       `/builds/workers/${encodeURIComponent(workerTag)}/triggers`,
     )
     const items = Array.isArray(result) ? result : (result.items ?? [])
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [])
     return items.flatMap((t) => {
       const uuid = [t.trigger_uuid, t.uuid, t.id].find((v): v is string => typeof v === 'string')
       if (!uuid) return []
-      const includes = Array.isArray(t.branch_includes) ? t.branch_includes.filter((b): b is string => typeof b === 'string') : []
-      return [{ uuid, branchIncludes: includes }]
+      return [{ uuid, branchIncludes: strings(t.branch_includes), pathExcludes: strings(t.path_excludes) }]
     })
   }
 

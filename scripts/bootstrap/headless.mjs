@@ -9,11 +9,11 @@
  *   CLOUDFLARE_BUILDS_TOKEN  可选，GitHub secret（写为 Worker 的 CF_BUILDS_TOKEN）
  *   BUILD_TOKEN              可选，GitHub secret（写为 Worker 的 BUILD_TOKEN，构建机侧叫 MANIFEST_TOKEN）；
  *                            不配时首次自动生成，重跑沿用 Worker 上已有的值（不轮换）
- *   CLOUDFLARE_ACCOUNT_ID    可选，多账户时必填
- *   QQ_APPID / QQ_APP_SECRET 可选，GitHub secret；配了则部署后存进 KV
+ *   CLOUDFLARE_ACCOUNT_ID    可选，多账户时必填（workflow 输入或同名 secret）
  *   BOOT_WORKER_NAME / BOOT_KV_NAME / BOOT_D1_NAME / BOOT_R2_NAME  可选资源名（none=跳过该资源）
  *
- * QQ 凭证走 GitHub secret 而不是 workflow 输入：dispatch 输入会显示在 run 页面，secret 不会。
+ * QQ 机器人不在这里配：部署完到面板「设置」里扫码创建或填入凭证。
+ * 公开仓库的日志与 Summary 谁都能看：Summary 用 publicView 渲染，不带地址与标识。
  */
 
 import path from 'node:path'
@@ -39,7 +39,6 @@ if (adminProblem) {
 }
 
 console.log(`::add-mask::${adminToken}`)
-if (env.QQ_APP_SECRET) console.log(`::add-mask::${env.QQ_APP_SECRET}`)
 if (env.CLOUDFLARE_BUILDS_TOKEN) console.log(`::add-mask::${env.CLOUDFLARE_BUILDS_TOKEN}`)
 if (env.BUILD_TOKEN) console.log(`::add-mask::${env.BUILD_TOKEN}`)
 
@@ -51,7 +50,6 @@ try {
     kvName: opt('BOOT_KV_NAME'),
     d1Name: opt('BOOT_D1_NAME'),
     r2Name: opt('BOOT_R2_NAME'),
-    qq: env.QQ_APPID && env.QQ_APP_SECRET ? { appId: env.QQ_APPID, secret: env.QQ_APP_SECRET } : undefined,
     buildsToken: opt('CLOUDFLARE_BUILDS_TOKEN'),
     buildToken: opt('BUILD_TOKEN'),
     adminToken,
@@ -63,11 +61,10 @@ try {
   })
 
   const isCi = !!process.env.GITHUB_STEP_SUMMARY
-  const summary = renderSummary(result, { redactSecrets: isCi })
-  appendStepSummary(summary)
+  appendStepSummary(renderSummary(result, { publicView: isCi }))
 
   if (isCi) {
-    console.log('\n✅ 引导部署完成！完整面板地址与配置参数已写入本页 GitHub Step Summary。')
+    console.log('\n✅ 引导部署完成！后续步骤见本页 Summary（为了不公开你的地址，面板地址请到 Cloudflare 后台查看）。')
     console.log('管理密钥 ADMIN_TOKEN：已使用您预设的 Secret 配置，请使用该密钥登录管理后台。')
   } else {
     console.log('\n' + renderSummary(result, { redactSecrets: false }))

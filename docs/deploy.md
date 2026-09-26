@@ -11,7 +11,7 @@
 - **GitHub 账号**：用来 Fork 仓库、运行引导工作流。
 - **Cloudflare 账号**：免费版即可。想让插件用 R2 存文件的话，先在 Cloudflare 后台激活一次 R2（免费额度内不扣费）；不激活也能部署，只是不绑 R2。
 - **一个托管在 Cloudflare 上的域名**：QQ 开放平台访问不到 `*.workers.dev`，回调必须走你自己的域名。还没有的话见[绑定自定义域名](./deploy-domain#准备域名)。
-- **QQ 机器人**：已有的话准备好 AppID 与 AppSecret；没有也行，引导向导和面板都能用手机 QQ 扫码新建一个。
+- **QQ 机器人**：不用提前准备。部署完在面板「设置」里用手机 QQ 扫码新建一个，已有的话填入它的 AppID 与 AppSecret。
 
 ## 1. Fork 并运行引导工作流
 
@@ -34,9 +34,11 @@
 
 打开网址时如果显示无法访问，稍等一会儿再刷新：临时隧道的地址刚生成时经常还没生效，一般过一会儿就能打开。15 分钟内没有人打开的话，工作流会自动结束，重新运行即可。
 
-5. 跟着向导走：创建预填好权限的 Cloudflare API token、设置面板登录密钥 `ADMIN_TOKEN`、填写 QQ 机器人凭证（或扫码新建），最后连接仓库。
+5. 跟着向导走：创建预填好权限的 Cloudflare API token、设置面板登录密钥 `ADMIN_TOKEN`，然后部署，最后连接仓库。QQ 机器人不在这里填，第 3 步再建。
 
-向导结束时会给出一个 `https://qqbot.<你的子域>.workers.dev` 的面板地址，可以先用它登录面板看看；但**不要把它当成回调地址**，下一步要换成自己的域名。
+向导的完成页会给出一个 `https://qqbot.<你的子域>.workers.dev` 的面板地址，可以先用它登录面板看看；但**不要把它当成回调地址**，下一步要换成自己的域名。
+
+这个地址和你的账户信息只显示在向导页面上。公开仓库的 Actions 日志和运行页 Summary 谁都能看，所以那里不写地址、账户 ID 和资源 ID，日志里出现的会被打成 `***`。之后想再找面板地址，到 Cloudflare 后台 Worker 的 **Settings → Domains & Routes** 里看。
 
 `ADMIN_TOKEN` 只有你知道，引导不会在任何地方输出它，记好。Token 权限清单、无 UI 模式、手动部署与自部署原理见仓库里的 [apps/seed/README.md](https://github.com/QFlareBot/QFlareBot/blob/main/apps/seed/README.md)。
 
@@ -44,9 +46,9 @@
 
 在 Cloudflare 后台给 Worker 加一个 Custom Domain，比如 `bot.example.com`。详见[绑定自定义域名](./deploy-domain)。
 
-## 3. 配置 QQ 开放平台
+## 3. 创建机器人并配置 QQ 开放平台
 
-到 QQ 开放平台填写回调地址 `https://bot.example.com/webhook` 并勾选事件；校验通过后，把机器人拉进你是群主的群，按需在群里打开权限。详见[配置 QQ 开放平台](./deploy-qq)。
+用自定义域名打开面板，在「设置」里扫码新建 QQ 机器人，或填入已有机器人的 AppID 与 AppSecret。然后到 QQ 开放平台填写回调地址 `https://bot.example.com/webhook` 并勾选事件；校验通过后，把机器人拉进你是群主的群，按需在群里打开权限。详见[配置 QQ 开放平台](./deploy-qq)。
 
 ## 4. 试一下
 

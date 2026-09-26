@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BUILDS_PAGE_SIZE, BUILD_COMMAND, CloudflareBuildsApi, DEPLOY_COMMAND, productionBranchOf, type BuildRecord } from './builds.js'
+import {
+  BUILDS_PAGE_SIZE,
+  BUILD_COMMAND,
+  BUILD_PATH_EXCLUDES,
+  CloudflareBuildsApi,
+  DEPLOY_COMMAND,
+  mergePathExcludes,
+  productionBranchOf,
+  type BuildRecord,
+} from './builds.js'
 import { CloudflareApiError } from './cloudflare.js'
 
 type Call = { url: string; init: RequestInit }
@@ -126,13 +135,19 @@ describe('CloudflareBuildsApi.getTriggerUuid', () => {
 })
 
 describe('CloudflareBuildsApi.listTriggers / productionBranchOf', () => {
-  it('收录 uuid 与分支规则，跳过缺 uuid 的条目和非字符串分支', async () => {
+  it('收录 uuid、分支规则与排除路径，跳过缺 uuid 的条目和非字符串项', async () => {
     const { api } = fakeApi(() =>
-      ok({ items: [{ trigger_uuid: 'a', branch_includes: ['master', 3] }, { branch_includes: ['x'] }, { id: 'b' }] }),
+      ok({
+        items: [
+          { trigger_uuid: 'a', branch_includes: ['master', 3], path_excludes: ['notes/*', null] },
+          { branch_includes: ['x'] },
+          { id: 'b' },
+        ],
+      }),
     )
     expect(await api.listTriggers('t')).toEqual([
-      { uuid: 'a', branchIncludes: ['master'] },
-      { uuid: 'b', branchIncludes: [] },
+      { uuid: 'a', branchIncludes: ['master'], pathExcludes: ['notes/*'] },
+      { uuid: 'b', branchIncludes: [], pathExcludes: [] },
     ])
   })
 
@@ -192,5 +207,17 @@ describe('构建命令常量', () => {
     const source = await readFile(url, 'utf8')
     expect(source).toContain(`export const BUILD_COMMAND = '${BUILD_COMMAND}'`)
     expect(source).toContain(`export const DEPLOY_COMMAND = '${DEPLOY_COMMAND}'`)
+    expect(source).toContain(`export const BUILD_PATH_EXCLUDES = [${BUILD_PATH_EXCLUDES.map((p) => `'${p}'`).join(', ')}]`)
+  })
+})
+
+describe('mergePathExcludes', () => {
+  it('保留已有的排除路径，补上缺的，不重复', () => {
+    expect(mergePathExcludes([])).toEqual(BUILD_PATH_EXCLUDES)
+    expect(mergePathExcludes(['notes/*', 'docs/*'])).toEqual(['notes/*', ...BUILD_PATH_EXCLUDES])
+  })
+
+  it('不排除 Worker 构建要用到的目录', () => {
+    for (const p of BUILD_PATH_EXCLUDES) expect(p).not.toMatch(/^(packages|plugins|apps)\//)
   })
 })
