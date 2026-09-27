@@ -15,6 +15,8 @@ import QInput from '../components/ui/QInput.vue'
 import QSelect from '../components/ui/QSelect.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
+import QSkeleton from '../components/ui/QSkeleton.vue'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
@@ -22,6 +24,7 @@ const route = useRoute()
 const router = useRouter()
 const { pluginByName, refresh, status, patchLocal } = useStatus()
 const { push } = useToast()
+const confirm = useConfirm()
 
 const plugin = computed(() => pluginByName(String(route.params.name)))
 const config = ref<Record<string, unknown>>({})
@@ -43,8 +46,6 @@ const GROUP_MODES = [
 ]
 const saving = ref(false)
 const removing = ref(false)
-/** 卸载时是否连插件数据一起清；默认保留（误删不可逆） */
-const purgeOnUninstall = ref(false)
 
 watch(
   plugin,
@@ -130,12 +131,19 @@ async function save() {
 async function uninstall() {
   if (!plugin.value) return
   const name = plugin.value.name
-  const purge = purgeOnUninstall.value
-  const tail = purge ? '，并清空它的 KV / D1 / R2 数据与面板里的配置（不可恢复）' : '（数据保留，之后可在「存储」页单独清掉）'
   // 依赖它提供的服务的插件：卸载后它们调用 ctx.service 会报错
   const dependents = plugin.value.dependents ?? []
-  const warn = dependents.length ? `\n\n注意：${dependents.join('、')} 依赖它提供的服务，卸载后这些插件调用会报错。` : ''
-  if (!confirm(`确定卸载 ${name}？它会从插件清单移除并触发一次重建${tail}${warn}`)) return
+  const answer = await confirm({
+    title: `卸载 ${plugin.value.displayName}？`,
+    message: `${name} 会从插件清单移除并触发一次重建，重建完成前它仍在运行。`,
+    warning: dependents.length ? `${dependents.join('、')} 依赖它提供的服务，卸载后这些插件调用会报错。` : undefined,
+    // 默认保留：误删不可逆
+    checkbox: { label: '同时清空它的数据', hint: 'KV / D1 / R2 与面板里的配置一并删除，不可恢复；不勾选则数据保留，之后可在「存储」页清掉' },
+    confirmText: '卸载并重建',
+    danger: true,
+  })
+  if (!answer) return
+  const purge = answer.checked
 
   removing.value = true
   try {
@@ -158,7 +166,8 @@ async function uninstall() {
 <template>
   <div>
     <RouterLink to="/plugins" class="mb-3 inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"><ArrowLeft class="size-4" aria-hidden="true" />插件列表</RouterLink>
-    <QEmpty v-if="status && !plugin" title="插件不存在" />
+    <div v-if="!status" class="rounded-lg border border-card-border bg-surface shadow-card"><QSkeleton :rows="3" label="正在读取插件" /></div>
+    <QEmpty v-else-if="!plugin" title="插件不存在" />
     <template v-else-if="plugin">
       <PageHeader :title="plugin.displayName" :description="plugin.description || undefined">
         <RouterLink v-if="plugin.ui && plugin.enabled" :to="`/plugin-ui/${plugin.name}`">
@@ -240,16 +249,10 @@ async function uninstall() {
 
           <QCard v-if="plugin.installed" title="卸载" description="从插件清单移除并触发一次重建；重建完成前它仍在运行">
             <div class="flex flex-col gap-3 text-sm">
-              <p v-if="plugin.dependents?.length" class="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
+              <p v-if="plugin.dependents?.length" class="rounded-md bg-warning-bg px-3 py-2 text-xs text-warning">
                 {{ plugin.dependents.join('、') }} 依赖它提供的服务，卸载后这些插件调用会报错。
               </p>
-              <label class="flex cursor-pointer items-start gap-2">
-                <input v-model="purgeOnUninstall" type="checkbox" class="mt-0.5" />
-                <span>
-                  同时清空它的数据
-                  <span class="block text-xs text-fg-muted">KV / D1 / R2 与面板里的配置一并删除，不可恢复；不勾选则数据保留，之后可在「存储」页清掉</span>
-                </span>
-              </label>
+              <p class="text-xs text-fg-muted">数据默认保留，确认时可以选择一起清空。</p>
               <div><QButton variant="danger" :loading="removing" @click="uninstall">卸载插件</QButton></div>
             </div>
           </QCard>

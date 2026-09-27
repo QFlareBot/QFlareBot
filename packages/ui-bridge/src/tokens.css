@@ -1,6 +1,6 @@
 /*
  * QFlareBot 设计 token —— design-system/qflarebot/MASTER.md 的机器可读版本。
- * 主面板与插件页面共用；语义命名，换风格只改这里的映射。
+ * 主面板与插件页面共用；语义命名，换风格只改这里的映射。已有的变量名只增不改，插件页面靠它们跟随面板。
  * 主题由 <html data-theme="light|dark"> 切换，未设置时跟随系统。
  */
 
@@ -15,98 +15,162 @@
   --qb-text-base: 14px;
   --qb-text-lg: 16px;
   --qb-text-xl: 20px;
+  --qb-text-2xl: 24px;
   --qb-leading: 1.5;
 
-  /* 间距刻度（密度 8/10） */
+  /* 间距刻度 */
   --qb-space-1: 4px;
   --qb-space-2: 8px;
   --qb-space-3: 12px;
   --qb-space-4: 16px;
+  --qb-space-5: 20px;
   --qb-space-6: 24px;
   --qb-space-8: 32px;
 
-  --qb-radius-sm: 4px;
-  --qb-radius: 6px;
-  --qb-radius-lg: 8px;
+  /* 圆角：卡片大、控件中、按钮胶囊 */
+  --qb-radius-sm: 6px;
+  --qb-radius: 10px;
+  --qb-radius-lg: 16px;
+  --qb-radius-xl: 20px;
+  --qb-radius-full: 999px;
 
-  --qb-row-height: 36px;
+  --qb-row-height: 40px;
   --qb-control-height: 32px;
   --qb-touch-min: 44px;
 
-  /* 动效：只有 opacity/transform 过渡 */
-  --qb-duration: 150ms;
-  --qb-duration-slow: 200ms;
+  /* 动效：只动 opacity/transform（折叠面板例外，动行高）；系统要求减弱动态效果时全部归零 */
+  --qb-duration: 160ms;
+  --qb-duration-slow: 320ms;
+  --qb-duration-slower: 480ms;
   --qb-ease: cubic-bezier(0.2, 0, 0, 1);
+  --qb-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --qb-ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
 
-  /* 状态色：三档，旁边必须有文字或图标 */
-  --qb-success: #16a34a;
-  --qb-warning: #d97706;
-  --qb-danger: #dc2626;
-
-  /* 浅色（默认） */
-  --qb-bg: #f8fafc;
+  /* 浅色（默认）：带一点绿的中性色，底色与卡片拉开层次 */
+  --qb-bg: #e9eeea;
+  --qb-bg-glow: radial-gradient(900px 520px at 8% -10%, #f6faf7 0%, transparent 60%),
+    radial-gradient(800px 600px at 110% 110%, #dce7e0 0%, transparent 55%);
   --qb-surface: #ffffff;
-  --qb-surface-muted: #f1f5f9;
-  --qb-fg: #0f172a;
-  --qb-fg-muted: #64748b;
-  --qb-fg-subtle: #94a3b8;
-  --qb-border: #e2e8f0;
-  --qb-border-strong: #cbd5e1;
+  --qb-surface-muted: #f0f4f1;
+  --qb-input: #f6f8f7;
+  --qb-fg: #18211c;
+  --qb-fg-muted: #5d6a63;
+  --qb-fg-subtle: #8e9a93;
+  --qb-border: #e6ebe7;
+  --qb-border-strong: #d2dad4;
+  --qb-card-border: rgb(255 255 255 / 0.9);
   --qb-accent: #16a34a;
   --qb-on-accent: #ffffff;
-  --qb-ring: #0f172a;
-  --qb-success-bg: #f0fdf4;
-  --qb-warning-bg: #fffbeb;
-  --qb-danger-bg: #fef2f2;
-  --qb-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+  --qb-ring: #15803d;
+
+  /* 状态色：三档，旁边必须有文字或图标 */
+  --qb-success: #15803d;
+  --qb-warning: #b45309;
+  --qb-danger: #c42b2b;
+  --qb-success-bg: #e8f5ec;
+  --qb-warning-bg: #fbf1e2;
+  --qb-danger-bg: #fbeaea;
+
+  /* 层次：卡片靠柔和阴影浮起，浮层（对话框、抽屉）更重 */
+  --qb-shadow: 0 1px 2px rgb(20 40 30 / 0.04), 0 8px 24px -10px rgb(20 40 30 / 0.13);
+  --qb-shadow-hover: 0 2px 4px rgb(20 40 30 / 0.05), 0 18px 34px -12px rgb(20 40 30 / 0.2);
+  --qb-shadow-overlay: 0 0 0 1px rgb(20 40 30 / 0.05), 0 30px 80px -20px rgb(20 40 30 / 0.38);
+
+  /* 半透明面板（侧栏、手机顶栏）与遮罩 */
+  --qb-glass: rgb(255 255 255 / 0.62);
+  --qb-glass-border: rgb(255 255 255 / 0.75);
+  --qb-glass-blur: 20px;
+  --qb-overlay: rgb(20 30 25 / 0.22);
+
+  /* 侧栏导航：选中项是浮在半透明面板上的一块 */
+  --qb-nav-active: #ffffff;
+  --qb-nav-active-shadow: 0 1px 2px rgb(20 40 30 / 0.06), 0 4px 12px -4px rgb(20 40 30 / 0.14);
+  --qb-nav-hover: rgb(255 255 255 / 0.55);
 
   color-scheme: light;
 }
 
 :root[data-theme='dark'] {
-  --qb-bg: #020617;
-  --qb-surface: #0e1223;
-  --qb-surface-muted: #1a1e2f;
-  --qb-fg: #f8fafc;
-  --qb-fg-muted: #94a3b8;
-  --qb-fg-subtle: #64748b;
-  --qb-border: #1e293b;
-  --qb-border-strong: #334155;
-  --qb-accent: #22c55e;
-  --qb-on-accent: #052e16;
-  --qb-ring: #f8fafc;
-  --qb-success: #22c55e;
-  --qb-warning: #f59e0b;
-  --qb-danger: #ef4444;
-  --qb-success-bg: rgb(34 197 94 / 0.12);
-  --qb-warning-bg: rgb(245 158 11 / 0.12);
-  --qb-danger-bg: rgb(239 68 68 / 0.12);
-  --qb-shadow: none;
+  --qb-bg: #0b0f0d;
+  --qb-bg-glow: radial-gradient(800px 480px at 0% -10%, rgb(34 197 94 / 0.09), transparent 60%),
+    radial-gradient(700px 500px at 110% 110%, rgb(56 120 90 / 0.08), transparent 60%);
+  --qb-surface: #141a17;
+  --qb-surface-muted: #1c231f;
+  --qb-input: #111613;
+  --qb-fg: #e7ede9;
+  --qb-fg-muted: #97a39c;
+  --qb-fg-subtle: #6a766f;
+  --qb-border: #222a26;
+  --qb-border-strong: #313b35;
+  --qb-card-border: rgb(255 255 255 / 0.05);
+  --qb-accent: #2fca6a;
+  --qb-on-accent: #062512;
+  --qb-ring: #4ade80;
+  --qb-success: #3ccf78;
+  --qb-warning: #eab04c;
+  --qb-danger: #ef6b6b;
+  --qb-success-bg: rgb(60 207 120 / 0.12);
+  --qb-warning-bg: rgb(234 176 76 / 0.12);
+  --qb-danger-bg: rgb(239 107 107 / 0.12);
+  --qb-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 12px 32px -14px rgb(0 0 0 / 0.7);
+  --qb-shadow-hover: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 18px 40px -14px rgb(0 0 0 / 0.8);
+  --qb-shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.07), 0 30px 80px -20px rgb(0 0 0 / 0.8);
+  --qb-glass: rgb(24 30 27 / 0.66);
+  --qb-glass-border: rgb(255 255 255 / 0.06);
+  --qb-overlay: rgb(0 0 0 / 0.5);
+  --qb-nav-active: rgb(255 255 255 / 0.08);
+  --qb-nav-active-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --qb-nav-hover: rgb(255 255 255 / 0.04);
 
   color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --qb-bg: #020617;
-    --qb-surface: #0e1223;
-    --qb-surface-muted: #1a1e2f;
-    --qb-fg: #f8fafc;
-    --qb-fg-muted: #94a3b8;
-    --qb-fg-subtle: #64748b;
-    --qb-border: #1e293b;
-    --qb-border-strong: #334155;
-    --qb-accent: #22c55e;
-    --qb-on-accent: #052e16;
-    --qb-ring: #f8fafc;
-    --qb-success: #22c55e;
-    --qb-warning: #f59e0b;
-    --qb-danger: #ef4444;
-    --qb-success-bg: rgb(34 197 94 / 0.12);
-    --qb-warning-bg: rgb(245 158 11 / 0.12);
-    --qb-danger-bg: rgb(239 68 68 / 0.12);
-    --qb-shadow: none;
+    --qb-bg: #0b0f0d;
+    --qb-bg-glow: radial-gradient(800px 480px at 0% -10%, rgb(34 197 94 / 0.09), transparent 60%),
+      radial-gradient(700px 500px at 110% 110%, rgb(56 120 90 / 0.08), transparent 60%);
+    --qb-surface: #141a17;
+    --qb-surface-muted: #1c231f;
+    --qb-input: #111613;
+    --qb-fg: #e7ede9;
+    --qb-fg-muted: #97a39c;
+    --qb-fg-subtle: #6a766f;
+    --qb-border: #222a26;
+    --qb-border-strong: #313b35;
+    --qb-card-border: rgb(255 255 255 / 0.05);
+    --qb-accent: #2fca6a;
+    --qb-on-accent: #062512;
+    --qb-ring: #4ade80;
+    --qb-success: #3ccf78;
+    --qb-warning: #eab04c;
+    --qb-danger: #ef6b6b;
+    --qb-success-bg: rgb(60 207 120 / 0.12);
+    --qb-warning-bg: rgb(234 176 76 / 0.12);
+    --qb-danger-bg: rgb(239 107 107 / 0.12);
+    --qb-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 12px 32px -14px rgb(0 0 0 / 0.7);
+    --qb-shadow-hover: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 18px 40px -14px rgb(0 0 0 / 0.8);
+    --qb-shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.07), 0 30px 80px -20px rgb(0 0 0 / 0.8);
+    --qb-glass: rgb(24 30 27 / 0.66);
+    --qb-glass-border: rgb(255 255 255 / 0.06);
+    --qb-overlay: rgb(0 0 0 / 0.5);
+    --qb-nav-active: rgb(255 255 255 / 0.08);
+    --qb-nav-active-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+    --qb-nav-hover: rgb(255 255 255 / 0.04);
     color-scheme: dark;
+  }
+}
+
+/* 模糊掉帧的设备和要求减少透明度的用户：半透明面板换成实色 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --qb-glass: var(--qb-surface);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --qb-glass: var(--qb-surface);
+    --qb-glass-blur: 0px;
   }
 }
 
@@ -114,6 +178,7 @@
   :root {
     --qb-duration: 0ms;
     --qb-duration-slow: 0ms;
+    --qb-duration-slower: 0ms;
   }
 }
 
@@ -138,8 +203,9 @@
 }
 .qb-card {
   background: var(--qb-surface);
-  border: 1px solid var(--qb-border);
+  border: 1px solid var(--qb-card-border);
   border-radius: var(--qb-radius-lg);
+  box-shadow: var(--qb-shadow);
   padding: var(--qb-space-4);
 }
 .qb-btn {
@@ -147,36 +213,47 @@
   align-items: center;
   gap: var(--qb-space-2);
   height: var(--qb-control-height);
-  padding: 0 var(--qb-space-3);
-  border: 1px solid var(--qb-border-strong);
-  border-radius: var(--qb-radius);
-  background: var(--qb-surface);
+  padding: 0 var(--qb-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--qb-radius-full);
+  background: var(--qb-surface-muted);
   color: var(--qb-fg);
   font: inherit;
+  font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--qb-duration) var(--qb-ease), border-color var(--qb-duration) var(--qb-ease);
+  transition:
+    background-color var(--qb-duration) var(--qb-ease),
+    opacity var(--qb-duration) var(--qb-ease),
+    transform var(--qb-duration) var(--qb-ease);
 }
 .qb-btn:hover {
-  background: var(--qb-surface-muted);
+  background: color-mix(in srgb, var(--qb-surface-muted), var(--qb-fg) 6%);
+}
+.qb-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .qb-btn--primary {
   background: var(--qb-accent);
-  border-color: var(--qb-accent);
   color: var(--qb-on-accent);
 }
 .qb-btn--primary:hover {
-  filter: brightness(0.95);
+  background: var(--qb-accent);
+  opacity: 0.88;
 }
 .qb-input {
   height: var(--qb-control-height);
   padding: 0 var(--qb-space-3);
   border: 1px solid var(--qb-border-strong);
   border-radius: var(--qb-radius);
-  background: var(--qb-surface);
+  background: var(--qb-input);
   color: var(--qb-fg);
   font: inherit;
+  transition:
+    border-color var(--qb-duration) var(--qb-ease),
+    box-shadow var(--qb-duration-slow) var(--qb-ease-out);
 }
 .qb-input:focus {
-  outline: 2px solid var(--qb-ring);
-  outline-offset: -1px;
+  outline: none;
+  border-color: var(--qb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--qb-accent) 22%, transparent);
 }

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth.js'
+import BrandMark from '../components/BrandMark.vue'
 import QButton from '../components/ui/QButton.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
@@ -31,21 +32,13 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex min-h-full items-center justify-center px-4">
-    <form class="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-(--qb-shadow)" @submit.prevent="submit">
-      <!-- 标志；几何与 design-system/qflarebot/brand/export.mjs 相同，颜色走面板 token 以跟随面板的深浅色切换 -->
-      <svg class="mb-4 size-10" viewBox="0 0 64 64" aria-hidden="true">
-        <mask id="login-logo-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-          <rect width="64" height="64" fill="#fff" />
-          <path d="M47 4Q48.6 14.4 59 16 48.6 17.6 47 28 45.4 17.6 35 16 45.4 14.4 47 4Z" fill="#000" stroke="#000" stroke-width="5" stroke-linejoin="round" />
-        </mask>
-        <g mask="url(#login-logo-gap)">
-          <circle cx="29" cy="34" r="18" fill="none" class="stroke-fg" stroke-width="11" />
-          <path d="M50.3 43.9 55 59 38.9 55.3 38.2 43.2Z" class="fill-fg" />
-        </g>
-        <path d="M47 4Q48.6 14.4 59 16 48.6 17.6 47 28 45.4 17.6 35 16 45.4 14.4 47 4Z" class="fill-accent" />
-      </svg>
-      <h1 class="text-lg font-semibold text-fg">QFlareBot 控制台</h1>
+  <div class="flex min-h-dvh items-center justify-center px-4 py-10">
+    <form
+      class="w-full max-w-sm rounded-xl border border-card-border bg-surface p-7 shadow-card [animation:qb-rise_var(--qb-duration-slower)_var(--qb-ease-out)_backwards]"
+      @submit.prevent="submit"
+    >
+      <BrandMark class="mb-5 size-10" />
+      <h1 class="text-xl font-semibold tracking-tight text-fg">QFlareBot 控制台</h1>
       <p class="mt-1 mb-5 text-sm text-fg-muted">输入部署时设置的 <code class="font-mono text-xs">ADMIN_TOKEN</code>。登录后浏览器只保存 7 天有效的会话令牌。</p>
       <QField id="token" label="管理密钥" :error="error">
         <template #default="{ describedBy, invalid }">

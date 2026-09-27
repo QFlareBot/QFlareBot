@@ -7,18 +7,22 @@ import PageHeader from '../components/PageHeader.vue'
 import QBadge from '../components/ui/QBadge.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
+import QCollapse from '../components/ui/QCollapse.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
 import QField from '../components/ui/QField.vue'
 import QInput from '../components/ui/QInput.vue'
+import QSkeleton from '../components/ui/QSkeleton.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 import { writeBatch } from '../lib/batchInstall.js'
 import { installOrder } from '../lib/catalog.js'
 import { eachLimit, resolveSource } from '../lib/gitSource.js'
 
-const { plugins, patchLocal, refresh } = useStatus()
+const { status, plugins, patchLocal, refresh } = useStatus()
 const { push } = useToast()
+const confirm = useConfirm()
 
 async function toggle(p: PluginInfo, enabled: boolean) {
   patchLocal(p.name, { enabled })
@@ -136,11 +140,24 @@ async function undoChange(c: PendingChange) {
   if (!c.undo || busyChange.value) return
   const question =
     c.undo.type === 'remove'
-      ? `从插件清单里移除 ${c.name}？它没有在线上运行${c.kind === 'upgrade' ? '（线上跑的是仓库内置的那一份，会留着）' : ''}。`
+      ? {
+          title: `从插件清单里移除 ${c.name}？`,
+          message: `它没有在线上运行${c.kind === 'upgrade' ? '（线上跑的是仓库内置的那一份，会留着）' : ''}。`,
+          confirmText: '移除',
+        }
       : c.kind === 'uninstall'
-        ? `撤销卸载 ${c.name}？它会留在插件清单里（卸载时如果选了清数据，数据已经清掉了）。`
-        : `把 ${c.name} 改回线上正在运行的版本？`
-  if (!confirm(question)) return
+        ? {
+            title: `撤销卸载 ${c.name}？`,
+            message: '它会留在插件清单里（卸载时如果选了清数据，数据已经清掉了）。',
+            confirmText: '撤销卸载',
+          }
+        : {
+            title: `把 ${c.name} 改回线上正在运行的版本？`,
+            message: '会按线上那一份的来源重新安装并触发一次构建。',
+            confirmText: '改回去',
+          }
+  const ok = await confirm({ ...question, danger: c.undo.type === 'remove' })
+  if (!ok) return
   busyChange.value = c.key
   try {
     if (c.undo.type === 'remove') {
@@ -466,9 +483,13 @@ function formatTs(ts: number): string {
   <div>
     <PageHeader title="插件" description="启用 / 禁用即时生效。安装新插件粘贴源码仓库链接，构建机编译后自动上线。" />
 
-    <p v-if="building" class="mb-4 rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning">
-      有构建正在进行，完成后这里会自动刷新。
-    </p>
+    <QCollapse :open="building">
+      <p class="relative mb-4 flex items-center gap-2.5 overflow-hidden rounded-lg bg-warning-bg px-4 py-2.5 text-sm text-warning" role="status">
+        <span class="qb-pulse size-2 shrink-0 rounded-full bg-warning" aria-hidden="true" />
+        有构建正在进行，完成后这里会自动刷新。
+        <span class="qb-progress" aria-hidden="true" />
+      </p>
+    </QCollapse>
 
     <QCard title="安装插件" description="输入 GitHub 链接或 git:owner/repo@commit，先预检再安装。源码在构建机编译，声明清单与源码不一致会构建失败">
       <template #actions>
@@ -568,6 +589,7 @@ function formatTs(ts: number): string {
 
     <QCard
       class="mt-4"
+      flush
       title="构建记录"
       description="默认折叠，点右上角展开；安装 / 升级 / 卸载 / 构建都会记录，只保留最近 100 条"
     >
@@ -577,14 +599,16 @@ function formatTs(ts: number): string {
           {{ buildsOpen ? '收起' : '展开' }}
         </QButton>
       </template>
-      <template v-if="buildsOpen">
+      <p v-if="!buildsOpen" class="px-4 py-3 text-xs text-fg-muted">已折叠——展开后查看记录并同步构建状态。</p>
+      <QCollapse :open="buildsOpen">
         <p v-if="buildsFetchError" class="border-b border-danger/30 bg-danger/10 px-4 py-2 text-xs text-danger">
           {{ buildsFetchError }}
         </p>
         <p v-if="buildsSyncError" class="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
           构建状态同步失败：{{ buildsSyncError }}（请检查 CF_ACCOUNT_ID / CF_BUILDS_TOKEN / CF_WORKER_TAG，其中 WORKER_TAG 是 scripts 列表返回的 tag 而不是名字）
         </p>
-        <QEmpty v-if="!builds.length" title="还没有记录" description="安装一个插件，或点「重新构建」触发一次。" />
+        <QSkeleton v-if="!builds.length && buildsLoading" :rows="3" label="正在读取构建记录" />
+        <QEmpty v-else-if="!builds.length" title="还没有记录" description="安装一个插件，或点「重新构建」触发一次。" />
         <ul v-else class="divide-y divide-border">
           <li v-for="b in builds" :key="b.id" class="flex items-center gap-2 px-4 py-2">
             <QBadge :tone="STATUS_META[b.status].tone">{{ STATUS_META[b.status].label }}</QBadge>
@@ -598,8 +622,7 @@ function formatTs(ts: number): string {
             <span class="shrink-0 text-xs text-fg-subtle">{{ formatTs(b.ts) }}</span>
           </li>
         </ul>
-      </template>
-      <p v-else class="text-xs text-fg-muted">已折叠——展开后查看记录并同步构建状态。</p>
+      </QCollapse>
     </QCard>
 
     <QCard class="mt-4" flush title="已装插件" description="构建上线后出现在这里；来自仓库内置清单的插件需改仓库后重建。「检查全部更新」拉取各插件源码仓库的最新提交，勾选后一次构建">
@@ -607,7 +630,8 @@ function formatTs(ts: number): string {
         <QButton v-if="selectedCount" size="sm" variant="primary" :loading="updatingBatch" @click="updateSelected">更新选中（{{ selectedCount }}）</QButton>
         <QButton size="sm" variant="ghost" :loading="checkingAll" :disabled="!checkable.length || updatingBatch" @click="checkAll">检查全部更新</QButton>
       </template>
-      <QEmpty v-if="!plugins.length" title="没有已安装的插件" description="在上方粘贴插件仓库链接安装，或在 apps/seed 的清单里加入内置插件。" />
+      <QSkeleton v-if="!status" :rows="3" label="正在读取插件列表" />
+      <QEmpty v-else-if="!plugins.length" title="没有已安装的插件" description="在上方粘贴插件仓库链接安装，或在 apps/seed 的清单里加入内置插件。" />
       <ul v-else class="divide-y divide-border">
         <li v-for="p in plugins" :key="p.name" class="flex items-center gap-2 pr-2 pl-4">
           <input

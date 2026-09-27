@@ -7,7 +7,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
   <select
     :id="id"
     :value="modelValue"
-    class="h-8 w-full rounded-md border border-border-strong bg-surface px-2 text-sm text-fg"
+    class="qb-control h-8 w-full cursor-pointer px-2.5 text-sm"
     @change="emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
   >
     <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>

@@ -1,251 +1,99 @@
-# Design System Master File
+# QFlareBot 设计规范
 
-> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
-> If that file exists, its rules **override** this Master file.
-> If not, strictly follow the rules below.
+面板（`@qqbot/ui`）与插件页面共用这一套。机器可读版本是 `packages/ui-bridge/src/tokens.css`：页面只用那里的 `--qb-*` 变量，不写死颜色。
 
----
+**风格：柔光。** 带一点绿的中性底色，上面浮着白色卡片和半透明侧栏；靠柔和阴影而不是边框分层，圆角偏大，按钮是胶囊形。
 
-**Project:** QFlareBot
-**Generated:** 2026-09-18 08:31:38
-**Category:** RPA / Automation Dashboard
-**Design Dials:** Variance 2/10 (Centered / Minimal) | Motion 2/10 (Subtle) | Density 8/10 (Dense / Dashboard)
+**档位：** 变化 3/10（布局规整） · 动效 5/10（有，但只在状态变化时） · 密度 6/10（管理面板，留白比默认后台多一点）
 
 ---
 
-## Global Rules
+## 颜色
 
-### Color Palette
+两套主题共用同一组语义变量，由 `<html data-theme>` 切换，未设置时跟随系统。
 
-| Role | Hex | CSS Variable |
-|------|-----|--------------|
-| Primary | `#0F172A` | `--color-primary` |
-| On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#1E293B` | `--color-secondary` |
-| On Secondary | `#FFFFFF` | `--color-on-secondary` |
-| Accent/CTA | `#16A34A` | `--color-accent` |
-| On Accent/CTA | `#0F172A` | `--color-on-accent` |
-| Background | `#020617` | `--color-background` |
-| Foreground | `#F8FAFC` | `--color-foreground` |
-| Card | `#0E1223` | `--color-card` |
-| Card Foreground | `#F8FAFC` | `--color-card-foreground` |
-| Muted | `#1A1E2F` | `--color-muted` |
-| Muted Foreground | `#94A3B8` | `--color-muted-foreground` |
-| Border | `#334155` | `--color-border` |
-| Destructive | `#DC2626` | `--color-destructive` |
-| On Destructive | `#FFFFFF` | `--color-on-destructive` |
-| Ring | `#FFFFFF` | `--color-ring` |
+| 角色 | 变量 | 浅色 | 深色 |
+|------|------|------|------|
+| 页面底色 | `--qb-bg` | `#E9EEEA`（加两团光晕 `--qb-bg-glow`） | `#0B0F0D` |
+| 卡片 | `--qb-surface` | `#FFFFFF` | `#141A17` |
+| 次级填充（代码块、中性徽标） | `--qb-surface-muted` | `#F0F4F1` | `#1C231F` |
+| 输入框底 | `--qb-input` | `#F6F8F7` | `#111613` |
+| 正文 | `--qb-fg` | `#18211C` | `#E7EDE9` |
+| 次要文字 | `--qb-fg-muted` | `#5D6A63` | `#97A39C` |
+| 更弱的文字 | `--qb-fg-subtle` | `#8E9A93` | `#6A766F` |
+| 分隔线 | `--qb-border` | `#E6EBE7` | `#222A26` |
+| 控件边框 | `--qb-border-strong` | `#D2DAD4` | `#313B35` |
+| 强调色（主按钮、开关、选中） | `--qb-accent` | `#16A34A` | `#2FCA6A` |
+| 焦点环 | `--qb-ring` | `#15803D` | `#4ADE80` |
 
-**Color Notes:** Dark terminal + running green + failed red + queued amber
+**状态色三档，旁边必须有文字或图标**，不靠颜色单独传达：成功 `--qb-success`、警告 `--qb-warning`、失败 `--qb-danger`，各有一个浅底 `*-bg` 用于徽标和提示条。浅色下三者都压到了 4.5:1 以上。
 
-### Typography
+强调色只有一个（品牌绿），用于主按钮、开关打开、侧栏里的状态点；其余交互用前景色的深浅表达。
 
-- **Heading Font:** Fira Code
-- **Body Font:** Fira Sans
-- **Mood:** dashboard, data, analytics, code, technical, precise
-- **Google Fonts:** [Fira Code + Fira Sans](https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap)
+## 层次
 
-**CSS Import:**
-```css
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-```
+| 层 | 做法 |
+|----|------|
+| 卡片 | `--qb-surface` + `--qb-shadow`（柔和两层阴影），边框只是极淡的 `--qb-card-border` |
+| 可点的卡片 | 悬停上移 2px，换 `--qb-shadow-hover`；不可点的卡片不做悬停效果 |
+| 侧栏、手机顶栏、抽屉 | 半透明 `--qb-glass` + `backdrop-filter` 模糊；不支持模糊或用户要求减少透明度时换成实色 |
+| 对话框、toast | `--qb-shadow-overlay`，遮罩 `--qb-overlay` |
 
-### Spacing Variables
+## 字体与字号
 
-*Density: 8/10 — Dense / Dashboard*
+不加载 webfont（大陆可用性是硬约束，面板不引任何外部资源）：
 
-| Token | Value | Usage |
-|-------|-------|-------|
-| `--space-xs` | `2px` / `0.125rem` | Tight gaps |
-| `--space-sm` | `4px` / `0.25rem` | Icon gaps, inline spacing |
-| `--space-md` | `8px` / `0.5rem` | Standard padding |
-| `--space-lg` | `12px` / `0.75rem` | Section padding |
-| `--space-xl` | `16px` / `1rem` | Large gaps |
-| `--space-2xl` | `24px` / `1.5rem` | Section margins |
-| `--space-3xl` | `32px` / `2rem` | Hero padding |
+- 正文：`system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`
+- 等宽（id、hash、日志）：`ui-monospace, "SF Mono", Menlo, Consolas, monospace`
 
-### Shadow Depths
+字号 12 / 13 / 14 / 16 / 20 / 24：正文 14，辅助 12（不低于 12），页面标题 24，统计数字 24 且用 `tabular-nums`。
 
-| Level | Value | Usage |
-|-------|-------|-------|
-| `--shadow-sm` | `0 1px 2px rgba(0,0,0,0.05)` | Subtle lift |
-| `--shadow-md` | `0 4px 6px rgba(0,0,0,0.1)` | Cards, buttons |
-| `--shadow-lg` | `0 10px 15px rgba(0,0,0,0.1)` | Modals, dropdowns |
-| `--shadow-xl` | `0 20px 25px rgba(0,0,0,0.15)` | Hero images, featured cards |
+## 形状与间距
 
----
+- 圆角：控件 10px（`--qb-radius`），卡片 16px（`--qb-radius-lg`），对话框 20px，按钮与徽标是胶囊（`--qb-radius-full`）
+- 间距刻度 4 / 8 / 12 / 16 / 20 / 24 / 32；卡片内边距 16，卡片之间 16
+- 控件高 32，表格行高 40，触控目标不小于 44
 
-## Component Specs
+## 动效
 
-### Buttons
+时长 `--qb-duration`（160ms，悬停、按下）、`--qb-duration-slow`（320ms，展开、遮罩）、`--qb-duration-slower`（480ms，入场）；曲线 `--qb-ease`、`--qb-ease-out`、`--qb-ease-spring`（带一点回弹，只用于小元素：开关圆钮、选中块、对话框、徽标）。
 
-```css
-/* Primary Button */
-.btn-primary {
-  background: #16A34A;
-  color: white;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
+| 场景 | 做法 |
+|------|------|
+| 切页 | 旧页淡出上移 4px；新页各块依次上浮 8px，间隔 40ms |
+| 侧栏选中 | 选中块滑到新位置 |
+| 按钮 | 按下缩到 0.97 |
+| 开关 | 按住时圆钮拉长，松开弹到另一侧 |
+| 对话框 | 遮罩淡入，面板从 0.96 放大上浮 |
+| 手机抽屉 | 从左侧滑入 |
+| toast | 桌面从右下、手机从顶栏下方滑入，底边进度条表示剩余时间 |
+| 新数据 | 新出现的表格行淡入并短暂高亮 |
+| 进行中 | 状态点外扩一圈光晕（实时调试、构建中），提示条底边不定进度条 |
+| 加载 | 骨架屏，不只放一行"正在读取…" |
+| 折叠 | 行高过渡（`QCollapse`） |
 
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
+只动 `opacity` / `transform`（折叠例外）。系统开了「减弱动态效果」时 token 归零、循环动画停掉。不引 GSAP 等动画库。
 
-/* Secondary Button */
-.btn-secondary {
-  background: transparent;
-  color: #0F172A;
-  border: 2px solid #0F172A;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
-```
+## 布局
 
-### Cards
+- **桌面（≥768px）**：左侧 240px 的浮动半透明侧栏，内容区最宽 1152px。页面跟着文档滚动。
+- **手机**：顶栏（菜单按钮 + 标志 + 机器人状态）+ 左侧抽屉。**底部不放任何固定元素**：iOS 26 的 Safari 底栏是悬浮的，贴底的 fixed 元素会被画偏或挡住；toast 也放在顶栏下方。四周按 `env(safe-area-inset-*)` 留边。
 
-```css
-.card {
-  background: #020617;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: var(--shadow-md);
-  transition: all 200ms ease;
-  cursor: pointer;
-}
+## 组件
 
-.card:hover {
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-2px);
-}
-```
+基础组件在 `packages/ui/src/components/ui/`：`QButton`（primary / secondary / ghost / danger 浅红 / destructive 实心红）、`QCard`、`QBadge`、`QInput` / `QSelect` / `QTextarea`（共用 `.qb-control`）、`QSwitch`、`StatusDot`、`QEmpty`、`QSkeleton`、`QCollapse`、`QDialog`。
 
-### Inputs
+**确认一律用 `useConfirm()`**，不用浏览器的 `confirm()`：危险操作红色按钮、默认聚焦「取消」，可带一条警告和一个勾选项（如「同时清空数据」）。
 
-```css
-.input {
-  padding: 12px 16px;
-  border: 1px solid #E2E8F0;
-  border-radius: 8px;
-  font-size: 16px;
-  transition: border-color 200ms ease;
-}
+## 插件页面
 
-.input:focus {
-  border-color: #0F172A;
-  outline: none;
-  box-shadow: 0 0 0 3px #0F172A20;
-}
-```
+插件页面在 iframe 里，引 `/tokens.css` 即拿到同一组 `--qb-*` 变量，`.qb-page` / `.qb-card` / `.qb-btn` / `.qb-input` 是最小基线。**变量名只增不改**，已发布插件的页面靠它们跟随面板换风格。
 
-### Modals
+## 交付前检查
 
-```css
-.modal-overlay {
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-}
-
-.modal {
-  background: white;
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: var(--shadow-xl);
-  max-width: 500px;
-  width: 90%;
-}
-```
-
----
-
-## Style Guidelines
-
-**Style:** Minimalism & Swiss Style
-
-**Keywords:** Clean, simple, spacious, functional, white space, high contrast, geometric, sans-serif, grid-based, essential
-
-**Best For:** Enterprise apps, dashboards, documentation sites, SaaS platforms, professional tools
-
-**Key Effects:** Subtle hover (200-250ms), smooth transitions, sharp shadows if any, clear type hierarchy, fast loading
-
-### Page Pattern
-
-**Pattern Name:** Real-Time / Operations Landing
-
-- **Conversion Strategy:** Offer a demo or sandbox and show trust signals. Label telemetry as live only when backed by a current source, with update time and stale state. Provide pause/hide or update-frequency controls for tickers and previews, stop offscreen/hidden work, support keyboard controls, and render a static final snapshot under reduced motion.
-- **CTA Placement:** Primary CTA in nav + After metrics
-- **Section Order:** Hero (product + live preview or status) > Key metrics/indicators > How it works > CTA (Start trial / Contact)
-
----
-
-## Motion
-
-**Scroll Reveal** (Subtle) — Trigger: scroll (viewport enter) | Duration: 300-400ms | Easing: `power1.out`
-
-```js
-gsap.from(el, { opacity: 0, y: 12, duration: 0.35, ease: 'power1.out', scrollTrigger: { trigger: el, start: 'top 90%', toggleActions: 'play none none reverse' } });
-```
-
-**Framework notes:** Requires the ScrollTrigger plugin registered once via gsap.registerPlugin(ScrollTrigger); Use matchMedia('(prefers-reduced-motion: reduce)') to skip non-essential motion and render the final state immediately
-
-- ✅ Keep the y offset small (8-16px) so it reads as a fade, not a slide
-- ❌ Don't reveal below-the-fold content needed for SEO/crawlers as invisible-by-default without a no-JS fallback
-- ⚡ toggleActions 'play none none reverse' avoids re-triggering on every scroll direction change
-
----
-
-## Anti-Patterns (Do NOT Use)
-
-- ❌ Slow dashboards
-- ❌ decorative charts
-- ❌ hidden error states
-
-### Additional Forbidden Patterns
-
-- ❌ **Emojis as icons** — Use SVG icons (Heroicons, Lucide, Simple Icons)
-- ❌ **Missing cursor:pointer** — All clickable elements must have cursor:pointer
-- ❌ **Layout-shifting hovers** — Avoid scale transforms that shift layout
-- ❌ **Low contrast text** — Maintain 4.5:1 minimum contrast ratio
-- ❌ **Instant state changes** — Always use transitions (150-300ms)
-- ❌ **Invisible focus states** — Focus states must be visible for a11y
-
----
-
-## Pre-Delivery Checklist
-
-Before delivering any UI code, verify:
-
-- [ ] No emojis used as icons (use SVG instead)
-- [ ] All icons from consistent icon set (Heroicons/Lucide)
-- [ ] `cursor-pointer` on all clickable elements
-- [ ] Hover states with smooth transitions (150-300ms)
-- [ ] Light mode: text contrast 4.5:1 minimum
-- [ ] Focus states visible for keyboard navigation
-- [ ] `prefers-reduced-motion` respected
-- [ ] Responsive: 375px, 768px, 1024px, 1440px
-- [ ] No content hidden behind fixed navbars
-- [ ] No horizontal scroll on mobile
-
----
-
-## 项目覆盖（优先于上文）
-
-以下决定由项目约束推导，覆盖生成器的默认值：
-
-1. **字体不用 Google Fonts。** 大陆访问是硬约束，面板不加载任何外部资源。字体栈：
-   - 正文：`system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`
-   - 等宽（id、hash、日志）：`ui-monospace, "SF Mono", Menlo, Consolas, monospace`
-2. **浅色为默认，深色同权。** 上表是深色值；两套主题共用同一组语义变量（`--qb-*`），由 `data-theme` 切换。浅色：背景 `#FFFFFF`、卡片 `#FFFFFF`、页面底 `#F8FAFC`、前景 `#0F172A`、次要前景 `#64748B`、边框 `#E2E8F0`。
-3. **语义状态色三档且不靠颜色单独传达**：成功 `#16A34A`、警告 `#D97706`、失败 `#DC2626`，旁边必有文字或图标。
-4. **单一强调色 = 成功绿**（生成器给的 accent），只用于主按钮与"启用"态；其余交互用前景色的深浅表达。
-5. **密度 8/10**：间距刻度 4/8/12/16/24/32，正文 14px，辅助 12px（不低于 12），表格行高 36px。
-6. **动效只有 150–200ms 的 opacity / transform 过渡**，`prefers-reduced-motion` 下全部关闭。不引 GSAP。
-7. **图标 lucide**，SVG，禁止 emoji 当图标。
-8. **插件页面**（iframe）通过 `@qqbot/ui-bridge` 拿到同一组 `--qb-*` 变量与当前主题名；bridge 里的 `tokens.css` 是本文件的机器可读版本。
+- [ ] 图标全用 lucide，不用 emoji
+- [ ] 可点击的元素有 `cursor-pointer` 和悬停态
+- [ ] 浅色、深色都看过，文字对比度 4.5:1 以上
+- [ ] 键盘焦点可见；对话框和抽屉能用 Esc 关、焦点困在里面
+- [ ] `prefers-reduced-motion` 下没有动画
+- [ ] 375 / 768 / 1024 / 1440 宽度都看过，手机无横向滚动、底部无固定元素

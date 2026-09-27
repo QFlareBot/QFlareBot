@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { api } from '../api/client.js'
 import type { PluginInfo } from '../api/types.js'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useToast } from '../composables/useToast.js'
 import {
   DESC_MAX,
@@ -30,6 +31,7 @@ import QTextarea from './ui/QTextarea.vue'
 
 const props = defineProps<{ plugins: PluginInfo[] }>()
 const { push } = useToast()
+const confirm = useConfirm()
 
 const scope = ref('group')
 const items = ref<PanelDraftItem[]>([])
@@ -155,7 +157,14 @@ watch(scope, () => {
 })
 
 async function removePanel(p: PanelSummary) {
-  if (!p.id || !confirm(`删除这个指令面板（${p.names.slice(0, 3).join('、') || p.id}）？`)) return
+  if (!p.id) return
+  const ok = await confirm({
+    title: '删除这个指令面板？',
+    message: p.names.slice(0, 3).join('、') || p.id,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   panelsBusy.value = true
   try {
     const res = await api.deleteQQPanel(p.id)

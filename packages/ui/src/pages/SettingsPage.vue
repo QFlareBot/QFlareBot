@@ -15,10 +15,12 @@ import QSwitch from '../components/ui/QSwitch.vue'
 import QTextarea from '../components/ui/QTextarea.vue'
 import StatusDot from '../components/ui/StatusDot.vue'
 import { useStatus } from '../composables/useStatus.js'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useToast } from '../composables/useToast.js'
 
 const { status, refresh } = useStatus()
 const { push } = useToast()
+const confirm = useConfirm()
 
 const appId = ref('')
 const secret = ref('')
@@ -80,7 +82,13 @@ async function switchTo(b: SavedBot) {
 }
 
 async function removeSaved(b: SavedBot) {
-  if (!confirm(`删除已保存的机器人 ${botLabel(b)}？只删这里存的凭证，QQ 开放平台上的机器人不受影响。`)) return
+  const ok = await confirm({
+    title: `删除已保存的机器人 ${botLabel(b)}？`,
+    message: '只删这里存的凭证，QQ 开放平台上的机器人不受影响。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.removeSavedBot(b.appId)
     await loadSaved()

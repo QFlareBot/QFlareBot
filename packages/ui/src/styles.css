@@ -1,5 +1,6 @@
 @import '@qqbot/ui-bridge/tokens.css';
 @import 'tailwindcss';
+@import './styles/motion.css';
 
 /* 把语义 token 映射成 Tailwind 工具类：bg-surface、text-fg-muted、border-border … */
 @theme inline {
@@ -7,11 +8,16 @@
   --color-bg: var(--qb-bg);
   --color-surface: var(--qb-surface);
   --color-surface-muted: var(--qb-surface-muted);
+  --color-input: var(--qb-input);
   --color-fg: var(--qb-fg);
   --color-fg-muted: var(--qb-fg-muted);
   --color-fg-subtle: var(--qb-fg-subtle);
   --color-border: var(--qb-border);
   --color-border-strong: var(--qb-border-strong);
+  --color-card-border: var(--qb-card-border);
+  --color-glass: var(--qb-glass);
+  --color-glass-border: var(--qb-glass-border);
+  --color-overlay: var(--qb-overlay);
   --color-accent: var(--qb-accent);
   --color-on-accent: var(--qb-on-accent);
   --color-ring: var(--qb-ring);
@@ -31,68 +37,134 @@
   --radius-sm: var(--qb-radius-sm);
   --radius-md: var(--qb-radius);
   --radius-lg: var(--qb-radius-lg);
+  --radius-xl: var(--qb-radius-xl);
+
+  --shadow-card: var(--qb-shadow);
+  --shadow-card-hover: var(--qb-shadow-hover);
+  --shadow-overlay: var(--qb-shadow-overlay);
+
+  --ease-out: var(--qb-ease-out);
+  --ease-spring: var(--qb-ease-spring);
 
   --text-xs: var(--qb-text-xs);
   --text-sm: var(--qb-text-sm);
   --text-base: var(--qb-text-base);
   --text-lg: var(--qb-text-lg);
   --text-xl: var(--qb-text-xl);
+  --text-2xl: var(--qb-text-2xl);
 }
 
-html,
-body,
-#app {
-  height: 100%;
+/* 放进 base 层：工具类（focus:outline-none、accent-*）才压得住它们 */
+@layer base {
+  html {
+    min-height: 100%;
+  }
+  body {
+    min-height: 100dvh;
+    margin: 0;
+    background-color: var(--qb-bg);
+    color: var(--qb-fg);
+    font: var(--qb-text-base) / var(--qb-leading) var(--qb-font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+  /* 底色上的两团光晕固定在视口里，滚动时不跟着走（iOS 不支持 background-attachment: fixed，用伪元素） */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: var(--qb-bg-glow);
+    pointer-events: none;
+  }
+  #app {
+    min-height: 100dvh;
+  }
+  :focus-visible {
+    outline: 2px solid var(--qb-ring);
+    outline-offset: 2px;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--qb-accent);
+  }
 }
 
-body {
-  margin: 0;
-  background: var(--qb-bg);
-  color: var(--qb-fg);
-  font: var(--qb-text-base) / var(--qb-leading) var(--qb-font-sans);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
+@layer components {
+  /* 半透明面板：侧栏、手机顶栏、抽屉 */
+  .qb-glass {
+    background: var(--qb-glass);
+    border: 1px solid var(--qb-glass-border);
+    -webkit-backdrop-filter: blur(var(--qb-glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--qb-glass-blur)) saturate(1.4);
+  }
 
-:focus-visible {
-  outline: 2px solid var(--qb-ring);
-  outline-offset: 2px;
-}
+  /* 输入框、下拉、多行文本共用的外观 */
+  .qb-control {
+    border: 1px solid var(--qb-border-strong);
+    border-radius: var(--qb-radius);
+    background: var(--qb-input);
+    color: var(--qb-fg);
+    transition:
+      border-color var(--qb-duration) var(--qb-ease),
+      box-shadow var(--qb-duration-slow) var(--qb-ease-out);
+  }
+  .qb-control::placeholder {
+    color: var(--qb-fg-subtle);
+  }
+  .qb-control:focus {
+    outline: none;
+    border-color: var(--qb-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--qb-accent) 22%, transparent);
+  }
+  .qb-control--invalid,
+  .qb-control--invalid:focus {
+    border-color: var(--qb-danger);
+  }
+  .qb-control--invalid:focus {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--qb-danger) 20%, transparent);
+  }
+  .qb-control:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 
-/* 表格：紧凑、可扫读 */
-.qb-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--qb-text-sm);
-}
-.qb-table th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--qb-fg-muted);
-  padding: 0 var(--qb-space-3);
-  height: var(--qb-row-height);
-  border-bottom: 1px solid var(--qb-border);
-  white-space: nowrap;
-}
-.qb-table td {
-  padding: 0 var(--qb-space-3);
-  height: var(--qb-row-height);
-  border-bottom: 1px solid var(--qb-border);
-  vertical-align: middle;
-}
-.qb-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-.qb-table tbody tr:hover td {
-  background: var(--qb-surface-muted);
-}
-
-/* 过渡只做 opacity/transform */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity var(--qb-duration) var(--qb-ease);
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+  /* 表格：紧凑、可扫读 */
+  .qb-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--qb-text-sm);
+  }
+  .qb-table th {
+    text-align: left;
+    font-weight: 500;
+    font-size: var(--qb-text-xs);
+    color: var(--qb-fg-muted);
+    padding: 0 var(--qb-space-3);
+    height: 34px;
+    border-bottom: 1px solid var(--qb-border);
+    white-space: nowrap;
+  }
+  .qb-table td {
+    padding: 0 var(--qb-space-3);
+    height: var(--qb-row-height);
+    border-bottom: 1px solid var(--qb-border);
+    vertical-align: middle;
+    transition: background-color var(--qb-duration) var(--qb-ease);
+  }
+  .qb-table th:first-child,
+  .qb-table td:first-child {
+    padding-left: var(--qb-space-4);
+  }
+  .qb-table th:last-child,
+  .qb-table td:last-child {
+    padding-right: var(--qb-space-4);
+  }
+  .qb-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .qb-table tbody tr:hover td {
+    background: var(--qb-surface-muted);
+  }
 }

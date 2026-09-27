@@ -4,6 +4,8 @@ import { useAuth } from './composables/useAuth.js'
 /** hash 路由：与 Worker 的保留路径（/webhook、/admin、/p）互不干扰，且不需要 SPA 回退 */
 export const router = createRouter({
   history: createWebHashHistory(),
+  // 等旧页淡出（AppShell 里的 160ms）再滚，免得旧页先跳到顶上再消失；前进后退回到原来的位置
+  scrollBehavior: (_to, _from, saved) => new Promise((resolve) => setTimeout(() => resolve(saved ?? { top: 0 }), 160)),
   routes: [
     { path: '/login', component: () => import('./pages/LoginPage.vue'), meta: { public: true } },
     {

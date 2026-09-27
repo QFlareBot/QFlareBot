@@ -10,6 +10,7 @@ import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
 import QInput from '../components/ui/QInput.vue'
+import QSkeleton from '../components/ui/QSkeleton.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 import {
@@ -296,8 +297,9 @@ onMounted(async () => {
             v-for="t in [null, ...tags]"
             :key="t ?? '全部'"
             type="button"
-            class="h-7 cursor-pointer rounded-full border px-2.5 text-xs"
-            :class="activeTag === t ? 'border-accent bg-accent text-on-accent' : 'border-border text-fg-muted hover:text-fg'"
+            class="h-7 cursor-pointer rounded-full border px-3 text-xs transition-[background-color,border-color,color,transform] duration-(--qb-duration) active:scale-95"
+            :class="activeTag === t ? 'border-accent bg-accent text-on-accent' : 'border-border-strong text-fg-muted hover:bg-surface-muted hover:text-fg'"
+            :aria-pressed="activeTag === t"
             @click="activeTag = activeTag === t ? null : t"
           >
             {{ t ?? '全部' }}
@@ -305,7 +307,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <p v-if="loadState === 'loading'" class="px-4 py-6 text-sm text-fg-muted">正在读取插件目录…</p>
+      <QSkeleton v-if="loadState === 'loading'" :rows="4" label="正在读取插件目录" />
       <QEmpty v-else-if="loadState === 'error'" title="读不到插件目录" :description="`${loadError}。目录地址：${CATALOG_INDEX_URL}`" />
       <QEmpty v-else-if="!shown.length" title="没有符合条件的插件" description="换个关键词或标签试试。" />
       <ul v-else class="divide-y divide-border">

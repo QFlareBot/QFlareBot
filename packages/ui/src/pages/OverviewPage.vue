@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { Copy, Radio, RefreshCw, Square, Trash2 } from 'lucide-vue-next'
+import { Activity, Blocks, Bot, Check, Copy, Radio, RefreshCw, Trash2, TriangleAlert } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api/client.js'
 import type { EventRecord, LogsResult, MatchRecord } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
+import StatTile from '../components/StatTile.vue'
 import QBadge from '../components/ui/QBadge.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
+import QSkeleton from '../components/ui/QSkeleton.vue'
 import StatusDot from '../components/ui/StatusDot.vue'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
 const { status, plugins, refresh, updatedAt, loading } = useStatus({ pollMs: 5000 })
 const { push } = useToast()
+const confirm = useConfirm()
 
 /**
  * 最近事件有两个来源：
@@ -111,7 +115,13 @@ onUnmounted(() => {
 
 const clearing = ref(false)
 async function clear() {
-  if (!confirm('清空实时调试记下的事件？这只删 D1 里的这几十条，Workers Logs 里的日志不受影响。')) return
+  const ok = await confirm({
+    title: '清空实时调试记下的事件？',
+    message: '只删 D1 里的这几十条，Workers Logs 里的日志不受影响。',
+    confirmText: '清空',
+    danger: true,
+  })
+  if (!ok) return
   clearing.value = true
   try {
     await api.clearEvents()
@@ -159,8 +169,18 @@ const webhookUrl = computed(() => `${location.origin}${status.value?.webhookPath
 const onWorkersDev = location.hostname.endsWith('.workers.dev')
 const ago = computed(() => (updatedAt.value ? `${Math.max(0, Math.round((Date.now() - updatedAt.value) / 1000))} 秒前` : ''))
 
+/** 复制后按钮就地变成「已复制」，1.6 秒后复原 */
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
 function copyWebhook() {
-  void navigator.clipboard.writeText(webhookUrl.value).then(() => push('已复制回调地址', 'success'))
+  navigator.clipboard.writeText(webhookUrl.value).then(
+    () => {
+      copied.value = true
+      clearTimeout(copiedTimer)
+      copiedTimer = setTimeout(() => (copied.value = false), 1600)
+    },
+    () => push('浏览器不让写剪贴板，请手动选中复制', 'warning'),
+  )
 }
 function fmtTime(ts: number) {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
@@ -193,31 +213,31 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
     </QCard>
 
     <div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-      <QCard>
-        <p class="text-xs text-fg-muted">机器人</p>
-        <div class="mt-1"><StatusDot v-if="status?.bot" tone="success" :label="status.bot.appId" /><StatusDot v-else tone="warning" label="未配置" /></div>
-      </QCard>
-      <QCard>
-        <p class="text-xs text-fg-muted">插件</p>
-        <p class="mt-1 text-lg font-semibold tabular-nums text-fg">{{ enabledCount }}<span class="text-sm font-normal text-fg-muted"> / {{ plugins.length }} 启用</span></p>
-        <p v-if="brokenCount" class="text-xs text-danger">{{ brokenCount }} 个加载失败</p>
-      </QCard>
-      <QCard>
-        <p class="text-xs text-fg-muted">24 小时事件</p>
-        <p class="mt-1 text-lg font-semibold tabular-nums text-fg" :title="status?.stats?.sampled ? '平台抽样后的估算值' : undefined">
-          {{ status?.stats ? statPrefix + status.stats.last24h : '—' }}
+      <StatTile label="机器人" :icon="Bot" to="/settings">
+        <span v-if="!status" class="qb-skeleton mt-1 h-6 w-20" />
+        <p v-else class="flex items-center gap-2 text-lg font-semibold text-fg">
+          <span class="size-2 rounded-full" :class="status.bot ? 'bg-success' : 'bg-warning'" aria-hidden="true" />{{ status.bot ? '已配置' : '未配置' }}
         </p>
-      </QCard>
-      <QCard>
-        <p class="text-xs text-fg-muted">24 小时错误</p>
-        <p
-          class="mt-1 text-lg font-semibold tabular-nums"
-          :class="status?.stats?.errors24h ? 'text-danger' : 'text-fg'"
-          :title="status?.stats?.sampled ? '平台抽样后的估算值' : undefined"
-        >
-          {{ status?.stats ? statPrefix + status.stats.errors24h : '—' }}
+        <template v-if="status?.bot" #foot><span class="font-mono">AppID {{ status.bot.appId }}</span></template>
+      </StatTile>
+      <StatTile label="插件" :icon="Blocks" to="/plugins">
+        <span v-if="!status" class="qb-skeleton mt-1 h-6 w-16" />
+        <p v-else class="text-2xl font-semibold tracking-tight tabular-nums text-fg">
+          {{ enabledCount }}<span class="text-sm font-normal tracking-normal text-fg-muted"> / {{ plugins.length }} 启用</span>
         </p>
-      </QCard>
+        <template v-if="brokenCount" #foot><span class="text-danger">{{ brokenCount }} 个加载失败</span></template>
+      </StatTile>
+      <StatTile label="24 小时事件" :icon="Activity" :hint="status?.stats?.sampled ? '平台抽样后的估算值' : undefined">
+        <span v-if="!status" class="qb-skeleton mt-1 h-6 w-16" />
+        <p v-else class="text-2xl font-semibold tracking-tight tabular-nums text-fg">{{ status.stats ? statPrefix + status.stats.last24h : '—' }}</p>
+        <template v-if="status?.stats?.sampled" #foot>平台抽样后的估算值</template>
+      </StatTile>
+      <StatTile label="24 小时错误" :icon="TriangleAlert" :hint="status?.stats?.sampled ? '平台抽样后的估算值' : undefined">
+        <span v-if="!status" class="qb-skeleton mt-1 h-6 w-10" />
+        <p v-else class="text-2xl font-semibold tracking-tight tabular-nums" :class="status.stats?.errors24h ? 'text-danger' : 'text-fg'">
+          {{ status.stats ? statPrefix + status.stats.errors24h : '—' }}
+        </p>
+      </StatTile>
     </div>
 
     <QCard title="回调地址" description="填到 QQ 开放平台 → 开发设置 → 回调配置" class="mb-4">
@@ -226,8 +246,11 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
         Settings → Domains &amp; Routes 添加一个 Custom Domain，再用新域名打开面板，这里就会显示可以填的回调地址。
       </p>
       <div v-else class="flex flex-wrap items-center gap-2">
-        <code class="min-w-0 flex-1 truncate rounded-md bg-surface-muted px-2 py-1.5 font-mono text-xs text-fg">{{ webhookUrl }}</code>
-        <QButton size="sm" @click="copyWebhook"><Copy class="size-3.5" aria-hidden="true" />复制</QButton>
+        <code class="min-w-0 flex-1 truncate rounded-md bg-surface-muted px-3 py-1.5 font-mono text-xs text-fg">{{ webhookUrl }}</code>
+        <QButton size="sm" :class="copied && 'text-success'" @click="copyWebhook">
+          <Check v-if="copied" class="qb-pop size-3.5" aria-hidden="true" /><Copy v-else class="size-3.5" aria-hidden="true" />
+          <span aria-live="polite">{{ copied ? '已复制' : '复制' }}</span>
+        </QButton>
       </div>
       <dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs md:grid-cols-4">
         <div><dt class="text-fg-muted">运行时</dt><dd class="font-mono text-fg">{{ status?.runtime ?? '—' }}</dd></div>
@@ -242,7 +265,7 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
         <QButton v-if="live && events.length" size="sm" variant="ghost" :loading="clearing" @click="clear">
           <Trash2 class="size-3.5" aria-hidden="true" />清空
         </QButton>
-        <QButton v-if="live" size="sm" @click="stopLive"><Square class="size-3.5" aria-hidden="true" />停止实时调试</QButton>
+        <QButton v-if="live" size="sm" @click="stopLive"><span class="qb-pulse size-2 rounded-full bg-success" aria-hidden="true" />停止实时调试</QButton>
         <QButton
           v-else
           size="sm"
@@ -255,7 +278,10 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
         </QButton>
       </template>
       <p v-if="sampledNote" class="border-b border-border px-4 py-2 text-xs text-fg-muted">{{ sampledNote }}</p>
-      <QEmpty v-if="!live && !logs && logsLoading" title="正在读取 Workers Logs…" description="日志查询要扫整个账户的日志，可能要十几秒。" />
+      <template v-if="!live && !logs && logsLoading">
+        <QSkeleton :rows="4" label="正在读取 Workers Logs" />
+        <p class="border-t border-border px-4 py-2.5 text-xs text-fg-muted">正在读取 Workers Logs：日志查询要扫整个账户的日志，可能要十几秒。</p>
+      </template>
       <QEmpty v-else-if="!live && logsHint" :title="logsHint.title" :description="logsHint.description" />
       <!-- 只有真实 webhook 会写记录，「调试」页的模拟是干跑，不要在这里引导过去 -->
       <QEmpty
@@ -270,7 +296,8 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
       <div v-else class="overflow-x-auto">
         <table class="qb-table">
           <thead><tr><th>时间</th><th>事件</th><th>场景</th><th v-if="showContent">内容</th><th>命中</th><th>结果</th></tr></thead>
-          <tbody>
+          <!-- 轮询拉到的新事件淡入并短暂高亮；首屏不做（TransitionGroup 默认不对初次渲染动画） -->
+          <TransitionGroup tag="tbody" name="row">
             <tr v-for="e in events" :key="e.id">
               <td class="font-mono text-xs text-fg-muted">{{ fmtTime(e.ts) }}</td>
               <td class="font-mono text-xs">{{ e.event.replace(/^qq\./, '') }}</td>
@@ -289,7 +316,7 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
                 <StatusDot v-else tone="neutral" label="无回复" />
               </td>
             </tr>
-          </tbody>
+          </TransitionGroup>
         </table>
       </div>
     </QCard>

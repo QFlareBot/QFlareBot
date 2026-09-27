@@ -7,9 +7,12 @@ import QBadge from '../components/ui/QBadge.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
+import QSkeleton from '../components/ui/QSkeleton.vue'
+import { useConfirm } from '../composables/useConfirm.js'
 import { useToast } from '../composables/useToast.js'
 
 const { push } = useToast()
+const confirm = useConfirm()
 const report = ref<StorageReport | null>(null)
 const loading = ref(false)
 const purging = ref<string | null>(null)
@@ -28,7 +31,13 @@ onMounted(() => void refresh())
 
 async function purge(name: string) {
   if (purging.value) return
-  if (!confirm(`彻底删除 ${name} 的全部数据？KV 键、D1 表和 R2 对象都会清掉，不可恢复。`)) return
+  const ok = await confirm({
+    title: `彻底删除 ${name} 的全部数据？`,
+    message: 'KV 键、D1 表和 R2 对象都会清掉，不可恢复。',
+    confirmText: '彻底删除',
+    danger: true,
+  })
+  if (!ok) return
   purging.value = name
   try {
     const res = await api.purgeOrphan(name)
@@ -76,12 +85,13 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
       description="插件的数据按名字前缀归属框架管理。卸载默认保留数据，留下的会列在孤儿数据里，可以单独清掉。"
     />
 
-    <QCard title="已装插件" description="每个插件占用的 KV 键、D1 表与行数、R2 对象">
+    <QCard flush title="已装插件" description="每个插件占用的 KV 键、D1 表与行数、R2 对象">
       <template #actions>
         <QButton size="sm" variant="ghost" :loading="loading" @click="refresh">刷新</QButton>
       </template>
+      <QSkeleton v-if="!report && loading" :rows="3" label="正在读取存储用量" />
       <QEmpty
-        v-if="!report"
+        v-else-if="!report"
         title="读不到存储信息"
         description="管理 API 未就绪或请求失败，点刷新重试。"
       />
@@ -106,6 +116,7 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
 
     <QCard
       v-if="report?.orphans.length"
+      flush
       class="mt-4"
       title="孤儿数据"
       description="不属于任何已装插件——卸载时选了保留，或插件被手工移出清单"
@@ -128,6 +139,7 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
 
     <QCard
       v-if="report?.unattributedTables.length"
+      flush
       class="mt-4"
       title="对不上插件的表"
       description="表名带 p_ 前缀但匹配不到任何已知插件名（安装账本被清空后可能出现），只能用 wrangler d1 手工处置"

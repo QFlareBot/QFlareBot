@@ -1,0 +1,225 @@
+/*
+ * 面板的动效：Vue <Transition> 的类名与几个小动画。时长和曲线全走 token，
+ * 系统开了「减弱动态效果」时 token 归零，这里再把循环动画停掉。
+ */
+
+@keyframes qb-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes qb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes qb-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+@keyframes qb-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+@keyframes qb-flash {
+  0%,
+  25% {
+    background-color: var(--qb-success-bg);
+  }
+}
+@keyframes qb-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+@keyframes qb-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@keyframes qb-shrink {
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* 切页：旧页淡出上移，新页各块错落上浮（AppShell 给 Transition 定了总时长，子元素的动画不会被截断） */
+.page-leave-active {
+  transition:
+    opacity var(--qb-duration) var(--qb-ease),
+    transform var(--qb-duration) var(--qb-ease);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.page-enter-active > * {
+  animation: qb-rise var(--qb-duration-slower) var(--qb-ease-out) backwards;
+}
+.page-enter-active > :nth-child(2) {
+  animation-delay: 40ms;
+}
+.page-enter-active > :nth-child(3) {
+  animation-delay: 80ms;
+}
+.page-enter-active > :nth-child(4) {
+  animation-delay: 120ms;
+}
+.page-enter-active > :nth-child(5) {
+  animation-delay: 160ms;
+}
+.page-enter-active > :nth-child(n + 6) {
+  animation-delay: 200ms;
+}
+
+/* 通用淡入淡出 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--qb-duration) var(--qb-ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 对话框：遮罩淡入，面板带一点回弹地浮上来 */
+.dialog-enter-active,
+.dialog-leave-active {
+  transition: opacity var(--qb-duration-slow) var(--qb-ease);
+}
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+.dialog-enter-active .qb-dialog {
+  transition:
+    transform var(--qb-duration-slower) var(--qb-ease-spring),
+    opacity var(--qb-duration-slow) var(--qb-ease);
+}
+.dialog-leave-active .qb-dialog {
+  transition:
+    transform var(--qb-duration) var(--qb-ease),
+    opacity var(--qb-duration) var(--qb-ease);
+}
+.dialog-enter-from .qb-dialog,
+.dialog-leave-to .qb-dialog {
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+}
+
+/* 抽屉：从左侧滑入 */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity var(--qb-duration-slow) var(--qb-ease);
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-active .qb-drawer {
+  transition: transform var(--qb-duration-slower) var(--qb-ease-out);
+}
+.drawer-leave-active .qb-drawer {
+  transition: transform var(--qb-duration-slow) var(--qb-ease);
+}
+.drawer-enter-from .qb-drawer,
+.drawer-leave-to .qb-drawer {
+  transform: translateX(calc(-100% - 16px));
+}
+
+/* toast：桌面从下方、手机从上方滑入，离开时向右淡出 */
+.toast-enter-active {
+  transition:
+    transform var(--qb-duration-slower) var(--qb-ease-spring),
+    opacity var(--qb-duration-slow) var(--qb-ease);
+}
+.toast-leave-active {
+  transition:
+    transform var(--qb-duration-slow) var(--qb-ease),
+    opacity var(--qb-duration-slow) var(--qb-ease);
+}
+.toast-enter-from {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.96);
+}
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(16px);
+}
+@media (min-width: 768px) {
+  .toast-enter-from {
+    transform: translateY(12px) scale(0.96);
+  }
+}
+
+/* 列表里新出现的一行：淡入并短暂高亮 */
+.row-enter-active {
+  animation: qb-fade var(--qb-duration-slow) var(--qb-ease);
+}
+.row-enter-active td {
+  animation: qb-flash 2.2s var(--qb-ease);
+}
+
+/* 新出现的徽标、勾号：弹一下 */
+.qb-pop {
+  animation: qb-pop var(--qb-duration-slower) var(--qb-ease-spring) backwards;
+}
+
+/* 状态点的呼吸光圈：实时调试、构建中 */
+.qb-pulse {
+  position: relative;
+}
+.qb-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: qb-ping 1.6s var(--qb-ease-out) infinite;
+}
+
+/* 骨架屏 */
+.qb-skeleton {
+  display: block;
+  border-radius: var(--qb-radius-sm);
+  background: linear-gradient(90deg, var(--qb-surface-muted) 25%, var(--qb-border) 40%, var(--qb-surface-muted) 60%);
+  background-size: 400% 100%;
+  animation: qb-shimmer 1.3s ease infinite;
+}
+
+/* 不定进度条：贴在提示条底边 */
+.qb-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 30%;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.55;
+  animation: qb-indeterminate 1.4s var(--qb-ease) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+  }
+}
