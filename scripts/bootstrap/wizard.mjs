@@ -35,14 +35,17 @@ import {
   adminTokenProblem,
   BootstrapError,
   BUILD_COMMAND,
+  CLOUDFLARED_VERSION,
   configureTrigger,
   DEPLOY_COMMAND,
+  downloadCloudflared,
   findWorkerTag,
   getBuild,
   listAccounts,
   listTriggers,
   pickProductionTrigger,
   probePermissions,
+  redactIds,
   renderSummary,
   runBootstrap,
   SETUP_TOKEN_URL,
@@ -89,8 +92,12 @@ function parseCookies(req) {
   return list
 }
 
+/**
+ * 向导自己的日志行。一律过一遍 redactIds：写配置失败、触发构建失败、查构建状态失败时带的报错
+ * 可能夹着 trigger / build uuid 之类事先没法 add-mask 的标识。向导网址（带 sid）不走这里，见启动那段。
+ */
 function log(line) {
-  console.log(`[wizard] ${line}`)
+  console.log(`[wizard] ${redactIds(line)}`)
 }
 
 function mask(value) {
@@ -240,10 +247,9 @@ async function startTunnel() {
     return `http://127.0.0.1:${PORT}`
   }
   const binary = path.join(os.tmpdir(), 'cloudflared')
-  log('下载 cloudflared…')
-  const res = await fetch('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64', { redirect: 'follow' })
-  if (!res.ok) throw new Error(`下载 cloudflared 失败：HTTP ${res.status}`)
-  const buf = Buffer.from(await res.arrayBuffer())
+  log(`下载 cloudflared ${CLOUDFLARED_VERSION}…`)
+  // 钉死版本并核对 sha256，对不上就不写文件、不运行（见 lib.mjs 的 downloadCloudflared）
+  const buf = await downloadCloudflared()
   await writeFile(binary, buf)
   await chmod(binary, 0o700)
 

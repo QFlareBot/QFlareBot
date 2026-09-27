@@ -6,6 +6,9 @@
 #   git push origin v0.2.0
 #
 # 说明 = tag 附注 + 与上一个 tag 之间的提交列表（直接提交 main、不走 PR，GitHub 的自动生成说明是空的）。
+#
+# 检查与发布拆成两个 job：装依赖、构建、跑测试都会执行第三方代码，那个 job 只拿只读令牌、checkout 不留凭证；
+# 能写仓库的令牌只给建 Release 的 job，它只跑 git 与 runner 自带的 gh，不装任何依赖。
 
 name: Release
 
@@ -14,27 +17,24 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  check:
     # Fork 里推 tag 不发版
     if: github.repository == 'QFlareBot/QFlareBot'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-
-      # checkout 会把附注 tag 取成轻量 tag，重新拉一次才读得到附注
-      - run: git fetch --force --tags
+          persist-credentials: false
 
       - name: 核对版本号与 tag 一致
         run: node scripts/version.mjs check "$GITHUB_REF_NAME"
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -43,6 +43,22 @@ jobs:
       - run: pnpm build
       - run: pnpm -r typecheck
       - run: pnpm test
+
+  release:
+    needs: check
+    if: github.repository == 'QFlareBot/QFlareBot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # 令牌不写进 .git/config：只有「创建 Release」那一步经环境变量拿到它
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # checkout 会把附注 tag 取成轻量 tag，重新拉一次才读得到附注（公开仓库，拉取不需要凭证）
+      - run: git fetch --force --tags
 
       - name: 生成 Release 说明
         run: |

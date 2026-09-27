@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -7,7 +8,10 @@ import {
   buildsConnectUrl,
   buildsTokenUrl,
   cfFetch,
+  CLOUDFLARED_ASSETS,
+  CLOUDFLARED_VERSION,
   configureTrigger,
+  downloadCloudflared,
   getBuild,
   listTriggers,
   listWorkerSecretNames,
@@ -15,6 +19,8 @@ import {
   pickProductionTrigger,
   readInstalledPlugins,
   redactAccountPath,
+  redactApiPath,
+  redactIds,
   renderSummary,
   resolveBuildToken,
   runBootstrap,
@@ -273,6 +279,38 @@ describe('公开日志里不带账户标识', () => {
     expect(err.message).toBe('Cloudflare API GET /accounts/…/d1/database 失败：[10000] denied')
   })
 
+  const TRIGGER = '3f2c5a1e-8b7d-4c6e-9f01-23456789abcd'
+  const TAG = '0123456789abcdef0123456789ABCDEF'
+
+  it('redactApiPath 连 trigger / build 的 uuid、Worker tag 一起遮掉，查询串与普通段不动', () => {
+    expect(redactApiPath(`/accounts/acc/builds/triggers/${TRIGGER}/environment_variables`)).toBe(
+      '/accounts/…/builds/triggers/…/environment_variables',
+    )
+    expect(redactApiPath(`/accounts/acc/builds/workers/${TAG}/triggers?page=2`)).toBe('/accounts/…/builds/workers/…/triggers?page=2')
+    expect(redactApiPath('/accounts/acc/workers/scripts/qqbot/secrets')).toBe('/accounts/…/workers/scripts/qqbot/secrets')
+    // 旧名字还在，行为相同
+    expect(redactAccountPath(`/accounts/acc/builds/builds/${TRIGGER}`)).toBe('/accounts/…/builds/builds/…')
+  })
+
+  it('cfFetch 的报错不带 trigger uuid，错误信息里夹带的 id 也遮掉', async () => {
+    stubFetch(
+      new Response(JSON.stringify({ success: false, errors: [{ code: 12004, message: `trigger ${TRIGGER} not found` }], result: null }), {
+        status: 404,
+      }),
+    )
+    const err = await cfFetch('tok', `/accounts/acc/builds/triggers/${TRIGGER}/builds`, { method: 'POST', body: {} }).catch((e) => e)
+    expect(err.message).toBe('Cloudflare API POST /accounts/…/builds/triggers/…/builds 失败：[12004] trigger *** not found')
+    expect(err.message).not.toContain(TRIGGER)
+  })
+
+  it('redactIds 遮掉 wrangler 打印的 Version ID 与 32 位 id，不动 commit sha 和长哈希', () => {
+    expect(redactIds(`Current Version ID: ${TRIGGER}`)).toBe('Current Version ID: ***')
+    expect(redactIds(`env.KV (${TAG})  KV Namespace`)).toBe('env.KV (***)  KV Namespace')
+    const sha = 'a'.repeat(40)
+    const hash = 'b'.repeat(64)
+    expect(redactIds(`commit ${sha} hash ${hash}`)).toBe(`commit ${sha} hash ${hash}`)
+  })
+
   it('多账户时报错不列账户名与 id，改教用 secret 指定', async () => {
     stubFetch(
       ok({ id: 'tok-1', status: 'active' }),
@@ -289,6 +327,32 @@ describe('公开日志里不带账户标识', () => {
 
   it('workerDashLink 用 :account 占位，不带账户 ID', () => {
     expect(workerDashLink('my bot', 'builds')).toBe('https://dash.cloudflare.com/?to=/:account/workers/services/view/my%20bot/production/builds')
+  })
+})
+
+describe('cloudflared 下载', () => {
+  const body = Buffer.from('pretend-binary')
+  const sha256 = createHash('sha256').update(body).digest('hex')
+  const assets = { x64: { file: 'cloudflared-linux-amd64', sha256 } }
+
+  it('钉死版本（不取 latest），GitHub 托管与 ARM runner 两种架构都备了 64 位十六进制校验和', () => {
+    expect(CLOUDFLARED_VERSION).toMatch(/^\d{4}\.\d+\.\d+$/)
+    expect(Object.keys(CLOUDFLARED_ASSETS).sort()).toEqual(['arm64', 'x64'])
+    for (const a of Object.values(CLOUDFLARED_ASSETS)) expect(a.sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('校验和对得上才返回内容，下载地址带具体版本', async () => {
+    const calls = stubFetch(new Response(body))
+    await expect(downloadCloudflared({ arch: 'x64', version: '2026.1.0', assets })).resolves.toEqual(body)
+    expect(calls[0].url).toBe('https://github.com/cloudflare/cloudflared/releases/download/2026.1.0/cloudflared-linux-amd64')
+  })
+
+  it('校验和不符、下载失败、架构没准备都拒绝', async () => {
+    stubFetch(new Response('tampered'))
+    await expect(downloadCloudflared({ arch: 'x64', assets })).rejects.toThrow(/校验和不符/)
+    stubFetch(new Response('', { status: 404 }))
+    await expect(downloadCloudflared({ arch: 'x64', assets })).rejects.toThrow(/HTTP 404/)
+    await expect(downloadCloudflared({ arch: 'ia32', assets })).rejects.toThrow(/不支持的 runner 架构 ia32/)
   })
 })
 

@@ -19,13 +19,14 @@ jobs:
     if: github.repository == 'QFlareBot/QFlareBot'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # 第三方 action 一律钉到 commit sha（tag 可以被改指向），行尾注释是对应的版本
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # 「最后更新」时间读 git 历史
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -40,7 +41,7 @@ jobs:
 
       # 根域名 qflarebot.github.io 只能由同名仓库发布，构建产物推过去；
       # DOCS_DEPLOY_KEY 是该仓库带写权限的 deploy key 私钥
-      - uses: peaceiris/actions-gh-pages@v4
+      - uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
           external_repository: QFlareBot/qflarebot.github.io

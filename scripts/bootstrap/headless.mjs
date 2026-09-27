@@ -18,7 +18,7 @@
 
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adminTokenProblem, appendStepSummary, BootstrapError, renderSummary, runBootstrap, SETUP_TOKEN_URL } from './lib.mjs'
+import { adminTokenProblem, appendStepSummary, BootstrapError, redactIds, renderSummary, runBootstrap, SETUP_TOKEN_URL } from './lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -56,7 +56,8 @@ try {
     repoRoot,
     onStep: (name, state, detail) => {
       const mark = state === 'ok' ? '✅' : state === 'run' ? '⏳' : state === 'warn' ? '⚠️ ' : '❌'
-      console.log(`${mark} ${name}${detail ? ` — ${detail}` : ''}`)
+      // 报错里可能夹着事先没法 add-mask 的 uuid（trigger、build……），按形状遮掉
+      console.log(`${mark} ${name}${detail ? ` — ${redactIds(detail)}` : ''}`)
     },
   })
 
@@ -72,7 +73,7 @@ try {
   console.log(`\n主 Token 预填创建链接（供未建 token 的后来者参考）：\n${SETUP_TOKEN_URL}`)
 } catch (err) {
   const message = err instanceof BootstrapError ? err.message : (err?.message ?? String(err))
-  console.error(`\n❌ 引导失败：${message}`)
+  console.error(`\n❌ 引导失败：${redactIds(message)}`)
   if (err instanceof BootstrapError && err.hint) console.error(`提示：${err.hint}`)
   process.exit(1)
 }
