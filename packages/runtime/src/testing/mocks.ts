@@ -17,11 +17,18 @@ export function createKV(): KVNamespace & { readonly store: Map<string, string> 
     async delete(key: string) {
       store.delete(key)
     },
-    async list(options: { prefix?: string } = {}) {
+    // 与真 KV 一样每页至多 1000 个（limit 可调小），多出来的给 cursor——用来暴露「只取首页」与一次删太多的问题
+    async list(options: { prefix?: string; limit?: number; cursor?: string } = {}) {
       const prefix = options.prefix ?? ''
+      const all = [...store.keys()].filter((k) => k.startsWith(prefix))
+      const from = options.cursor ? Number(options.cursor) : 0
+      const slice = all.slice(from, from + Math.min(options.limit ?? 1000, 1000))
+      const next = from + slice.length
+      const complete = next >= all.length
       return {
-        keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })),
-        list_complete: true,
+        keys: slice.map((name) => ({ name })),
+        list_complete: complete,
+        ...(complete ? {} : { cursor: String(next) }),
         cacheStatus: null,
       }
     },
@@ -176,6 +183,8 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
   pluginColumns: Set<string>
   /** 执行过的 ALTER TABLE，断言迁移只补缺的列 */
   alters: string[]
+  /** 每条 prepare(...).run() 的 SQL（写语句），断言 D1 写了几次 */
+  writes: string[]
 } {
   const plugins = new Map<string, Record<string, unknown>>()
   const installs = new Map<string, Record<string, unknown>>()
@@ -183,6 +192,8 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
   const tables = new Map<string, number>()
   const pluginColumns = new Set([...LEGACY_PLUGIN_COLUMNS, ...(options.legacy ? [] : ADDED_PLUGIN_COLUMNS)])
   const alters: string[] = []
+
+  const writes: string[] = []
 
   const prepare = (sql: string) => {
     let params: unknown[] = []
@@ -192,6 +203,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
         return stmt
       },
       async run() {
+        writes.push(sql)
         if (sql.startsWith('INSERT OR REPLACE INTO rt_manifest_plugins')) {
           // 列没补上就写新列，真 D1 会报 no such column：这里同样报出来，免得迁移漏了测试还是绿的
           for (const c of ADDED_PLUGIN_COLUMNS) {
@@ -294,16 +306,20 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
             string | null,
             string,
           ]
+          // 老语句是 cf_status = ?（照写 NULL），新语句是 COALESCE(?, cf_status)（没给就保留）：按 SQL 分别模拟
+          const keep = sql.includes('COALESCE(?, cf_status)')
+          let changes = 0
           for (const row of installs.values()) {
             if (row.build_uuid === build_uuid) {
               row.status = status
-              row.cf_status = cf_status
-              row.commit_hash = commit_hash
+              row.cf_status = keep ? (cf_status ?? row.cf_status ?? null) : cf_status
+              row.commit_hash = keep ? (commit_hash ?? row.commit_hash ?? null) : commit_hash
               // 与 SQL 的 COALESCE(error, ?) 一致：已有的错误不被覆盖
               row.error = row.error ?? error
+              changes++
             }
           }
-          return { meta: { changes: 1 } }
+          return { meta: { changes } }
         }
         throw new Error(`fake D1 不支持：${sql}`)
       },
@@ -328,6 +344,10 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
           const results = [...installs.values()].sort((a, b) => (b.ts as number) - (a.ts as number)).slice(0, limit)
           return { results } as { results: T[] }
         }
+        if (sql.startsWith('SELECT DISTINCT name FROM rt_installs WHERE name IS NOT NULL')) {
+          const names = new Set([...installs.values()].map((r) => r.name).filter((n) => n !== null && n !== undefined))
+          return { results: [...names].map((name) => ({ name })) } as { results: T[] }
+        }
         throw new Error(`fake D1 不支持：${sql}`)
       },
       async first<T>() {
@@ -349,6 +369,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
     tables,
     pluginColumns,
     alters,
+    writes,
     prepare,
     async exec(sql: string) {
       const drop = /^DROP TABLE IF EXISTS (\w+)$/.exec(sql)
@@ -375,6 +396,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
     tables: Map<string, number>
     pluginColumns: Set<string>
     alters: string[]
+    writes: string[]
   }
 }
 
@@ -414,16 +436,29 @@ export function createR2(): R2Bucket & { readonly store: Map<string, string> } {
     async delete(key: string | string[]) {
       for (const k of Array.isArray(key) ? key : [key]) store.delete(k)
     },
-    // 每页最多 2 条，用来暴露只取首页的分页 bug
-    async list(options?: { prefix?: string; limit?: number; cursor?: string }) {
-      const all = [...store.keys()].filter((k) => k.startsWith(options?.prefix ?? '')).sort()
+    // 每页最多 2 条，用来暴露只取首页的分页 bug。带 delimiter 时与真 R2 一样：前缀之后还有分隔符的键
+    // 合并成一项 delimitedPrefixes，与对象一起按序分页
+    async list(options?: { prefix?: string; limit?: number; cursor?: string; delimiter?: string }) {
+      const prefix = options?.prefix ?? ''
+      const all = [...store.keys()].filter((k) => k.startsWith(prefix)).sort()
+      const entries: Array<{ key: string } | { prefix: string }> = []
+      for (const key of all) {
+        const cut = options?.delimiter ? key.indexOf(options.delimiter, prefix.length) : -1
+        if (cut === -1) entries.push({ key })
+        else {
+          const grouped = key.slice(0, cut + 1)
+          const last = entries.at(-1)
+          if (!last || !('prefix' in last) || last.prefix !== grouped) entries.push({ prefix: grouped })
+        }
+      }
       const from = options?.cursor ? Number(options.cursor) : 0
       const size = Math.min(options?.limit ?? 2, 2)
-      const slice = all.slice(from, from + size)
+      const slice = entries.slice(from, from + size)
       const next = from + slice.length
       return {
-        objects: slice.map((k) => obj(k, store.get(k)!)),
-        truncated: next < all.length,
+        objects: slice.flatMap((e) => ('key' in e ? [obj(e.key, store.get(e.key)!)] : [])),
+        delimitedPrefixes: slice.flatMap((e) => ('prefix' in e ? [e.prefix] : [])),
+        truncated: next < entries.length,
         cursor: String(next),
       }
     },

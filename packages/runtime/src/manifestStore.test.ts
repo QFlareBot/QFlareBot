@@ -6,6 +6,7 @@ import {
   deleteManifestPlugin,
   getManifestPlugin,
   insertInstall,
+  listInstallNames,
   listInstalls,
   listManifestPluginRecords,
   listManifestPlugins,
@@ -270,5 +271,31 @@ describe('账本治理', () => {
     // 最老的被清掉，最新的都在
     expect(rows.some((r) => r.manifestHash === 'h0')).toBe(false)
     expect(rows.some((r) => r.manifestHash === 'h104')).toBe(true)
+  })
+
+  it('按 build_uuid 同步时没给 cfStatus / commitHash 就保留原值——24 小时收敛不再把已同步的 commit 写成 NULL', async () => {
+    reset()
+    await insertInstall(d1, { action: 'install', name: 'a', source: 'git:me/a@a1b2c3d4', manifestHash: 'h', status: 'building', buildUuid: 'b-1' })
+    await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'b-1' })
+    await updateInstallByBuildUuid(d1, 'b-1', { status: 'building', cfStatus: 'running', commitHash: 'c'.repeat(40) })
+
+    await updateInstallByBuildUuid(d1, 'b-1', { status: 'failed', error: '构建状态超过 24h 未同步' })
+    const rows = await listInstalls(d1)
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row).toMatchObject({ status: 'failed', cfStatus: 'running', commitHash: 'c'.repeat(40), error: '构建状态超过 24h 未同步' })
+    }
+    // 显式给 null 同样保留：Builds API 进行中的构建可能还没有 status / commit
+    await updateInstallByBuildUuid(d1, 'b-1', { status: 'failed', cfStatus: null, commitHash: null })
+    expect((await listInstalls(d1))[0]).toMatchObject({ cfStatus: 'running', commitHash: 'c'.repeat(40) })
+  })
+
+  it('账本里出现过的插件名：一条 DISTINCT 查询，去重、不含构建记录的空名', async () => {
+    reset()
+    await insertInstall(d1, { action: 'install', name: 'a', source: 'git:me/a@a1b2c3d4', manifestHash: 'h', status: 'ok' })
+    await insertInstall(d1, { action: 'uninstall', name: 'a', source: 'git:me/a@a1b2c3d4', manifestHash: 'h', status: 'ok' })
+    await insertInstall(d1, { action: 'install', name: 'b', source: 'git:me/b@a1b2c3d4', manifestHash: 'h', status: 'ok' })
+    await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'ok' })
+    expect((await listInstallNames(d1)).sort()).toEqual(['a', 'b'])
   })
 })

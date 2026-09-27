@@ -64,12 +64,43 @@ export function bearerOf(request: Request): string {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : ''
 }
 
+async function sha256(text: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(text)))
+}
+
+/**
+ * 恒定时间比较两个密钥（管理密钥、BUILD_TOKEN）。
+ *
+ * `===` 在第一个不同的字符处就返回，响应时间随「猜对了几位」变化，理论上能一位一位试出来。
+ * 两边先 SHA-256 成等长的 32 字节再逐字节异或累加：比较耗时与内容无关，长度也不会从提前返回里漏出去。
+ * 不用 workerd 的 `crypto.subtle.timingSafeEqual`——Node 里没有，单测跑不了。
+ */
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([sha256(a), sha256(b)])
+  let diff = 0
+  for (let i = 0; i < x.length; i++) diff |= x[i]! ^ y[i]!
+  return diff === 0
+}
+
+export interface AuthenticateOptions {
+  /**
+   * 是否也接受地址里的 `?token=`，默认接受。只有 `/p/<插件>/` 的插件页需要它：iframe 与新窗口的首个请求
+   * 带不了 Authorization 头。管理 API 从来都走请求头，关掉它，令牌就不会跟着地址进访问日志与浏览器历史。
+   */
+  queryToken?: boolean
+}
+
 /** 解析请求的登录态；`adminToken` 未配置时一律未授权 */
-export async function authenticate(request: Request, adminToken: string | undefined): Promise<AuthResult> {
+export async function authenticate(
+  request: Request,
+  adminToken: string | undefined,
+  options: AuthenticateOptions = {},
+): Promise<AuthResult> {
   if (!adminToken) return NONE
-  const bearer = bearerOf(request) || new URL(request.url).searchParams.get('token') || ''
+  const fromQuery = options.queryToken === false ? '' : new URL(request.url).searchParams.get('token')
+  const bearer = bearerOf(request) || fromQuery || ''
   if (!bearer) return NONE
-  if (bearer === adminToken) return { admin: true, bridgePlugin: undefined }
+  if (await constantTimeEqual(bearer, adminToken)) return { admin: true, bridgePlugin: undefined }
   const claims = await verifyToken(bearer, adminToken)
   if (!claims) return NONE
   if (claims.kind === 'session') return { admin: true, bridgePlugin: undefined }

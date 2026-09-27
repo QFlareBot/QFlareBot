@@ -9,7 +9,7 @@ import {
   type BuildRecord,
 } from '@qqbot/projector'
 import { commandKey, validateManifest, type Manifest } from '@qqbot/sdk'
-import { authenticate, bearerOf } from './auth.js'
+import { authenticate, bearerOf, constantTimeEqual } from './auth.js'
 import { error, json, readJson } from './http.js'
 import {
   addPendingCleanup,
@@ -38,8 +38,18 @@ import {
   type InstallRecord,
   type ManifestPluginEntry,
   type ManifestPluginRecord,
+  type PendingCleanup,
 } from './manifestStore.js'
-import { clearInstallMarker, purgePluginData, runUninstallHook } from './purge.js'
+import {
+  clearInstallMarker,
+  describeRemaining,
+  knownPluginNames,
+  purgeComplete,
+  purgePluginData,
+  runUninstallHook,
+  type HookReport,
+  type PurgeReport,
+} from './purge.js'
 import type { PluginRegistry } from './registry.js'
 import { prefixesCollide, tablePrefix } from './sqlScope.js'
 import { Keys, readSnapshot, writeSnapshot } from './store.js'
@@ -58,10 +68,16 @@ async function requireDb(scope: RequestScope): Promise<D1Database | null> {
   return scope.env.DB
 }
 
-/** 构建机的鉴权：配置了 BUILD_TOKEN 用它，否则与管理 API 同一鉴权（ADMIN_TOKEN/会话令牌） */
+/**
+ * 构建机的鉴权：配置了 BUILD_TOKEN 用它，否则与管理 API 同一鉴权（ADMIN_TOKEN/会话令牌）。
+ * 两者都只认请求头（构建脚本一直用 `Authorization: Bearer`），且恒定时间比较。
+ */
 async function authorizeBuildMachine(request: Request, scope: RequestScope): Promise<boolean> {
   const buildToken = scope.env.BUILD_TOKEN
-  if (buildToken && bearerOf(request) === buildToken) return true
+  const bearer = bearerOf(request)
+  if (buildToken && bearer && (await constantTimeEqual(bearer, buildToken))) return true
+  // 这里照旧认 `?token=`（管理 API 那边关掉了）：构建脚本会原样保留 MANIFEST_URL 里的查询串，
+  // 手工把管理密钥写进 MANIFEST_URL 的老配置关掉就会 401、构建直接失败
   return (await authenticate(request, scope.env.ADMIN_TOKEN)).admin
 }
 
@@ -156,7 +172,9 @@ function isReportedFailure(value: unknown): value is ReportedFailure {
  * 该卸载哪个。构建机现在把每个插件都试着编一遍，失败的逐个报回来：错误记在 D1 条目上（只记在 source
  * 还没变的那一条），也记到这次构建的账本记录上。**只写错误信息，不改清单**——卸不卸由人决定。
  *
- * body: { buildUuid?, phase: 'prepare' | 'deploy', failures?: [{ name, source, error }], error? }
+ * body: { buildUuid?, phase: 'prepare' | 'deploy' | 'health', failures?: [{ name, source, error }], error? }
+ * `health` 是部署前的健康检查（`/healthz?plugins=1`）发现插件在新版本里加载不了：编译过了，但一加载就抛错，
+ * 同样不切流量。老 Worker 不认这个值，按 prepare 记，只是文案笼统一些。
  */
 export async function handleBuildReport(request: Request, scope: RequestScope): Promise<Response> {
   if (!(await authorizeBuildMachine(request, scope))) return error('未授权', 401)
@@ -166,7 +184,7 @@ export async function handleBuildReport(request: Request, scope: RequestScope): 
   const body = await readJson<{ buildUuid?: unknown; phase?: unknown; failures?: unknown; error?: unknown }>(request)
   if (!body) return error('请求体格式错误', 400)
   const buildUuid = typeof body.buildUuid === 'string' && body.buildUuid.trim() ? body.buildUuid.trim() : null
-  const phase = body.phase === 'deploy' ? 'deploy' : 'prepare'
+  const phase = body.phase === 'deploy' || body.phase === 'health' ? body.phase : 'prepare'
   // 每条失败一次 D1 写入：免费版一次请求只有 50 个子请求，留足余量
   const failures = (Array.isArray(body.failures) ? body.failures : [])
     .filter(isReportedFailure)
@@ -178,42 +196,51 @@ export async function handleBuildReport(request: Request, scope: RequestScope): 
 
   const summary =
     failures.length > 0
-      ? `插件构建失败：${failures.map((f) => `${f.name}（${firstLine(f.error)}）`).join('；')}`
+      ? `${phase === 'health' ? '插件加载失败，未切流量' : '插件构建失败'}：${failures.map((f) => `${f.name}（${firstLine(f.error)}）`).join('；')}`
       : overall
-        ? `${phase === 'deploy' ? '部署失败' : '构建失败'}：${firstLine(overall)}`
+        ? `${phase === 'deploy' ? '部署失败' : phase === 'health' ? '健康检查失败' : '构建失败'}：${firstLine(overall)}`
         : null
   if (buildUuid && summary) await attachBuildError(db, buildUuid, clipText(summary))
   return json({ ok: true, recorded: failures.length })
 }
 
+/**
+ * 拉声明清单的结果。失败分两种：400 是来源本身的问题（不存在、不是合法清单），
+ * 502 是 GitHub 那边没答上来（网络错误、5xx）——后者与用户填的 source 无关，别让人去改一个本来没错的来源。
+ */
+type DeclaredManifest = { ok: true; manifest: Manifest } | { ok: false; error: string; status: 400 | 502 }
+
 /** 声明清单：root 的 manifest.json 优先，dist/manifest.json 兜底（旧仓库布局） */
-async function fetchDeclaredManifest(git: GitSource, fetchImpl: typeof fetch): Promise<Manifest | string> {
+async function fetchDeclaredManifest(git: GitSource, fetchImpl: typeof fetch): Promise<DeclaredManifest> {
   const urls = [rawManifestUrl(git), rawManifestUrl(git, true)]
   for (const url of urls) {
     let res: Response
     try {
       res = await fetchImpl(url, { redirect: 'follow' })
     } catch (err) {
-      return `拉取声明清单失败：${err instanceof Error ? err.message : String(err)}`
+      return { ok: false, status: 502, error: `拉取声明清单失败：${err instanceof Error ? err.message : String(err)}` }
     }
     if (res.status === 404) continue
-    if (!res.ok) return `拉取声明清单失败：HTTP ${res.status} ${url}`
+    if (!res.ok) return { ok: false, status: res.status >= 500 ? 502 : 400, error: `拉取声明清单失败：HTTP ${res.status} ${url}` }
     let manifest: Manifest
     try {
       manifest = JSON.parse(await res.text()) as Manifest
     } catch {
-      return `声明清单不是合法 JSON：${url}`
+      return { ok: false, status: 400, error: `声明清单不是合法 JSON：${url}` }
     }
     if (typeof manifest !== 'object' || manifest === null || typeof manifest.name !== 'string') {
-      return `声明清单缺少 name 字段：${url}`
+      return { ok: false, status: 400, error: `声明清单缺少 name 字段：${url}` }
     }
-    return manifest
+    return { ok: true, manifest }
   }
   // 匿名读 raw.githubusercontent.com：私有仓库在这里也是 404，别让人以为只是没提交清单
-  return (
-    '拉不到插件的声明清单（manifest.json）：仓库不存在、是私有仓库（只支持公开的 GitHub 仓库），' +
-    '或这个 commit 下没有 manifest.json——插件作者需要运行 qqbot-plugin build，并把生成的 manifest.json 提交到仓库根目录'
-  )
+  return {
+    ok: false,
+    status: 400,
+    error:
+      '拉不到插件的声明清单（manifest.json）：仓库不存在、是私有仓库（只支持公开的 GitHub 仓库），' +
+      '或这个 commit 下没有 manifest.json——插件作者需要运行 qqbot-plugin build，并把生成的 manifest.json 提交到仓库根目录',
+  }
 }
 
 // ---------- 已知插件的清单：安装校验、卸载提示、面板列表共用 ----------
@@ -413,6 +440,8 @@ interface Inspected {
   /** D1 里的同名条目（有即为升级） */
   existing: ManifestPluginRecord | undefined
   known: Map<string, Manifest>
+  /** 已知插件名（knownPluginNames：线上、D1、账本、待收尾），查表前缀嵌套用 */
+  knownNames: Set<string>
   /** 新增了 DO 类时要给用户看的 migrations 提示；null 表示不需要确认 */
   doNotice: string | null
 }
@@ -425,8 +454,9 @@ async function inspectSource(source: string, scope: RequestScope, deps: AdminDep
   const git = parseGitSource(source)
   if (!git) return { ok: false, error: `source 需为 git:<owner>/<repo>@<commit>[#<子目录>] 格式：${source}`, status: 400 }
 
-  const declared = await fetchDeclaredManifest(git, deps.options.fetchImpl)
-  if (typeof declared === 'string') return { ok: false, error: declared, status: 400 }
+  const fetched = await fetchDeclaredManifest(git, deps.options.fetchImpl)
+  if (!fetched.ok) return { ok: false, error: fetched.error, status: fetched.status }
+  const declared = fetched.manifest
   const problems = validateManifest(declared)
   if (problems.length > 0) return { ok: false, error: `声明清单非法：${problems.join('；')}`, status: 400 }
 
@@ -439,6 +469,7 @@ async function inspectSource(source: string, scope: RequestScope, deps: AdminDep
     records,
     existing: records.find((p) => p.name === declared.name),
     known: knownManifests(records, deps.registry),
+    knownNames: await knownPluginNames(scope.env, deps.registry),
     doNotice: durableObjectsNotice(declared, knownDurableObjects(declared.name, records, deps.registry)),
   }
 }
@@ -528,6 +559,39 @@ function installWarnings(inspected: Inspected, registry: PluginRegistry): string
   // conflicts 的另一个方向：新插件自己没声明，但已装的插件声明了与它冲突
   for (const [other, m] of known) {
     if (other !== name && (m.conflicts ?? []).includes(name)) warnings.push(`已装的 ${other} 声明与 ${name} 冲突`)
+  }
+
+  warnings.push(...tablePrefixWarnings(name, inspected.knownNames, new Set([...records.map((r) => r.name), ...registry.all().map((p) => p.manifest.name)])))
+  return warnings
+}
+
+/**
+ * D1 表前缀嵌套：`foo` 的前缀 `p_foo_` 是 `foo_bar` 的前缀 `p_foo_bar_` 的前缀，于是 `foo` 的 `{bar_x}`
+ * 与 `foo_bar` 的 `{x}` 是同一张表。前缀完全相同的已装插件在 blockingProblem 里就拦了；嵌套的以前能装、
+ * 现在也照样能装（插件名改不了，拦了就永远装不上），只提醒：两边的表可能撞名，卸载清数据时撞上的表
+ * 会被跳过、留成孤儿。卸载过、数据可能还留着的名字（账本、待收尾里的）同样算——前缀相同时新装的会接手它的表。
+ */
+function tablePrefixWarnings(name: string, knownNames: ReadonlySet<string>, installed: ReadonlySet<string>): string[] {
+  const mine = tablePrefix(name)
+  const warnings: string[] = []
+  for (const other of [...knownNames].sort()) {
+    if (other === name) continue
+    const theirs = tablePrefix(other)
+    const label = installed.has(other) ? `已装的 ${other}` : `装过的 ${other}`
+    if (mine === theirs) {
+      // 已装的同前缀插件已经被拦下（409），走到这里的只会是装过、已卸载的
+      if (!installed.has(other)) {
+        warnings.push(`${name} 与${label} 的 D1 表前缀相同（${mine}）：${other} 留下的表会被 ${name} 当成自己的`)
+      }
+      continue
+    }
+    if (!mine.startsWith(theirs) && !theirs.startsWith(mine)) continue
+    const [short, long] = mine.length < theirs.length ? [name, other] : [other, name]
+    const rest = tablePrefix(long).slice(tablePrefix(short).length)
+    warnings.push(
+      `${name} 与${label} 的 D1 表前缀嵌套（${tablePrefix(short)} 是 ${tablePrefix(long)} 的前缀）：` +
+        `${short} 的 {${rest}…} 表与 ${long} 的 {…} 表是同一张。两边建表可能撞名，卸载清数据时撞上的表会被跳过、留成孤儿`,
+    )
   }
   return warnings
 }
@@ -716,8 +780,9 @@ export async function checkPluginUpdate(name: string, scope: RequestScope, deps:
   let newPermissions: string[] = []
   let newDurableObjects: string[] = []
   if (!upToDate) {
-    const declared = await fetchDeclaredManifest({ ...git, sha: latestSha }, deps.options.fetchImpl)
-    if (typeof declared !== 'string') {
+    const fetched = await fetchDeclaredManifest({ ...git, sha: latestSha }, deps.options.fetchImpl)
+    if (fetched.ok) {
+      const declared = fetched.manifest
       latestVersion = declared.version
       const records = await listManifestPluginRecords(db)
       const previous = previousManifest(name, records, deps.registry)
@@ -786,6 +851,12 @@ export async function updatePlugin(name: string, scope: RequestScope, deps: Admi
  *
  * D1 里有、但从没真正装上（构建失败）的插件同样走这里：它不在部署里，没有 onUninstall 可跑；
  * 删掉之后 D1 就和线上一致了，不会白触发一次构建。
+ *
+ * 顺序：钩子 → 删清单 → 记待清理 → 删 onInstall 标记 → 记账本、触发构建 → **最后**尽力清数据。
+ * 清数据一次只删一批（见 purge.ts），键多就删不完，也可能撞上单次调用的操作数上限而抛错——超了之后
+ * 同一次调用里再碰任何绑定都会失败。以前清数据排在删清单之前，一抛就是笼统的 500：钩子跑了、数据删了一半、
+ * 清单还在，定时收尾每分钟再撞一次。现在必须做成的几步都排在它前面，清数据的错误接住放进 `data.purgeError`，
+ * 没删完的由 `rt_pending_cleanups` 在新版本上线后接着删。
  */
 export async function uninstallManifestPlugin(
   name: string,
@@ -805,23 +876,33 @@ export async function uninstallManifestPlugin(
 
   const records = await listManifestPluginRecords(db)
   const dependents = dependentsOf(name, knownManifests(records, deps.registry))
+  const warnings: string[] = []
+  if (dependents.length > 0) warnings.push(`这些插件依赖它提供的服务，卸载后调用会报错：${dependents.join('、')}`)
+
+  const registered = deps.registry.get(name)
+  // D1 里这份同名覆盖从没上线，线上跑的是仓库内置的那一份：钩子、onInstall 标记、数据都是内置插件的，一样都不能动——
+  // 跑它的 onUninstall、删它的标记、清它正在用的数据，等于把一个没打算卸的插件卸了一半。也不记待清理：
+  // 那一行要等「插件不在部署里」，内置插件一直在，只会永远挂着。没有出处信息的老部署分不出来，照旧。
+  const liveIsBuiltin = registered?.origin?.from === 'repo'
 
   // 趁插件代码还在这次部署里，先让它自己收尾；重建之后就没机会了
-  const registered = deps.registry.get(name)
-  const { hook, hookError } = registered
-    ? await runUninstallHook(registered, scope.contexts, purgeData, deps.logger)
-    : { hook: 'none' as const, hookError: undefined }
-
-  // 把其他已知插件名一并交给清理逻辑：D1 表前缀可能碰撞（`my-plugin` vs `my_plugin`），
-  // 没有这份名单就无法判断某张表到底属于谁，宁可留孤儿也不能误删邻居
-  const otherNames = [...new Set([...deps.registry.all().map((p) => p.manifest.name), ...records.map((p) => p.name)])]
-  const purged = purgeData ? await purgePluginData(name, scope.env, otherNames) : null
-  await clearInstallMarker(name, scope.env)
+  const { hook, hookError }: HookReport =
+    registered && !liveIsBuiltin ? await runUninstallHook(registered, scope.contexts, purgeData, deps.logger) : { hook: 'none' }
 
   await deleteManifestPlugin(db, name)
-  // 后半段：重建完成前旧代码还在跑，冷启动的 isolate 读不到标记会重跑 onInstall，把表建回来、
-  // 把标记写回去（以后重装 onInstall 就静默不跑了）。等插件真的不在部署里了，由定时任务再收一次尾
-  await addPendingCleanup(db, name, purgeData)
+  if (liveIsBuiltin) {
+    warnings.push(
+      `线上跑的是同名的仓库内置插件 ${name}（这份覆盖还没上线过），撤掉之后它照常运行：没有运行 onUninstall` +
+        `${purgeData ? '，也没有清数据——数据归内置插件' : ''}`,
+    )
+  } else {
+    // 后半段：重建完成前旧代码还在跑，冷启动的 isolate 读不到标记会重跑 onInstall，把表建回来、
+    // 把标记写回去（以后重装 onInstall 就静默不跑了）。等插件真的不在部署里了，由定时任务再收一次尾；
+    // 这一趟没删完的数据也由它接着删
+    await addPendingCleanup(db, name, purgeData)
+    // 标记无条件删：数据清了，重装必须重新建表；数据留着，onInstall 本来就要求幂等
+    await clearInstallMarker(name, scope.env)
+  }
   const hash = await manifestHash(await listManifestPlugins(db))
   const install = await insertInstall(db, { action: 'uninstall', name, source: existing.source, manifestHash: hash, status: 'pending' })
 
@@ -829,16 +910,37 @@ export async function uninstallManifestPlugin(
   // 触发失败不回滚卸载（清单已经改了，回滚只会更乱），如实报出来让用户手动重试。
   const build = opts.build === false ? BUILD_DEFERRED : await buildAfterChange(scope, deps)
 
+  let purged: PurgeReport | null = null
+  let purgeError: string | undefined
+  if (purgeData && !liveIsBuiltin) {
+    try {
+      // 与清孤儿、卸载收尾同一份「已知插件名」：表前缀可能碰撞或嵌套，名单越全越不会误删邻居
+      purged = await purgePluginData(name, scope.env, await knownPluginNames(scope.env, deps.registry))
+    } catch (err) {
+      purgeError = err instanceof Error ? err.message : String(err)
+      deps.logger.warn('卸载时清数据没做完，新版本上线后由定时任务接着清', { plugin: name, error: purgeError })
+    }
+    const remaining = purged ? describeRemaining(purged) : null
+    if (purgeError) warnings.push(`清数据中途出错（${purgeError}）：卸载本身已生效，新版本上线后定时任务会接着清`)
+    else if (remaining) warnings.push(`数据还没清完（${remaining}，一次只清一批）：新版本上线后定时任务会接着清`)
+  }
+
   return json({
     ok: true,
     removed: existing,
     hash,
     install,
     build,
-    data: { purged: purgeData, hook, ...(hookError ? { hookError } : {}), ...(purged ?? {}) },
-    ...(dependents.length > 0
-      ? { warnings: [`这些插件依赖它提供的服务，卸载后调用会报错：${dependents.join('、')}`] }
-      : {}),
+    data: {
+      // 线上是内置插件时选了清数据也没清，如实报 false
+      purged: purgeData && !liveIsBuiltin,
+      hook,
+      ...(hookError ? { hookError } : {}),
+      ...(purged ?? {}),
+      ...(purgeError ? { purgeError } : {}),
+      ...(liveIsBuiltin ? { liveIsBuiltin: true } : {}),
+    },
+    ...(warnings.length > 0 ? { warnings } : {}),
   })
 }
 
@@ -1200,64 +1302,96 @@ async function syncBuildLedger(
 
   if (byUuid) {
     let succeeded = false
+    // 按 build_uuid 去重：这次构建并进来的安装、升级、卸载与构建本身共用一个 uuid，一条 UPDATE 就全改了。
+    // 以前逐行各发一次、内存里其余行还是旧状态，于是每行都再发一次——批量装 10 个插件时每次状态变化写一百来行
+    const seen = new Set<string>()
     for (const row of rows) {
-      if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
+      if (!row.buildUuid || !inFlight(row) || seen.has(row.buildUuid)) continue
+      seen.add(row.buildUuid)
       const build = byUuid.get(row.buildUuid)
       if (!build) continue
       const { status: next, cfStatus } = buildToInstallState(build)
       const commitHash = build.build_trigger_metadata?.commit_hash ?? null
       if (next === 'ok') succeeded = true
-      if (next !== row.status || (cfStatus && cfStatus !== row.cfStatus) || (commitHash && commitHash !== row.commitHash)) {
-        await updateInstallByBuildUuid(db, row.buildUuid, {
+      const changed = rows.some(
+        (r) =>
+          r.buildUuid === row.buildUuid &&
+          inFlight(r) &&
+          (next !== r.status || (cfStatus && cfStatus !== r.cfStatus) || (commitHash && commitHash !== r.commitHash)),
+      )
+      if (changed) {
+        await patchBuildRows(db, rows, row.buildUuid, {
           status: next,
           cfStatus,
           commitHash,
           ...(next === 'failed' ? { error: `构建未成功：${cfStatus}` } : {}),
         })
-        row.status = next
-        row.cfStatus = cfStatus
-        row.commitHash = commitHash
-        if (next === 'failed') row.error = row.error ?? `构建未成功：${cfStatus}`
       }
     }
     // 有构建成功了：它拉的是当时的完整清单，里面每个插件都编过了，之前记下的构建错误都过时了
     if (succeeded) await clearPluginBuildErrors(db).catch(() => {})
-    // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛
+    // 构建列表里找不到的 in-flight 记录：超过 30 分钟仍不出现即收敛（同一个 uuid 只改一次，patchBuildRows 把同伴一起改成终态）
     const NOT_FOUND_MS = 30 * 60 * 1000
     for (const row of rows) {
-      if (!row.buildUuid || (row.status !== 'building' && row.status !== 'pending')) continue
+      if (!row.buildUuid || !inFlight(row)) continue
       if (!byUuid.has(row.buildUuid) && Date.now() - row.ts > NOT_FOUND_MS) {
         const message =
           'Cloudflare 构建列表中找不到该构建：可能已超出 Builds API 的返回范围（构建太多），' +
           '也可能是配置了 CF_WORKER_TAG 但填成了 worker 名字（应填 workers/scripts 返回的 tag）'
-        await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
-        row.status = 'failed'
-        row.cfStatus = 'not_found'
-        row.error = row.error ?? message
+        await patchBuildRows(db, rows, row.buildUuid, { status: 'failed', cfStatus: 'not_found', error: message })
       }
     }
   }
 
-  // 卡死收敛：超过 24h 仍是非终态的记录按失败处理，避免账本永远"构建中"（实际结果未知）
+  await settleStaleRecords(db, rows)
+  return syncError
+}
+
+function inFlight(row: InstallRecord): boolean {
+  return row.status === 'building' || row.status === 'pending'
+}
+
+/**
+ * 按 build_uuid 改一次账本，并把内存里同 uuid 的行一起改掉——D1 那条 UPDATE 本来就是一起改的，
+ * 内存不跟上的话，后面的同伴行会被当成「还没改」再发一次。cfStatus / commitHash 没给就保留原值，与 SQL 的 COALESCE 一致
+ */
+async function patchBuildRows(
+  db: D1Database,
+  rows: InstallRecord[],
+  buildUuid: string,
+  patch: { status: InstallRecord['status']; cfStatus?: string | null; commitHash?: string | null; error?: string },
+): Promise<void> {
+  await updateInstallByBuildUuid(db, buildUuid, patch)
+  for (const r of rows) {
+    if (r.buildUuid !== buildUuid) continue
+    r.status = patch.status
+    if (patch.cfStatus) r.cfStatus = patch.cfStatus
+    if (patch.commitHash) r.commitHash = patch.commitHash
+    if (patch.error) r.error = r.error ?? patch.error
+  }
+}
+
+/** 卡死收敛：超过 24h 仍是非终态的记录按失败处理，避免账本永远"构建中"（实际结果未知）。纯 D1，不联网 */
+async function settleStaleRecords(db: D1Database, rows: InstallRecord[]): Promise<void> {
   const STALE_MS = 24 * 60 * 60 * 1000
+  const message = '构建状态超过 24h 未同步，已按失败处理（实际结果未知）'
   for (const row of rows) {
-    if ((row.status === 'building' || row.status === 'pending') && Date.now() - row.ts > STALE_MS) {
-      const message = '构建状态超过 24h 未同步，已按失败处理（实际结果未知）'
-      if (row.buildUuid) await updateInstallByBuildUuid(db, row.buildUuid, { status: 'failed', error: message })
-      else await updateInstallById(db, row.id, { status: 'failed', error: message })
+    if (!inFlight(row) || Date.now() - row.ts <= STALE_MS) continue
+    if (row.buildUuid) {
+      await patchBuildRows(db, rows, row.buildUuid, { status: 'failed', error: message })
+    } else {
+      await updateInstallById(db, row.id, { status: 'failed', error: message })
       row.status = 'failed'
-      row.error = row.buildUuid ? (row.error ?? message) : message
+      row.error = message
     }
   }
-
-  return syncError
 }
 
 /** 两次自动同步之间的最短间隔：cron 每分钟都会来，构建通常跑几分钟，没必要每分钟问一次 */
 const LEDGER_SYNC_INTERVAL_MS = 3 * 60 * 1000
 
 /**
- * Cron 里的账本同步。只有账本里真有进行中的记录才会走到网络，
+ * Cron 里的账本同步。只有账本里真有「要问 Cloudflare」的记录才会走到网络，
  * 并用 KV 时间戳节流——否则每分钟一次 cron 会把 Builds API 打成 1440 次/天。
  */
 export async function syncBuildLedgerOnSchedule(scope: RequestScope, deps: AdminDeps): Promise<void> {
@@ -1265,7 +1399,17 @@ export async function syncBuildLedgerOnSchedule(scope: RequestScope, deps: Admin
   if (!db) return
   try {
     const rows = await listInstalls(db, 50)
-    if (!rows.some((r) => r.status === 'building' || r.status === 'pending')) return
+    if (!rows.some(inFlight)) return
+
+    // 要问 Cloudflare 的只有带 build_uuid 的进行中记录，而且得配了 Builds 凭证（syncBuildLedger 同样据此决定联不联网）。
+    // 只剩没有 build_uuid 的 pending 时——构建 token 没配、构建触发失败、`build: false` 之后没再构建——
+    // 联网也没东西可问，只做 24 小时收敛：纯 D1，不碰 KV。以前这时照样先写节流时间戳，
+    // 每 3 分钟一次、一天白写约 480 次 KV，一直写到 24 小时后记录被收敛。
+    const canAsk = !!(scope.env.CF_ACCOUNT_ID && scope.env.CF_BUILDS_TOKEN)
+    if (!canAsk || !rows.some((r) => r.buildUuid && inFlight(r))) {
+      await settleStaleRecords(db, rows)
+      return
+    }
 
     const last = Number((await scope.env.KV.get(Keys.cfLedgerSyncedAt)) ?? 0)
     if (Number.isFinite(last) && Date.now() - last < LEDGER_SYNC_INTERVAL_MS) return
@@ -1293,31 +1437,79 @@ async function dropPluginState(env: RuntimeEnv, name: string): Promise<void> {
  * 卸载请求当场已经清过一次，但重建完成前旧代码还在跑——冷启动的 isolate 读不到标记会重跑 onInstall，
  * 把表建回来、把标记写回去，以后重装时 onInstall 就静默不跑了。在旧代码没机会再动之后收尾，
  * 这两件事才靠得住。插件还在部署里（重建没完成、构建失败）就等下一次；清数据还会连快照里的配置一起清。
+ *
+ * 清数据一次只删一批（见 purge.ts），没删完就留着这一行，下一分钟接着删；每次 Cron 最多清一个插件的数据——
+ * 一批的操作数是按单次调用的上限估的，两个插件一起删就可能超。每项单独接住错误，一个失败不挡别的。
+ *
+ * 另一种就绪：D1 里装过一份与仓库内置插件同名的覆盖，卸掉之后内置的回来了（注册表里是 repo 来源、D1 清单里已经没有它）。
+ * 这时插件永远「在部署里」，按老规则这一行永远等不到。数据现在归正在运行的内置插件，一样都不清；
+ * 只再删一次标记——覆盖那一份的代码交接时可能写过它，而 onInstall 本来就要求幂等，让内置的重跑一遍无害。
  */
 export async function processPendingCleanups(scope: RequestScope, deps: AdminDeps): Promise<void> {
   const db = scope.env.DB
   if (!db) return
+  type Ready = PendingCleanup & { builtinBack: boolean }
+  let pending: PendingCleanup[]
+  let ready: Ready[]
   try {
-    const pending = await listPendingCleanups(db)
-    const ready = pending.filter((c) => !deps.registry.get(c.name))
-    if (ready.length === 0) return
+    pending = await listPendingCleanups(db)
+    if (pending.length === 0) return
+    const builtin = pending.filter((c) => deps.registry.get(c.name)?.origin?.from === 'repo')
+    // 只有碰上内置插件时才需要读 D1 清单
+    const inD1 = builtin.length > 0 ? new Set((await listManifestPlugins(db)).map((p) => p.name)) : new Set<string>()
+    ready = pending.flatMap((c): Ready[] => {
+      const live = deps.registry.get(c.name)
+      if (!live) return [{ ...c, builtinBack: false }]
+      return live.origin?.from === 'repo' && !inD1.has(c.name) ? [{ ...c, builtinBack: true }] : []
+    })
+  } catch (err) {
+    deps.logger.warn('卸载收尾失败，下次定时任务再试', { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+  if (ready.length === 0) return
 
-    // 与 purgeOrphan 同一份「已知插件名」：表前缀可能撞车，名单越全越不会误删邻居
-    const known = new Set<string>(deps.registry.all().map((p) => p.manifest.name))
-    for (const p of await listManifestPlugins(db)) known.add(p.name)
-    for (const r of await listInstalls(db, 200)) if (r.name) known.add(r.name)
-
-    for (const c of ready) {
-      await clearInstallMarker(c.name, scope.env)
-      if (c.purge) {
-        await purgePluginData(c.name, scope.env, [...known])
-        await dropPluginState(scope.env, c.name)
-      }
-      await removePendingCleanup(db, c.name)
-      deps.logger.info('卸载收尾完成', { plugin: c.name, purge: c.purge })
+  // 与卸载清数据、清孤儿同一份「已知插件名」：表前缀可能碰撞或嵌套，名单越全越不会误删邻居。
+  // 在动手之前取，并把这次读到的待收尾名字都并进去——同一轮里排在前面的项收完尾就删了自己那一行，
+  // 之后再读就少了它，它留下的表会被当成别人的 DROP 掉
+  let known: Set<string> | null = null
+  try {
+    if (ready.some((c) => c.purge && !c.builtinBack)) {
+      known = await knownPluginNames(scope.env, deps.registry)
+      for (const c of pending) known.add(c.name)
     }
   } catch (err) {
     deps.logger.warn('卸载收尾失败，下次定时任务再试', { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  let purgedOne = false
+  for (const c of ready) {
+    try {
+      if (c.builtinBack) {
+        await clearInstallMarker(c.name, scope.env)
+        await removePendingCleanup(db, c.name)
+        deps.logger.info('卸载收尾完成：内置插件已回来，只删了标记、没清数据', { plugin: c.name })
+        continue
+      }
+      if (c.purge) {
+        if (purgedOne || !known) continue
+        await clearInstallMarker(c.name, scope.env)
+        const report = await purgePluginData(c.name, scope.env, known)
+        // 删成了才占掉这一轮的名额：抛错的那个不该一直挡着后面的
+        purgedOne = true
+        if (!purgeComplete(report)) {
+          deps.logger.info('卸载收尾：数据还没清完，下一分钟接着清', { plugin: c.name, remaining: describeRemaining(report) })
+          continue
+        }
+        await dropPluginState(scope.env, c.name)
+      } else {
+        await clearInstallMarker(c.name, scope.env)
+      }
+      await removePendingCleanup(db, c.name)
+      deps.logger.info('卸载收尾完成', { plugin: c.name, purge: c.purge })
+    } catch (err) {
+      deps.logger.warn('卸载收尾失败，下次定时任务再试', { plugin: c.name, error: err instanceof Error ? err.message : String(err) })
+    }
   }
 }
 

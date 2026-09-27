@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { definePlugin, type Manifest } from '@qqbot/sdk'
 import { BUILD_COMMAND, BUILD_PATH_EXCLUDES, DEPLOY_COMMAND } from '@qqbot/projector'
 import { createRuntime } from './runtime.js'
-import { resetManifestSchema } from './manifestStore.js'
+import {
+  addPendingCleanup,
+  insertInstall,
+  listInstalls,
+  markPendingBuilding,
+  resetManifestSchema,
+  upsertManifestPlugin,
+} from './manifestStore.js'
 import { resetSnapshotCache } from './store.js'
 import { resetLifecycle } from './lifecycle.js'
 import { resetEventsSchema } from './events.js'
@@ -55,6 +62,8 @@ function createFetchMock(
     for (const [fragment, manifest] of Object.entries(manifests)) {
       if (url.includes(fragment)) return new Response(JSON.stringify(manifest), { status: 200 })
     }
+    // 与真 raw.githubusercontent.com 一样：没有的文件是 404（5xx 另有含义：上游故障，安装报 502）
+    if (url.includes('raw.githubusercontent.com')) return new Response('404: Not Found', { status: 404 })
     if (url.includes('/builds/triggers/trig-1/builds')) {
       return new Response(JSON.stringify({ success: true, result: { build_uuid: 'build-9' } }), { status: 200 })
     }
@@ -107,6 +116,9 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
         version: '1.2.0',
         durableObjects: ['Room', 'Lobby', 'Arena'],
       }),
+      // 表前缀嵌套的一对：p_foo_ 是 p_foo_bar_ 的前缀
+      'raw.githubusercontent.com/me/qqbot-plugin-foo/f0f0f0f0f0/manifest.json': declaredManifest({ name: 'foo' }),
+      'raw.githubusercontent.com/me/qqbot-plugin-foo-bar/f1f1f1f1f1/manifest.json': declaredManifest({ name: 'foo_bar' }),
     },
     [{ build_uuid: 'build-9', status: 'stopped', build_outcome: 'success', build_trigger_metadata: { commit_hash: 'c'.repeat(40) } }],
     undefined,
@@ -1280,6 +1292,19 @@ describe('POST /admin/build-report：构建机回报失败原因', () => {
     const rows = await ledger(call)
     expect(rows.find((r) => r.action === 'build')?.error).toBe('部署失败：预览地址健康检查失败：HTTP 500')
   })
+
+  it('健康检查发现插件加载不了（phase: health）：照样记到 D1 条目，账本文案说清是没切流量', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5' })
+    await report(call, {
+      buildUuid: 'build-9',
+      phase: 'health',
+      failures: [{ name: 'hello', source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', error: 'ReferenceError: process is not defined' }],
+    })
+    expect((await managed(call)).plugins[0]).toMatchObject({ buildError: 'ReferenceError: process is not defined' })
+    const rows = await ledger(call)
+    expect(rows.find((r) => r.action === 'build')?.error).toBe('插件加载失败，未切流量：hello（ReferenceError: process is not defined）')
+  })
 })
 
 describe('构建机带 build uuid 拉清单', () => {
@@ -1383,5 +1408,344 @@ describe('预检列出插件的第三方依赖', () => {
     const missing = await preview({})
     expect(missing.status).toBe(200)
     expect(missing.data).toMatchObject({ dependencies: {}, warnings: [] })
+  })
+})
+
+// ---------- 以下覆盖审查确认过的一批修复 ----------
+
+/** 跑一次 Cron，并等 waitUntil 里的后台任务（账本同步、卸载收尾）跑完 */
+async function cronTick(runtime: ReturnType<typeof createRuntime>, env: ReturnType<typeof setup>['env']) {
+  const ctx = createExecutionContext()
+  await runtime.scheduled!({ scheduledTime: Date.now(), cron: '* * * * *', noRetry() {} } as ScheduledController, env, ctx)
+  await ctx.flush()
+}
+
+/** 新部署：入口里已经没有被卸载的插件；任何网络请求都算意外 */
+const emptyDeployment = () =>
+  createRuntime({ plugins: [], fetchImpl: (async () => new Response('unexpected', { status: 500 })) as typeof fetch })
+
+const HELLO = 'git:me/qqbot-plugin-hello@a1b2c3d4e5'
+
+describe('Cron 账本同步：只剩不用联网的 pending 时不写 KV', () => {
+  /** 记下全部网络请求，一律 500 */
+  function offline(overrides: Record<string, unknown> = {}) {
+    const calls: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      calls.push(String(input))
+      return new Response('unexpected', { status: 500 })
+    }) as typeof fetch
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const db = createManifestD1()
+    const env = createEnv({ DB: db, CF_ACCOUNT_ID: 'acc', CF_BUILDS_TOKEN: 'tok', CF_WORKER_TAG: 'tag', CF_TRIGGER_UUID: 'trig-1', ...overrides })
+    return { runtime, db, env, calls }
+  }
+
+  it('没有 build_uuid 的 pending（build: false 之后没再构建）：不写节流时间戳、不联网；满 24 小时照样收敛成失败', async () => {
+    const { runtime, db, env, calls } = offline()
+    await insertInstall(db, { action: 'install', name: 'hello', source: HELLO, manifestHash: 'h', status: 'pending' }, Date.now() - 60_000)
+
+    await cronTick(runtime, env)
+    expect(env.KV.store.has('rt:cf_ledger_synced_at')).toBe(false)
+    expect(calls).toEqual([])
+    expect([...db.installs.values()][0]).toMatchObject({ status: 'pending' })
+
+    await insertInstall(db, { action: 'install', name: 'old', source: HELLO, manifestHash: 'h', status: 'pending' }, Date.now() - 25 * 3600_000)
+    await cronTick(runtime, env)
+    const rows = await listInstalls(db)
+    expect(rows.find((r) => r.name === 'old')).toMatchObject({ status: 'failed', error: expect.stringContaining('24h') })
+    expect(rows.find((r) => r.name === 'hello')).toMatchObject({ status: 'pending' })
+    expect(env.KV.store.has('rt:cf_ledger_synced_at')).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('没配 Builds 凭证时带 build_uuid 的记录也问不了：同样不写 KV', async () => {
+    const { runtime, db, env, calls } = offline({ CF_ACCOUNT_ID: undefined, CF_BUILDS_TOKEN: undefined })
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'b-1' })
+    await cronTick(runtime, env)
+    expect(env.KV.store.has('rt:cf_ledger_synced_at')).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('有带 build_uuid 的进行中记录：照旧节流、照旧同步', async () => {
+    const { call, env, runtime } = setup()
+    await install(call, { source: HELLO })
+    await cronTick(runtime, env)
+    expect(env.KV.store.has('rt:cf_ledger_synced_at')).toBe(true)
+    expect((await ledger(call)).every((r) => r.status === 'ok')).toBe(true)
+  })
+})
+
+describe('账本同步：同一个 build_uuid 只写一次', () => {
+  it('批量装 10 个插件并进一次构建：状态变化只发一条 UPDATE', async () => {
+    const { call, db } = setup()
+    for (let i = 0; i < 10; i++) {
+      await insertInstall(db, { action: 'install', name: `p${i}`, source: HELLO, manifestHash: 'h', status: 'pending' }, Date.now() - 60_000 + i)
+    }
+    await markPendingBuilding(db, 'build-9')
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'build-9' })
+    db.writes.length = 0
+
+    const rows = await ledger(call)
+    expect(rows).toHaveLength(11)
+    expect(rows.every((r) => r.status === 'ok')).toBe(true)
+    const updates = () => db.writes.filter((sql) => sql.startsWith('UPDATE rt_installs SET status = ?, cf_status'))
+    expect(updates()).toHaveLength(1)
+    expect([...db.installs.values()].every((r) => r.commit_hash === 'c'.repeat(40))).toBe(true)
+
+    // 已经是终态：再打开面板不再写
+    await ledger(call)
+    expect(updates()).toHaveLength(1)
+  })
+
+  it('24 小时收敛不把已经同步到的 commit 与 Cloudflare 状态写成 NULL', async () => {
+    const { call, db } = setup({ CF_ACCOUNT_ID: undefined, CF_BUILDS_TOKEN: undefined })
+    await insertInstall(db, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'building', buildUuid: 'b-old' }, Date.now() - 25 * 3600_000)
+    const row = [...db.installs.values()][0]!
+    row.cf_status = 'running'
+    row.commit_hash = 'd'.repeat(40)
+
+    await ledger(call)
+    expect((await listInstalls(db))[0]).toMatchObject({ status: 'failed', cfStatus: 'running', commitHash: 'd'.repeat(40) })
+  })
+})
+
+describe('拉声明清单失败的状态码', () => {
+  function withManifestFetch(fetchManifest: () => Promise<Response>) {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      if (String(input).includes('raw.githubusercontent.com')) return fetchManifest()
+      return new Response('unexpected', { status: 500 })
+    }) as typeof fetch
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv({ DB: createManifestD1() })
+    return (source: string) =>
+      runtime.fetch!(new Request(`${BASE}/admin/manifest/plugins`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ source, dryRun: true }) }), env, createExecutionContext())
+  }
+
+  it('GitHub 5xx 或网络错误是上游故障：502；404（仓库或清单不存在）仍是 400', async () => {
+    expect((await withManifestFetch(async () => new Response('bad gateway', { status: 503 }))(HELLO)).status).toBe(502)
+    expect(
+      (
+        await withManifestFetch(async () => {
+          throw new TypeError('fetch failed')
+        })(HELLO)
+      ).status,
+    ).toBe(502)
+    expect((await withManifestFetch(async () => new Response('404: Not Found', { status: 404 }))(HELLO)).status).toBe(400)
+    expect((await withManifestFetch(async () => new Response('not json', { status: 200 }))(HELLO)).status).toBe(400)
+  })
+})
+
+describe('构建机端点的鉴权与以前一致', () => {
+  it('BUILD_TOKEN 只认请求头；管理密钥照旧也认 ?token=（MANIFEST_URL 里手写的老配置）', async () => {
+    const { call } = setup()
+    expect((await call(`/admin/build-manifest?token=${BUILD_TOKEN}`)).status).toBe(401)
+    expect((await call(`/admin/build-manifest?token=${ADMIN}`)).status).toBe(200)
+    expect((await call('/admin/build-manifest', { headers: { authorization: `Bearer ${BUILD_TOKEN}` } })).status).toBe(200)
+    expect((await call('/admin/build-manifest', { headers: { authorization: `Bearer ${BUILD_TOKEN}x` } })).status).toBe(401)
+  })
+})
+
+describe('撤销「覆盖内置插件」：线上那份是仓库内置的', () => {
+  /** 仓库内置的插件：出处是 repo，带一个记录调用的 onUninstall */
+  function builtin(name: string, seen: unknown[]) {
+    return {
+      manifest: declaredManifest({ name }) as unknown as Manifest,
+      origin: { from: 'repo' as const, source: `file:../../plugins/${name}/dist/plugin.js` },
+      load: async () => ({
+        default: definePlugin({ name, version: '1.0.0', hooks: { onUninstall: (_ctx, options) => void seen.push(options) } }),
+      }),
+    }
+  }
+
+  it('不跑内置插件的 onUninstall、选了清数据也不清、不删标记、不记待清理，并如实说明', async () => {
+    const seen: unknown[] = []
+    const { call, env, db } = setup({}, [builtin('hello', seen)])
+    await install(call, { source: HELLO, build: false })
+    await env.KV.put('rt:installed:hello', '1.0.0')
+    await env.KV.put('p:hello:note', 'x')
+    db.tables.set('p_hello_notes', 3)
+
+    const res = await call('/admin/manifest/plugins/hello?purge=true&build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: Record<string, unknown>; warnings?: string[] }
+    expect(seen).toEqual([])
+    expect(body.data).toEqual({ purged: false, hook: 'none', liveIsBuiltin: true })
+    expect(body.warnings).toEqual([expect.stringMatching(/仓库内置插件 hello[\s\S]*没有清数据/)])
+    expect(env.KV.store.get('rt:installed:hello')).toBe('1.0.0')
+    expect(env.KV.store.get('p:hello:note')).toBe('x')
+    expect(db.tables.has('p_hello_notes')).toBe(true)
+    expect(db.cleanups.has('hello')).toBe(false)
+    // 覆盖本身撤掉了
+    expect(db.plugins.has('hello')).toBe(false)
+  })
+
+  it('没有出处信息的老部署分不出来：保持原来的行为（跑钩子、记待清理）', async () => {
+    const seen: unknown[] = []
+    const { call, db } = setup({}, [
+      definePlugin({ name: 'hello', version: '1.0.0', hooks: { onUninstall: (_ctx, options) => void seen.push(options) } }),
+    ])
+    await install(call, { source: HELLO, build: false })
+    await call('/admin/manifest/plugins/hello?build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(seen).toEqual([{ purgeData: false }])
+    expect(db.cleanups.has('hello')).toBe(true)
+  })
+
+  it('卸载收尾：覆盖撤掉、内置的回来了（D1 清单里没它）——只再删一次标记、不清数据，然后删掉这一行', async () => {
+    const { env, runtime, db } = setup({}, [builtin('hello', [])])
+    // 老代码留下的一行：带 purge，而且按老规则永远等不到「不在部署里」
+    await addPendingCleanup(db, 'hello', true)
+    await env.KV.put('rt:installed:hello', '1.0.0')
+    await env.KV.put('p:hello:note', 'x')
+    db.tables.set('p_hello_notes', 3)
+
+    // D1 里还有它（又装回来了、还没来得及取消）就不动
+    await upsertManifestPlugin(db, { name: 'hello', version: '1.0.0', source: HELLO })
+    await cronTick(runtime, env)
+    expect(db.cleanups.has('hello')).toBe(true)
+    expect(env.KV.store.has('rt:installed:hello')).toBe(true)
+
+    db.plugins.delete('hello')
+    await cronTick(runtime, env)
+    expect(db.cleanups.has('hello')).toBe(false)
+    expect(env.KV.store.has('rt:installed:hello')).toBe(false)
+    expect(env.KV.store.get('p:hello:note')).toBe('x')
+    expect(db.tables.has('p_hello_notes')).toBe(true)
+  })
+})
+
+describe('清数据时「已知插件名」四处同一份', () => {
+  it('带清数据卸载 game：以前卸载时保留了数据的 game_stats 的表不会被 DROP', async () => {
+    const { call, db } = setup()
+    // game_stats 早先卸载过、数据留着：账本里有它的名字，D1 清单与注册表里都没有
+    await insertInstall(db, { action: 'uninstall', name: 'game_stats', source: 'git:me/qqbot-plugin-game-stats@a1b2c3d4e5', manifestHash: 'h', status: 'ok' })
+    await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', acknowledgeDurableObjects: true, build: false })
+    db.tables.set('p_game_rooms', 1)
+    db.tables.set('p_game_stats_scores', 9)
+
+    const res = await call('/admin/manifest/plugins/game?purge=true&build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    const body = (await res.json()) as { data: { tables: string[]; skippedTables: string[] } }
+    expect(body.data.tables).toEqual(['p_game_rooms'])
+    expect(body.data.skippedTables).toEqual(['p_game_stats_scores'])
+    expect(db.tables.has('p_game_stats_scores')).toBe(true)
+  })
+
+  it('卸载收尾同样认得出只在待收尾里的名字', async () => {
+    const { env, db } = setup()
+    // game_stats 自己也在等收尾（不清数据）；game 的收尾要清数据
+    await addPendingCleanup(db, 'game_stats', false, 1)
+    await addPendingCleanup(db, 'game', true, 2)
+    db.tables.set('p_game_rooms', 1)
+    db.tables.set('p_game_stats_scores', 9)
+
+    await cronTick(emptyDeployment(), env)
+    expect(db.tables.has('p_game_rooms')).toBe(false)
+    expect(db.tables.has('p_game_stats_scores')).toBe(true)
+    expect(db.cleanups.size).toBe(0)
+  })
+
+  it('安装预检：表前缀嵌套只提醒、不拦', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-foo@f0f0f0f0f0', build: false })
+    const preview = await install(call, { source: 'git:me/qqbot-plugin-foo-bar@f1f1f1f1f1', dryRun: true })
+    expect(preview.res.status).toBe(200)
+    expect(preview.data.warnings).toEqual([expect.stringContaining('D1 表前缀嵌套（p_foo_ 是 p_foo_bar_ 的前缀）')])
+    const real = await install(call, { source: 'git:me/qqbot-plugin-foo-bar@f1f1f1f1f1', build: false })
+    expect(real.res.status).toBe(200)
+    expect(real.data.warnings).toEqual([expect.stringContaining('已装的 foo')])
+  })
+
+  it('安装预检：与装过、已卸载的插件表前缀相同时提醒（已装的仍然 409）', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-scored@d1e2f3a4b6', build: false })
+    await call('/admin/manifest/plugins/my_plugin?build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-dashed@d1e2f3a4b5', build: false })
+    expect(res.status).toBe(200)
+    expect(data.warnings).toEqual([expect.stringContaining('装过的 my_plugin 的 D1 表前缀相同')])
+  })
+})
+
+describe('卸载清数据：一次删一批，删不完或出错都不再是 500', () => {
+  it('数据多到一批删不完：卸载照样成功，剩下的由新版本上线后的定时任务接着删', async () => {
+    const { call, env, db } = setup({}, [deployed('hello')])
+    await install(call, { source: HELLO, build: false })
+    for (let i = 0; i < 1200; i++) env.KV.store.set(`p:hello:k${i}`, '1')
+    await env.KV.put('rt:snapshot', JSON.stringify({ revision: 1, plugins: { hello: { enabled: true } } }))
+    resetSnapshotCache()
+
+    const res = await call('/admin/manifest/plugins/hello?purge=true&build=false', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: Record<string, unknown>; warnings?: string[] }
+    expect(body.data).toMatchObject({ purged: true, kvKeys: 500, kvRemaining: 700 })
+    expect(body.warnings).toEqual([expect.stringContaining('还剩 700 个 KV 键')])
+    expect(db.plugins.has('hello')).toBe(false)
+    expect(db.cleanups.get('hello')).toMatchObject({ purge: 1 })
+
+    // 新部署里没它了：每分钟一批，删完才删掉这一行、清快照里的配置
+    resetSnapshotCache()
+    await cronTick(emptyDeployment(), env)
+    expect(db.cleanups.has('hello')).toBe(true)
+    expect([...env.KV.store.keys()].filter((k) => k.startsWith('p:hello:'))).toHaveLength(200)
+    await cronTick(emptyDeployment(), env)
+    expect(db.cleanups.has('hello')).toBe(false)
+    expect([...env.KV.store.keys()].filter((k) => k.startsWith('p:hello:'))).toHaveLength(0)
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).plugins).toEqual({})
+  })
+
+  it('清数据中途抛错：接住放进 purgeError；清单、待清理、标记、账本、构建都已做完', async () => {
+    const { call, env, db } = setup({}, [deployed('hello')])
+    await install(call, { source: HELLO, build: false })
+    await env.KV.put('rt:installed:hello', '1.0.0')
+    await env.KV.put('p:hello:note', 'x')
+    const del = env.KV.delete.bind(env.KV)
+    env.KV.delete = (async (key: string) => {
+      if (key.startsWith('p:')) throw new Error('Too many API requests by single Worker invocation.')
+      return del(key)
+    }) as typeof env.KV.delete
+
+    const res = await call('/admin/manifest/plugins/hello?purge=true', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: Record<string, unknown>; build: Record<string, unknown>; install: { action: string }; warnings?: string[] }
+    expect(body.data).toMatchObject({ purged: true, purgeError: expect.stringContaining('Too many API requests') })
+    expect(body.warnings).toEqual([expect.stringContaining('清数据中途出错')])
+    expect(body.install.action).toBe('uninstall')
+    expect(body.build).toEqual({ buildUuid: 'build-9' })
+    expect(db.plugins.has('hello')).toBe(false)
+    expect(db.cleanups.get('hello')).toMatchObject({ purge: 1 })
+    expect(env.KV.store.has('rt:installed:hello')).toBe(false)
+  })
+
+  it('收尾时每项单独接住错误：一个失败不挡别的', async () => {
+    const { env, db } = setup()
+    await addPendingCleanup(db, 'broken', true, 1)
+    await addPendingCleanup(db, 'plain', false, 2)
+    await addPendingCleanup(db, 'fine', true, 3)
+    await env.KV.put('p:broken:a', '1')
+    await env.KV.put('p:fine:a', '1')
+    await env.KV.put('rt:installed:plain', '1.0.0')
+    const del = env.KV.delete.bind(env.KV)
+    env.KV.delete = (async (key: string) => {
+      if (key.startsWith('p:broken:')) throw new Error('boom')
+      return del(key)
+    }) as typeof env.KV.delete
+
+    await cronTick(emptyDeployment(), env)
+    expect([...db.cleanups.keys()]).toEqual(['broken'])
+    expect(env.KV.store.has('rt:installed:plain')).toBe(false)
+    expect(env.KV.store.has('p:fine:a')).toBe(false)
+  })
+
+  it('一次 Cron 最多清一个插件的数据：一批的操作数是按单次调用的上限估的', async () => {
+    const { env, db } = setup()
+    await addPendingCleanup(db, 'first', true, 1)
+    await addPendingCleanup(db, 'second', true, 2)
+    await env.KV.put('p:first:a', '1')
+    await env.KV.put('p:second:a', '1')
+
+    await cronTick(emptyDeployment(), env)
+    expect([...db.cleanups.keys()]).toEqual(['second'])
+    expect(env.KV.store.has('p:second:a')).toBe(true)
+    await cronTick(emptyDeployment(), env)
+    expect(db.cleanups.size).toBe(0)
+    expect(env.KV.store.has('p:second:a')).toBe(false)
   })
 })

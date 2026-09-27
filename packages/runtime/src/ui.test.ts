@@ -1,6 +1,6 @@
 import { definePlugin } from '@qqbot/sdk'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { authenticate, issueBridge, issueSession, signToken, verifyToken } from './auth.js'
+import { authenticate, constantTimeEqual, issueBridge, issueSession, signToken, verifyToken } from './auth.js'
 import { resetEventsSchema } from './events.js'
 import { matchPath } from './http.js'
 import { resetLifecycle } from './lifecycle.js'
@@ -39,6 +39,41 @@ describe('auth 令牌', () => {
     expect(await authenticate(req(SECRET), undefined)).toEqual({ admin: false, bridgePlugin: undefined })
     const viaQuery = new Request(`${BASE}/?token=${await issueBridge(SECRET, 'foo')}`)
     expect((await authenticate(viaQuery, SECRET)).bridgePlugin).toBe('foo')
+  })
+
+  it('恒定时间比较：结果与 === 一致，长度不同、空串也对', async () => {
+    expect(await constantTimeEqual(SECRET, SECRET)).toBe(true)
+    expect(await constantTimeEqual(SECRET, `${SECRET}x`)).toBe(false)
+    expect(await constantTimeEqual(SECRET, 'admin-tokeN')).toBe(false)
+    expect(await constantTimeEqual('', '')).toBe(true)
+    expect(await constantTimeEqual('', SECRET)).toBe(false)
+  })
+
+  it('queryToken: false 时不认地址里的令牌；默认照旧认（插件页首个请求要用）', async () => {
+    const viaQuery = new Request(`${BASE}/?token=${SECRET}`)
+    expect(await authenticate(viaQuery, SECRET)).toEqual({ admin: true, bridgePlugin: undefined })
+    expect(await authenticate(viaQuery, SECRET, { queryToken: false })).toEqual({ admin: false, bridgePlugin: undefined })
+    const viaHeader = new Request(`${BASE}/?token=nope`, { headers: { authorization: `Bearer ${SECRET}` } })
+    expect((await authenticate(viaHeader, SECRET, { queryToken: false })).admin).toBe(true)
+  })
+
+  it('/admin/* 不认 ?token=：管理密钥与会话令牌都得放请求头', async () => {
+    const runtime = createRuntime({ plugins: [] })
+    const env = createEnv()
+    const get = (path: string, init: RequestInit = {}) => runtime.fetch!(new Request(`${BASE}${path}`, init), env, createExecutionContext())
+    expect((await get(`/admin/status?token=${SECRET}`)).status).toBe(401)
+    expect((await get(`/admin/status?token=${await issueSession(SECRET)}`)).status).toBe(401)
+    expect((await get('/admin/status', { headers: { authorization: `Bearer ${SECRET}` } })).status).toBe(200)
+  })
+
+  it('/admin/login 的 token 不是字符串时照常 401，不再抛成 500', async () => {
+    const runtime = createRuntime({ plugins: [] })
+    const env = createEnv()
+    const login = (body: unknown) =>
+      runtime.fetch!(new Request(`${BASE}/admin/login`, { method: 'POST', body: JSON.stringify(body) }), env, createExecutionContext())
+    expect((await login({ token: 12345 })).status).toBe(401)
+    expect((await login({})).status).toBe(401)
+    expect((await login({ token: `  ${SECRET}  ` })).status).toBe(200)
   })
 })
 
@@ -103,6 +138,52 @@ describe('登录与面板资源', () => {
   })
 })
 
+describe('PATCH /admin/snapshot 只改设置字段', () => {
+  const setup = async () => {
+    const runtime = createRuntime({ plugins: [] })
+    const env = createEnv()
+    await env.KV.put(
+      'rt:snapshot',
+      JSON.stringify({ revision: 3, plugins: { foo: { enabled: false, config: { a: 1 } } }, admins: ['u1'], permissionDeniedReply: '没权限' }),
+    )
+    const patch = (body: unknown) =>
+      runtime.fetch!(
+        new Request(`${BASE}/admin/snapshot`, { method: 'PATCH', headers: { authorization: `Bearer ${SECRET}` }, body: JSON.stringify(body) }),
+        env,
+        createExecutionContext(),
+      )
+    const stored = async () => JSON.parse((await env.KV.get('rt:snapshot')) ?? '{}') as Record<string, unknown>
+    return { patch, stored }
+  }
+
+  it('在最新快照上合并：别处保存的插件配置不会被盖掉，null 清掉字段', async () => {
+    const { patch, stored } = await setup()
+    const res = await patch({ safeMode: true, permissionDeniedReply: null })
+    expect(res.status).toBe(200)
+    const snap = await stored()
+    expect(snap).toMatchObject({ revision: 4, safeMode: true, admins: ['u1'], plugins: { foo: { enabled: false, config: { a: 1 } } } })
+    expect(snap).not.toHaveProperty('permissionDeniedReply')
+  })
+
+  it('不认识的字段、形状不对的值一律 400，什么都不写', async () => {
+    const { patch, stored } = await setup()
+    expect((await patch({ plugins: {} })).status).toBe(400)
+    expect((await patch({ bot: { name: 'x' } })).status).toBe(400)
+    expect((await patch({ admins: 'u2' })).status).toBe(400)
+    expect((await patch({ safeMode: 'yes', admins: ['u2'] })).status).toBe(400)
+    expect(await stored()).toMatchObject({ revision: 3, admins: ['u1'] })
+  })
+
+  it('带了 expectedRevision 且对不上：409，不写', async () => {
+    const { patch, stored } = await setup()
+    const res = await patch({ expectedRevision: 2, logContent: true })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ ok: false, revision: 3 })
+    expect(await stored()).not.toHaveProperty('logContent')
+    expect((await patch({ expectedRevision: 3, logContent: true })).status).toBe(200)
+  })
+})
+
 describe('插件路由鉴权与通配', () => {
   const plugin = definePlugin({
     name: 'panelish',
@@ -126,6 +207,14 @@ describe('插件路由鉴权与通配', () => {
     expect((await get('/p/panelish/ui/', await issueBridge(SECRET, 'other'))).status).toBe(401)
     expect(await (await get('/p/panelish/public')).text()).toBe('public:false')
     expect(await (await get('/p/panelish/public', SECRET)).text()).toBe('public:true')
+  })
+
+  it('插件页首个请求照旧能用 ?token=：iframe 与新窗口带不了 Authorization 头', async () => {
+    const runtime = createRuntime({ plugins: [plugin] })
+    const env = createEnv()
+    const bridge = await issueBridge(SECRET, 'panelish')
+    const res = await runtime.fetch!(new Request(`${BASE}/p/panelish/ui/?token=${bridge}`), env, createExecutionContext())
+    expect(await res.text()).toBe('ui::true')
   })
 
   it('/admin/plugins/:name/bridge 签发限定插件的令牌；status 暴露 ui 声明', async () => {

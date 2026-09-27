@@ -1,6 +1,6 @@
 import { QQApiError, QQBotClient, createBindTask, createTokenProvider, pollBindResult, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
-import { authenticate, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
+import { authenticate, constantTimeEqual, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
   checkPluginUpdate,
   dependentsOf,
@@ -139,7 +139,8 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
     return `QQ 开放平台鉴权失败：${(err as Error).message}`
   }
   const [previous, saved, before] = await Promise.all([
-    readStoredBotConfig(scope.env),
+    // 绕过 isolate 缓存：别的 isolate 刚换过号的话，缓存里还是更早那个，存档就漏了当前这个
+    readStoredBotConfig(scope.env, true),
     readSavedBots(scope.env),
     readSnapshot(scope.env, true),
   ])
@@ -213,12 +214,42 @@ function normalizeGroups(value: unknown): GroupScope | null | undefined {
   return { mode: v.mode, ids }
 }
 
+/** PATCH /admin/snapshot 能改的顶层设置字段与各自的形状；plugins、bot、revision 不在其中 */
+const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
+  safeMode: (v) => typeof v === 'boolean',
+  logContent: (v) => typeof v === 'boolean',
+  commandPrefixes: (v) => Array.isArray(v) && v.every((p) => typeof p === 'string'),
+  admins: (v) => Array.isArray(v) && v.every((a) => typeof a === 'string'),
+  permissionDeniedReply: (v) => typeof v === 'string',
+}
+
+/**
+ * 把设置页的改动合并到最新快照上：只动请求里出现的字段，null 表示清掉（回到默认）。
+ * 返回错误文案表示有字段不认识或形状不对，这时什么都不写。
+ *
+ * 以前设置页先 GET 整份快照、改几个字段再 PUT 回去，两次往返之间别处（插件详情页的 PATCH、另一个标签页）
+ * 保存的东西会被这份旧快照整个盖掉。这里在 Worker 里读最新的再合并，竞争窗口缩到一次请求之内。
+ */
+function applySettingsPatch(current: Snapshot, patch: Record<string, unknown>): Snapshot | string {
+  const next: Record<string, unknown> = { ...current }
+  for (const [key, value] of Object.entries(patch)) {
+    const valid = SETTINGS_FIELDS[key]
+    if (!valid) return `不能用这个接口修改 ${key}`
+    if (value === null) delete next[key]
+    else if (valid(value)) next[key] = value
+    else return `${key} 格式错误`
+  }
+  return next as unknown as Snapshot
+}
+
 /**
  * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
  * POST /admin/login                 用管理密钥换 7 天会话令牌
  * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、24 小时事件统计（来自 Workers Logs）
  * GET  /admin/snapshot              读取快照
  * PUT  /admin/snapshot              整体覆盖快照
+ * PATCH /admin/snapshot             只改顶层设置字段（safeMode / logContent / commandPrefixes / admins / permissionDeniedReply，
+ *                                   null 表示清掉），在最新快照上合并；可带 expectedRevision，对不上返回 409
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority / groups（groups: null 恢复所有群）
  * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
  * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）；换了 AppID 时旧的存进已保存列表
@@ -271,12 +302,15 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   if (!token) return error('管理 API 未启用：请设置 ADMIN_TOKEN', 403)
 
   if (method === 'POST' && sub === '/login') {
-    const body = await readJson<{ token?: string }>(request)
-    if (body?.token?.trim() !== token) return error('管理密钥不正确', 401)
+    const body = await readJson<{ token?: unknown }>(request)
+    const given = typeof body?.token === 'string' ? body.token.trim() : ''
+    // 恒定时间比较：`!==` 的耗时随猜对的前缀长度变化
+    if (!given || !(await constantTimeEqual(given, token))) return error('管理密钥不正确', 401)
     return json({ ok: true, session: await issueSession(token), expiresIn: SESSION_TTL_SEC })
   }
 
-  if (!(await authenticate(request, token)).admin) return error('未授权', 401)
+  // 管理 API 只认请求头：面板、构建机、curl 都这么调，`?token=` 只留给插件页（见 routes.ts）
+  if (!(await authenticate(request, token, { queryToken: false })).admin) return error('未授权', 401)
 
   if (method === 'GET' && sub === '/status') {
     const stats = await dispatchStats(scope.env, deps.options.fetchImpl, (p) => scope.execCtx.waitUntil(p))
@@ -415,6 +449,20 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       if (!body || typeof body.plugins !== 'object') return error('快照格式错误', 400)
       const current = await readSnapshot(scope.env, true)
       const next = await writeSnapshot(scope.env, { ...body, revision: current.revision })
+      return json({ ok: true, snapshot: next })
+    }
+    if (method === 'PATCH') {
+      const body = await readJson<Record<string, unknown>>(request)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return error('请求体格式错误', 400)
+      const { expectedRevision, ...patch } = body
+      const current = await readSnapshot(scope.env, true)
+      // 可选的乐观锁：带了 expectedRevision 且快照已被别处改过就不写，让调用方重新读了再改
+      if (typeof expectedRevision === 'number' && expectedRevision !== current.revision) {
+        return json({ ok: false, error: '快照已被修改，请刷新后重试', revision: current.revision }, 409)
+      }
+      const merged = applySettingsPatch(current, patch)
+      if (typeof merged === 'string') return error(merged, 400)
+      const next = await writeSnapshot(scope.env, merged)
       return json({ ok: true, snapshot: next })
     }
   }

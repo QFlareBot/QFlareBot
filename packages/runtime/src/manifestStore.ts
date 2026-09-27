@@ -349,8 +349,13 @@ export async function settlePendingInstalls(db: D1Database): Promise<void> {
 }
 
 /**
- * 按 build_uuid 同步状态。错误信息只补不盖：构建机回报的具体原因（哪个插件、为什么）先到，
+ * 按 build_uuid 同步状态。一条语句就更新了这次构建的全部账本记录（安装、升级、卸载与构建本身共用一个 uuid），
+ * 调用方按 uuid 去重调一次即可。
+ *
+ * 错误信息只补不盖：构建机回报的具体原因（哪个插件、为什么）先到，
  * 之后 Builds API 同步过来的只是一句「构建未成功：fail」，不能把前者冲掉。
+ * cfStatus / commitHash 没给（或给了 null）就保留原值：24 小时收敛只知道「超时了」，
+ * 以前会顺手把已经同步到的 commit 与 Cloudflare 状态写成 NULL。
  */
 export async function updateInstallByBuildUuid(
   db: D1Database,
@@ -359,7 +364,9 @@ export async function updateInstallByBuildUuid(
 ): Promise<void> {
   await ensureSchema(db)
   await db
-    .prepare(`UPDATE ${TABLE_INSTALLS} SET status = ?, cf_status = ?, commit_hash = ?, error = COALESCE(error, ?) WHERE build_uuid = ?`)
+    .prepare(
+      `UPDATE ${TABLE_INSTALLS} SET status = ?, cf_status = COALESCE(?, cf_status), commit_hash = COALESCE(?, commit_hash), error = COALESCE(error, ?) WHERE build_uuid = ?`,
+    )
     .bind(patch.status, patch.cfStatus ?? null, patch.commitHash ?? null, patch.error ?? null, buildUuid)
     .run()
 }
@@ -380,6 +387,19 @@ export async function listInstalls(db: D1Database, limit = 50): Promise<InstallR
     .bind(Math.min(200, Math.max(1, limit)))
     .all<Record<string, unknown>>()
   return results.map(rowToInstall)
+}
+
+/**
+ * 账本里出现过的全部插件名，一条 DISTINCT 查询，不受 listInstalls 条数上限的影响。
+ * 清数据时拿它认领 D1 表（见 purge.ts 的 knownPluginNames）。注意账本本身只留最近 INSTALL_RETENTION 条，
+ * 很久以前卸载的插件名字早就不在这里了——所以它只是「已知插件名」的来源之一，不是全部。
+ */
+export async function listInstallNames(db: D1Database): Promise<string[]> {
+  await ensureSchema(db)
+  const { results } = await db
+    .prepare(`SELECT DISTINCT name FROM ${TABLE_INSTALLS} WHERE name IS NOT NULL`)
+    .all<{ name: unknown }>()
+  return results.map((r) => r.name).filter((n): n is string => typeof n === 'string' && n !== '')
 }
 
 // ---------- 卸载的后半段 ----------
