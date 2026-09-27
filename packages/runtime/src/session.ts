@@ -179,6 +179,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
 
   // 同一条消息/事件的被动回复由这里统一编号
   let seq = 0
+  // 其中 typing 用掉的号：输入中状态和回复共用 msg_seq（撞号会被平台拒收），但不算被动回复条数
+  let typingSeq = 0
   let lastSent: string | undefined
 
   const passive = (): SendOptions | null => {
@@ -230,7 +232,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     async reply(message) {
       const base = passive()
       if (!base) return fail('当前事件不支持被动回复')
-      if (seq >= options.maxPassiveReplies) return fail(`被动回复已达上限 ${options.maxPassiveReplies} 条`)
+      if (seq - typingSeq >= options.maxPassiveReplies) return fail(`被动回复已达上限 ${options.maxPassiveReplies} 条`)
       seq += 1
       return track(await sender.sendMessage(here, resolveQuote(message), { ...base, msgSeq: seq }))
     },
@@ -243,7 +245,12 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
 
     async typing(seconds = 10) {
       if (scene !== 'c2c' || !sender.typing) return fail('输入中状态仅支持单聊')
-      return sender.typing(targetId, seconds, passive() ?? {})
+      const base = passive()
+      if (!base) return sender.typing(targetId, seconds, {})
+      // 不带 msgSeq 时客户端默认填 1，正好和第一条回复撞号
+      seq += 1
+      typingSeq += 1
+      return sender.typing(targetId, seconds, { ...base, msgSeq: seq })
     },
 
     stream(): StreamWriter {

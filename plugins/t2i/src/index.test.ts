@@ -78,6 +78,16 @@ describe('T2I Class', () => {
   })
 })
 
+describe('配置', () => {
+  it('超时上限 30000ms：事件处理总共只有 30 秒，再长也会被平台掐断', () => {
+    const timeout = (plugin.configSchema as { properties: Record<string, { default: number; minimum: number; maximum: number }> })
+      .properties.t2i_timeout!
+    expect(timeout.maximum).toBe(30000)
+    expect(timeout.default).toBeLessThanOrEqual(timeout.maximum)
+    expect(CONFIG.t2i_timeout).toBeLessThanOrEqual(timeout.maximum)
+  })
+})
+
 describe('t2i Service', () => {
   it('向其他插件导出 t2i 服务，实例绑定面板配置', () => {
     expect(Object.keys(plugin.services ?? {})).toContain('t2i')

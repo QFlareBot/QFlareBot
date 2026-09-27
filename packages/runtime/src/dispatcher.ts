@@ -414,18 +414,30 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   const run = async (i: number): Promise<void> => {
     const mw = middlewares[i]
     if (!mw) return runMatchers()
-    let nextCalled = false
-    const next = () => {
-      nextCalled = true
-      return run(i + 1)
-    }
+    // 后半段只跑一次：next() 调两次会把后面的中间件和处理器整个再跑一遍（重复回复），重复调用拿到同一个 promise
+    // 类型断言是为了不让 TS 把它收窄成 null：赋值发生在 next 闭包里，控制流分析看不见
+    let downstream = null as Promise<void> | null
+    const next = () => (downstream ??= run(i + 1))
+    let returned = false
     try {
       const ctx = await deps.contexts.prepare(mw.registered)
       await mw.def.middleware!({ session, ctx }, next)
+      returned = true
+      // 调了 next() 却没 await：后半段还在跑，等它跑完。否则分发提前结束，自动 ack 和事件摘要都抢在处理器前面
+      if (downstream) await downstream
     } catch (err) {
+      // 后半段自己抛的错不算在这个中间件头上，照原样往上交
+      if (returned) throw err
       fail(mw.def.name, 'middleware', err)
-      // 中间件自身出错不应吞掉事件
-      if (!nextCalled) await run(i + 1)
+      // 中间件自身出错不应吞掉事件：没调过 next 就接着往下跑；调过的话等后半段跑完。
+      // 中间件 await next() 拿到后半段的错误再抛出来的，上面已经记过，不再记一遍
+      if (!downstream) {
+        await run(i + 1)
+      } else {
+        await downstream.catch((e: unknown) => {
+          if (e !== err) throw e
+        })
+      }
     }
   }
 
@@ -439,7 +451,15 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   // 按钮/菜单必须回应平台，否则客户端一直转圈；插件没处理就替它回应成功
   const interaction = session.interaction
   if (interaction && (interaction.type === 'button' || interaction.type === 'menu') && !interaction.acked) {
-    await interaction.ack(0).catch((err) => fail('runtime', 'ack', err))
+    try {
+      // ack 失败（平台拒收、网络错误）是返回 false 而不是抛错，只靠 catch 永远看不到
+      if (!(await interaction.ack(0))) {
+        report.errors.push({ plugin: 'runtime', stage: 'ack', message: '按钮回应失败：平台未返回成功' })
+        deps.logger.error('按钮回应失败', { interactionId: interaction.id, type: interaction.type })
+      }
+    } catch (err) {
+      fail('runtime', 'ack', err)
+    }
   }
   return report
 }

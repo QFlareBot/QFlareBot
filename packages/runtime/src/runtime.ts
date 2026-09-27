@@ -33,7 +33,7 @@ function resolveOptions(options: RuntimeOptions): ResolvedOptions {
 /**
  * 构造 Worker 导出对象。路由：
  * - POST {webhookPath}   QQ 回调
- * - GET  /healthz        健康检查（部署流水线切流量前调用）
+ * - GET  /healthz        健康检查（部署流水线切流量前调用；?plugins=1 顺带求值全部插件，有失败回 503）
  * - {adminPath}/*        管理 API
  * - /p/<plugin>/*        插件路由
  * - /, /assets/*         管理面板（传入 ui 时）
@@ -49,35 +49,46 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
       const { pathname } = url
 
       if (pathname === '/healthz') {
-        return json({
+        const health = {
           ok: true,
           runtime: RUNTIME_VERSION,
           projection: resolved.projection ?? null,
           plugins: registry.all().length,
-        })
+        }
+        if (url.searchParams.get('plugins') !== '1') return json(health)
+        // 部署流水线切流量前带 plugins=1 来问：把每个插件都求值一遍，import 就抛错的插件在这里现形，
+        // 而不是等切完流量、第一个事件进来才发现。求值失败不抛（registry 记进 plugin.error）
+        const loaded = await Promise.all(registry.all().map(async (plugin) => ({ plugin, def: await plugin.load() })))
+        const pluginErrors = loaded
+          .filter(({ def }) => !def)
+          .map(({ plugin }) => ({ name: plugin.manifest.name, message: plugin.error?.message ?? '插件加载失败' }))
+        const ok = pluginErrors.length === 0
+        return json({ ...health, ok, pluginErrors }, ok ? 200 : 503)
       }
 
-      try {
-        const scope = await RequestScope.create(env, execCtx, registry, resolved, logger)
-
-        if (pathname === resolved.webhookPath) {
-          return await handleWebhook(request, scope, resolved, logger)
-        }
+      // 路由先判定、后建 scope：面板静态资源和 404 用不到快照与凭证，不必为它们读 KV
+      const isWebhook =
+        pathname === resolved.webhookPath ||
         // 兼容把回调地址填成站点根的情况：QQ 的推送是带签名头的 POST，面板本身从不 POST 根路径
-        if (pathname === '/' && request.method === 'POST' && request.headers.has('x-signature-ed25519')) {
-          return await handleWebhook(request, scope, resolved, logger)
+        (pathname === '/' && request.method === 'POST' && request.headers.has('x-signature-ed25519'))
+      const isAdmin = pathname === resolved.adminPath || pathname.startsWith(resolved.adminPath + '/')
+      const isPluginRoute = pathname.startsWith(PLUGIN_ROUTE_PREFIX)
+
+      try {
+        if (!isWebhook && !isAdmin && !isPluginRoute) {
+          if (resolved.ui) {
+            const asset = serveAsset(resolved.ui, request, pathname)
+            if (asset) return asset
+          }
+          return error('Not Found', 404)
         }
-        if (pathname === resolved.adminPath || pathname.startsWith(resolved.adminPath + '/')) {
+
+        const scope = await RequestScope.create(env, execCtx, registry, resolved, logger)
+        if (isWebhook) return await handleWebhook(request, scope, resolved, logger)
+        if (isAdmin) {
           return await handleAdmin(request, scope, { registry, options: resolved, logger, runtimeVersion: RUNTIME_VERSION })
         }
-        if (pathname.startsWith(PLUGIN_ROUTE_PREFIX)) {
-          return await handlePluginRoute(request, scope, registry, logger)
-        }
-        if (resolved.ui) {
-          const asset = serveAsset(resolved.ui, request, pathname)
-          if (asset) return asset
-        }
-        return error('Not Found', 404)
+        return await handlePluginRoute(request, scope, registry, logger)
       } catch (err) {
         logger.error('请求处理异常', { path: pathname, ...errorInfo(err) })
         return error('Internal Error', 500)

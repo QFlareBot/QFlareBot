@@ -61,11 +61,18 @@ export function dedupeSlot(id: string): number {
 /**
  * KV 降级路径：get 后 put 不是原子的，两个并发请求可能同时判定为首次；
  * KV 本身还是最终一致，跨节点重投也可能都漏过。只在没有 D1 时用。
+ *
+ * KV 读写抛错（当天写额度用完、瞬时故障）时按首次处理：抛出去 webhook 就回 500，
+ * 平台重投几次后放弃，事件等于丢了；放行最多是重复处理一次。
  */
 async function claimViaKv(env: RuntimeEnv, id: string, ttlSec: number): Promise<boolean> {
   const key = Keys.event(id)
-  if (await env.KV.get(key)) return false
-  await env.KV.put(key, '1', { expirationTtl: Math.max(60, ttlSec) })
+  try {
+    if (await env.KV.get(key)) return false
+    await env.KV.put(key, '1', { expirationTtl: Math.max(60, ttlSec) })
+  } catch {
+    // 见上：宁可重复处理，不能丢
+  }
   return true
 }
 

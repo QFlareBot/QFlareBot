@@ -108,4 +108,109 @@ describe('dispatch 的容错', () => {
     expect(report.errors.map((e) => e.stage)).toEqual(['dispatch'])
     expect(session.acks).toEqual([0])
   })
+
+  it('自动 ack 被平台拒收（返回 false 不抛错）时记进 errors 并写日志', async () => {
+    const { deps, logged } = makeDeps([])
+    const session = createMockSession({ interaction: { type: 'button', buttonId: 'b1' } })
+    session.interaction!.ack = async () => false
+
+    const report = await dispatch(session, deps)
+
+    expect(report.errors).toEqual([{ plugin: 'runtime', stage: 'ack', message: expect.stringContaining('按钮回应失败') }])
+    expect(logged.map((l) => l.message)).toEqual(['按钮回应失败'])
+  })
+})
+
+describe('中间件的 next()', () => {
+  it('调两次也只把后面的链跑一遍，两次拿到同一个 promise', async () => {
+    const seen: boolean[] = []
+    const twice = definePlugin({
+      name: 'twice',
+      middleware: async (_, next) => {
+        const a = next()
+        const b = next()
+        seen.push(a === b)
+        await a
+        await b
+      },
+    })
+    let runs = 0
+    const echo = definePlugin({ name: 'echo', commands: { hi: () => `第 ${++runs} 次` } })
+    const { deps } = makeDeps([twice, echo])
+    const session = createMockSession({ content: '/hi' })
+
+    const report = await dispatch(session, deps)
+
+    expect(seen).toEqual([true])
+    expect(session.replies).toEqual(['第 1 次'])
+    expect(report.matched).toHaveLength(1)
+  })
+
+  it('调了 next() 没 await：分发等后半段跑完才结束，自动 ack 排在处理器之后', async () => {
+    const order: string[] = []
+    const lazy = definePlugin({
+      name: 'lazy',
+      middleware: async (_, next) => {
+        void next()
+      },
+    })
+    const slow = definePlugin({
+      name: 'slow',
+      buttons: {
+        b1: async () => {
+          await new Promise((r) => setTimeout(r, 5))
+          order.push('handler')
+          return '处理完了'
+        },
+      },
+    })
+    const { deps } = makeDeps([lazy, slow])
+    const session = createMockSession({ interaction: { type: 'button', buttonId: 'b1' } })
+    const ack = session.interaction!.ack.bind(session.interaction)
+    session.interaction!.ack = async (code) => {
+      order.push('ack')
+      return ack(code)
+    }
+
+    const report = await dispatch(session, deps)
+
+    expect(order).toEqual(['handler', 'ack'])
+    expect(session.replies).toEqual(['处理完了'])
+    expect(report.errors).toEqual([])
+  })
+
+  it('中间件调了 next() 后自己抛错：记在中间件头上，后半段不重跑也不丢', async () => {
+    let runs = 0
+    const flaky = definePlugin({
+      name: 'flaky',
+      middleware: async (_, next) => {
+        void next()
+        throw new Error('中间件坏了')
+      },
+    })
+    const echo = definePlugin({ name: 'echo', commands: { hi: () => `第 ${++runs} 次` } })
+    const { deps } = makeDeps([flaky, echo])
+    const session = createMockSession({ content: '/hi' })
+
+    const report = await dispatch(session, deps)
+
+    expect(report.errors).toEqual([{ plugin: 'flaky', stage: 'middleware', message: '中间件坏了' }])
+    expect(session.replies).toEqual(['第 1 次'])
+  })
+
+  it('await next() 拿到后半段的错误再抛出来：只记一次', async () => {
+    const rethrow = definePlugin({
+      name: 'rethrow',
+      middleware: async (_, next) => {
+        await next()
+      },
+    })
+    const { deps } = makeDeps([rethrow], { revision: 1, plugins: {}, admins: {} as unknown as string[] })
+    const session = createMockSession({ content: '/hi' })
+
+    const report = await dispatch(session, deps)
+
+    // 畸形快照让候选收集抛错；错误经 await next() 冒到中间件，按以前的规矩记在中间件头上
+    expect(report.errors.map((e) => e.plugin)).toEqual(['rethrow'])
+  })
 })

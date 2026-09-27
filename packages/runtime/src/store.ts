@@ -1,4 +1,4 @@
-import type { TokenCache } from '@qqbot/api'
+import type { CachedToken, TokenCache } from '@qqbot/api'
 import type { BotConfig, RuntimeEnv, SavedBot, Snapshot } from './types.js'
 
 /** 运行时自用的 KV 键，与插件前缀 `p:` 分开 */
@@ -47,9 +47,11 @@ export async function writeSnapshot(env: RuntimeEnv, snapshot: Snapshot): Promis
   return next
 }
 
-/** 测试用：清掉 isolate 内缓存 */
+/** 测试用：清掉 isolate 内缓存（快照、面板保存的凭证、token） */
 export function resetSnapshotCache(): void {
   snapshotCache = null
+  botConfigCache = null
+  tokenMemory.clear()
 }
 
 /** 两个 Worker Secret 都配了才算数，这时它们优先于面板保存的凭证 */
@@ -61,14 +63,29 @@ export async function readBotConfig(env: RuntimeEnv): Promise<BotConfig | null> 
   return botFromSecrets(env) ?? readStoredBotConfig(env)
 }
 
+/**
+ * 面板保存的凭证同样每个请求都要读，缓存道理与快照相同（见 SNAPSHOT_CACHE_MS）。
+ * 没配凭证（null）也缓存，否则没配好的机器人每个请求照样读一次 KV。
+ * `rt:bot` 只有 writeBotConfig 在写，它顺手刷新缓存，面板保存后本 isolate 立刻用上新凭证
+ */
+let botConfigCache: { value: BotConfig | null; at: number } | null = null
+
+function storedBot(value: Partial<BotConfig> | null | undefined): BotConfig | null {
+  return value?.appId && value.secret ? { appId: value.appId, secret: value.secret } : null
+}
+
 /** 只看 KV 里面板保存的那份，不管 Worker Secret */
-export async function readStoredBotConfig(env: RuntimeEnv): Promise<BotConfig | null> {
-  const stored = await env.KV.get<BotConfig>(Keys.botConfig, 'json')
-  return stored?.appId && stored.secret ? { appId: stored.appId, secret: stored.secret } : null
+export async function readStoredBotConfig(env: RuntimeEnv, force = false): Promise<BotConfig | null> {
+  if (!force && botConfigCache && Date.now() - botConfigCache.at < SNAPSHOT_CACHE_MS) return botConfigCache.value
+  const value = storedBot(await env.KV.get<BotConfig>(Keys.botConfig, 'json'))
+  botConfigCache = { value, at: Date.now() }
+  return value
 }
 
 export async function writeBotConfig(env: RuntimeEnv, config: BotConfig): Promise<void> {
   await env.KV.put(Keys.botConfig, JSON.stringify(config))
+  botConfigCache = { value: storedBot(config), at: Date.now() }
+  tokenMemory.clear()
   await env.KV.delete(Keys.token)
 }
 
@@ -91,13 +108,44 @@ export function profileOf(snapshot: Snapshot, appId: string | undefined): Snapsh
   return bot && appId && (bot.appId ?? appId) === appId ? bot : undefined
 }
 
-/** token 存 KV 让所有 isolate 共享，避免冷启动风暴时反复取 token */
-export function kvTokenCache(env: RuntimeEnv): TokenCache {
+/**
+ * token 的 isolate 内副本，按 AppID 分开。每个请求都会新建 QQBotClient，没有这一层的话每次调 API 都读一次 KV。
+ * 换号时 writeBotConfig 清掉本 isolate 的；别的 isolate 里旧号的副本按 AppID 对不上，不会拿给新号用
+ */
+const tokenMemory = new Map<string, CachedToken>()
+/**
+ * 离过期不到这么久就不信内存里的、回头读 KV。与 token 提供者默认的提前量一致：
+ * 内存把快过期的交出去，提供者会直接找 QQ 换新的，看不到别的 isolate 已经换好放进 KV 的那个
+ */
+const TOKEN_MEMORY_SKEW_SEC = 60
+
+/** KV 里的 token 附带换它的 AppID；老运行时写的没有这个字段 */
+type StoredToken = CachedToken & { appId?: string }
+
+/**
+ * token 存 KV 让所有 isolate 共享，避免冷启动风暴时反复取 token；前面再挡一层 isolate 内存。
+ * `appId` 不传时所有号共用一份内存副本（老调用方式）
+ */
+export function kvTokenCache(env: RuntimeEnv, appId = ''): TokenCache {
   return {
-    get: () => env.KV.get(Keys.token, 'json'),
+    get: async () => {
+      const memo = tokenMemory.get(appId)
+      if (memo && memo.expiresAt - TOKEN_MEMORY_SKEW_SEC > Date.now() / 1000) return memo
+      const stored = await env.KV.get<StoredToken>(Keys.token, 'json')
+      // 换号后别的节点可能还读到 KV 里旧号的 token（边缘缓存），标了 AppID 就认得出来；没标的照旧用
+      if (!stored || (appId && stored.appId && stored.appId !== appId)) return null
+      const value = { token: stored.token, expiresAt: stored.expiresAt }
+      tokenMemory.set(appId, value)
+      return value
+    },
     set: async (value) => {
+      tokenMemory.set(appId, value)
       const ttl = Math.max(60, value.expiresAt - Math.floor(Date.now() / 1000))
-      await env.KV.put(Keys.token, JSON.stringify(value), { expirationTtl: ttl })
+      try {
+        await env.KV.put(Keys.token, JSON.stringify(appId ? { ...value, appId } : value), { expirationTtl: ttl })
+      } catch {
+        // KV 写不进去（当天写额度用完）不影响本 isolate 用内存里这份，别的 isolate 各自再换一次
+      }
     },
   }
 }

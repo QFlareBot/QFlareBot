@@ -56,6 +56,24 @@ describe('claimEvent（无 D1 时的 KV 降级）', () => {
     await claimEvent(env, 'evt-1', 5)
     expect(await env.KV.get('rt:evt:evt-1')).toBe('1')
   })
+
+  it('KV 读或写抛错时按首次处理：webhook 不能因此 500 把事件丢掉', async () => {
+    const kv = createKV()
+    const readFails = { KV: { ...kv, get: async () => Promise.reject(new Error('KV 挂了')) } } as unknown as RuntimeEnv
+    expect(await claimEvent(readFails, 'evt-1', 600)).toBe(true)
+
+    // 当天写额度用完：put 抛错
+    const writeFails = { KV: { ...kv, put: async () => Promise.reject(new Error('KV put() limit exceeded for the day')) } } as unknown as RuntimeEnv
+    expect(await claimEvent(writeFails, 'evt-2', 600)).toBe(true)
+  })
+
+  it('D1 和 KV 都坏了也照样放行', async () => {
+    const env = {
+      KV: { get: async () => Promise.reject(new Error('KV 挂了')), put: async () => Promise.reject(new Error('KV 挂了')) },
+      DB: { exec: async () => ({ count: 0, duration: 0 }), prepare: () => ({ bind: () => ({ run: async () => { throw new Error('D1 挂了') } }) }) },
+    } as unknown as RuntimeEnv
+    expect(await claimEvent(env, 'evt-1', 600)).toBe(true)
+  })
 })
 
 describe('去重格子', () => {

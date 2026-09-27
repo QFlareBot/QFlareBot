@@ -59,7 +59,12 @@ export function createTokenProvider(options: TokenProviderOptions): TokenProvide
       throw new QQApiError(res.status, data, '获取 AccessToken 失败，请检查 AppID 与 AppSecret')
     }
     const expiresIn = Number(data.expires_in) || 7200
-    await cache.set({ token: data.access_token, expiresAt: Math.floor(Date.now() / 1000) + expiresIn })
+    try {
+      await cache.set({ token: data.access_token, expiresAt: Math.floor(Date.now() / 1000) + expiresIn })
+    } catch {
+      // 缓存写失败（比如 KV 当天的写额度用完）不能连累这次取 token：token 已经到手，
+      // 抛出去的话所有消息都发不出去；没缓存上顶多下次再换一个
+    }
     return data.access_token
   }
 
@@ -75,7 +80,11 @@ export function createTokenProvider(options: TokenProviderOptions): TokenProvide
       return inflight
     },
     async invalidate() {
-      await cache.set({ token: '', expiresAt: 0 })
+      try {
+        await cache.set({ token: '', expiresAt: 0 })
+      } catch {
+        // 作废没写进去只是下次还拿旧 token 撞一次 401，不该让调用方（发消息）跟着抛错
+      }
     },
   }
 }

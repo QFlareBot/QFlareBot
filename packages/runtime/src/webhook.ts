@@ -1,5 +1,5 @@
 import { OpCode, signCallback, verifyEvent, type CallbackVerifyData, type WebhookPayload } from '@qqbot/api'
-import type { Logger } from '@qqbot/sdk'
+import { toEventName, type Logger } from '@qqbot/sdk'
 import { claimEvent } from './dedupe.js'
 import type { DispatchReport } from './dispatcher.js'
 import { CONTENT_LIMIT, recordEvent } from './events.js'
@@ -10,6 +10,19 @@ import type { RequestScope } from './scope.js'
 import type { ResolvedOptions } from './types.js'
 
 const ACK = { op: OpCode.HttpCallbackAck }
+
+/**
+ * 签名不符时，回调验证只替这种形状的 event_ts / plain_token 签名（平台发来的是秒级时间戳和一串字母数字）。
+ *
+ * 回调验证签的是 `event_ts + plain_token`，事件验签用的是同一把钥匙、验的是 `时间戳 + body`。
+ * 不看格式照签，攻击者把伪造的事件 JSON 塞进 plain_token，拿回来的签名就能配上一个请求体通过验签。
+ * 限制之后被签的整段文字里没有 `{` 和 `"`，它的任何后缀都解析不出 JSON 对象，拼不成能分发的事件
+ */
+const CALLBACK_TS = /^\d{1,20}$/
+const CALLBACK_TOKEN = /^[A-Za-z0-9_\-+/=.]{1,256}$/
+
+/** 事件处理整个在 waitUntil 里，平台在回应之后最多再给 30 秒；到这个点还没跑完就先留一行，免得被掐断后毫无痕迹 */
+const DISPATCH_WARN_MS = 25_000
 
 function parsePayload(rawBody: string): WebhookPayload | null {
   try {
@@ -85,11 +98,18 @@ export async function handleWebhook(
 
   const signatureValid = await verifySignature(request, rawBody, scope.bot.secret)
 
-  // 回调验证只做软校验：签名不符仅告警，保证平台侧的地址配置总能完成
+  // 回调验证只做软校验：签名不符仅告警，保证平台侧的地址配置总能完成。
+  // 但签名不符时只签格式正常的 token，否则这里就成了替任意内容签名的机器（见 CALLBACK_TOKEN）
   if (payload.op === OpCode.CallbackVerify) {
     const d = (payload.d ?? {}) as Partial<CallbackVerifyData>
     if (!d.plain_token || !d.event_ts) return error('缺少 plain_token / event_ts', 400)
-    if (!signatureValid) logger.warn('回调验证请求的签名不符，仍返回签名')
+    if (!signatureValid) {
+      if (!CALLBACK_TS.test(String(d.event_ts)) || !CALLBACK_TOKEN.test(String(d.plain_token))) {
+        logger.warn('回调验证请求的签名不符，plain_token / event_ts 格式也不对，已拒绝')
+        return error('签名校验失败', 401)
+      }
+      logger.warn('回调验证请求的签名不符，仍返回签名')
+    }
     const signature = await signCallback(scope.bot.secret, d.event_ts, d.plain_token)
     logger.info('回调地址验证完成')
     return json({ plain_token: d.plain_token, signature })
@@ -111,6 +131,12 @@ export async function handleWebhook(
       return json(ACK)
     }
 
+    // 被平台掐断时下面 .then 里的事件摘要一行都不会写，只能靠这条告警知道是哪个事件卡住了。
+    // 定时器不交给 waitUntil，分发结束就清掉，不会反过来把请求撑到 25 秒
+    const slow = setTimeout(
+      () => logger.warn('事件处理已超过 25 秒，30 秒时会被平台中断', { id, event: toEventName(payload.t ?? 'UNKNOWN') }),
+      DISPATCH_WARN_MS,
+    )
     scope.execCtx.waitUntil(
       scope.dispatchPayload(payload).then(
         async ({ session, report, outbox, failed }) => {
@@ -148,7 +174,7 @@ export async function handleWebhook(
           )
         },
         (err) => logger.error('事件分发异常', { id, ...errorInfo(err) }),
-      ),
+      ).finally(() => clearTimeout(slow)),
     )
     return json(ACK)
   }

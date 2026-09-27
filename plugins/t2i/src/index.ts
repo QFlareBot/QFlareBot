@@ -48,10 +48,11 @@ export default definePlugin<PluginConfig>({
       t2i_timeout: {
         type: 'integer',
         title: '渲染超时时间 (毫秒)',
-        description: '调用 T2I 服务的最大等待时间，默认 25000ms',
+        description:
+          '调用 T2I 服务的最大等待时间，默认 25000ms。上限 30000ms：事件处理总共只有 30 秒，设得再长也会被 Cloudflare 中途掐断（插件页的试渲染不受此限，但服务是给事件处理用的）',
         default: 25000,
         minimum: 5000,
-        maximum: 120000,
+        maximum: 30000,
       },
     },
   },

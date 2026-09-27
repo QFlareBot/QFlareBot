@@ -32,7 +32,7 @@ export class RequestScope {
   ): Promise<RequestScope> {
     const [snapshot, bot] = await Promise.all([readSnapshot(env), readBotConfig(env)])
     const api = bot
-      ? new QQBotClient({ appId: bot.appId, secret: bot.secret, tokenCache: kvTokenCache(env), fetchImpl: options.fetchImpl })
+      ? new QQBotClient({ appId: bot.appId, secret: bot.secret, tokenCache: kvTokenCache(env, bot.appId), fetchImpl: options.fetchImpl })
       : null
     const contexts = new ContextFactory({
       env,
