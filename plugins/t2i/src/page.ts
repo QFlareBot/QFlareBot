@@ -14,7 +14,7 @@ export const PAGE_HTML = `<!doctype html>
   .grid { display: grid; gap: var(--qb-space-3); }
   .card-title { font-size: var(--qb-text-sm); font-weight: 600; margin: 0 0 var(--qb-space-2); }
   .kv { display: flex; justify-content: space-between; gap: var(--qb-space-3); padding: var(--qb-space-1) 0; font-size: var(--qb-text-sm); }
-  .kv .k { color: var(--qb-muted); flex-shrink: 0; }
+  .kv .k { color: var(--qb-fg-muted); flex-shrink: 0; }
   .kv .v { text-align: right; word-break: break-all; }
   .mono { font-family: var(--qb-font-mono); font-size: var(--qb-text-xs); }
   .actions { display: flex; gap: var(--qb-space-2); margin-top: var(--qb-space-3); align-items: center; flex-wrap: wrap; }
@@ -23,7 +23,7 @@ export const PAGE_HTML = `<!doctype html>
   .status.bad { color: var(--qb-danger, #dc2626); }
   textarea { width: 100%; min-height: 96px; resize: vertical; font-family: var(--qb-font-mono); font-size: var(--qb-text-xs); }
   #preview img { max-width: 100%; border-radius: var(--qb-radius, 8px); border: 1px solid var(--qb-border); }
-  .meta { font-size: var(--qb-text-xs); color: var(--qb-muted); margin-top: var(--qb-space-2); }
+  .meta { font-size: var(--qb-text-xs); color: var(--qb-fg-muted); margin-top: var(--qb-space-2); }
 </style>
 </head>
 <body class="qb-page" style="padding: var(--qb-space-4)">
