@@ -87,6 +87,23 @@
   animation-delay: 200ms;
 }
 
+/* 页内标签切换（设置分区、调试、添加插件共用）：旧的淡出，新的淡入并上浮一点 */
+.tab-enter-active {
+  transition:
+    opacity var(--qb-duration-slow) var(--qb-ease),
+    transform var(--qb-duration-slow) var(--qb-ease-out);
+}
+.tab-leave-active {
+  transition: opacity var(--qb-duration) var(--qb-ease);
+}
+.tab-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.tab-leave-to {
+  opacity: 0;
+}
+
 /* 通用淡入淡出 */
 .fade-enter-active,
 .fade-leave-active {

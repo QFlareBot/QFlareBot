@@ -2,7 +2,7 @@
 /**
  * 两个性质相反的工具分开放：
  * 模拟事件是**干跑**，走 /admin/test-event，不碰 QQ；真实发送走 /admin/send，对方会真的收到。
- * 两个面板都挂着（v-show），切标签不丢对话记录。
+ * 切走的面板由 KeepAlive 留着，切回来对话记录还在；切换过渡与设置、添加插件同一套（tab）。
  */
 import { FlaskConical, Send } from 'lucide-vue-next'
 import PageHeader from '../components/PageHeader.vue'
@@ -22,7 +22,13 @@ const TABS = [
   <div>
     <PageHeader title="调试" description="模拟事件是干跑，不会发到 QQ；真实发送会真的发出去。" />
     <div class="mb-4"><QSegmented v-model="tab" :options="TABS" label="调试工具" /></div>
-    <div v-show="tab === 'simulate'" role="tabpanel"><SimulatorPanel /></div>
-    <div v-show="tab === 'send'" role="tabpanel"><SendPanel /></div>
+    <div role="tabpanel">
+      <Transition name="tab" mode="out-in">
+        <KeepAlive>
+          <SimulatorPanel v-if="tab === 'simulate'" />
+          <SendPanel v-else />
+        </KeepAlive>
+      </Transition>
+    </div>
   </div>
 </template>

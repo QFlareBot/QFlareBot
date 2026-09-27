@@ -112,54 +112,58 @@ onMounted(async () => {
 </script>
 
 <template>
-  <QCard flush title="插件目录" description="来自 QFlareBot/plugins。只检查能构建、名字不冲突，不是安全审核">
-    <template #actions>
-      <QButton size="sm" variant="primary" :loading="install.previewing.value" :disabled="!selected.size || busy" @click="previewSelected">
-        预检选中（{{ selected.size }}）
-      </QButton>
-    </template>
+  <div>
+    <!-- 单个根节点：它放在页内标签的 <Transition> 里，多根节点做不了过渡（弹窗本身 Teleport 到 body）。
+         注释也别放到外面：开发模式会保留模板注释，放在根上就又变成多根节点 -->
+    <QCard flush title="插件目录" description="来自 QFlareBot/plugins。只检查能构建、名字不冲突，不是安全审核">
+      <template #actions>
+        <QButton size="sm" variant="primary" :loading="install.previewing.value" :disabled="!selected.size || busy" @click="previewSelected">
+          预检选中（{{ selected.size }}）
+        </QButton>
+      </template>
 
-    <div class="flex flex-col gap-2.5 border-b border-border px-4 py-3">
-      <QInput v-model="query" type="search" placeholder="搜索名称、描述、作者、命令" aria-label="搜索插件" />
-      <div v-if="tags.length" class="flex flex-wrap gap-1.5" role="group" aria-label="按标签筛选">
-        <button
-          v-for="t in [null, ...tags]"
-          :key="t ?? '全部'"
-          type="button"
-          class="h-7 cursor-pointer rounded-full border px-3 text-xs transition-[background-color,border-color,color,transform] duration-(--qb-duration) active:scale-95"
-          :class="activeTag === t ? 'border-transparent bg-primary font-medium text-on-primary' : 'border-border-strong text-fg-muted hover:bg-surface-muted hover:text-fg'"
-          :aria-pressed="activeTag === t"
-          @click="activeTag = activeTag === t ? null : t"
-        >
-          {{ t ?? '全部' }}
-        </button>
+      <div class="flex flex-col gap-2.5 border-b border-border px-4 py-3">
+        <QInput v-model="query" type="search" placeholder="搜索名称、描述、作者、命令" aria-label="搜索插件" />
+        <div v-if="tags.length" class="flex flex-wrap gap-1.5" role="group" aria-label="按标签筛选">
+          <button
+            v-for="t in [null, ...tags]"
+            :key="t ?? '全部'"
+            type="button"
+            class="h-7 cursor-pointer rounded-full border px-3 text-xs transition-[background-color,border-color,color,transform] duration-(--qb-duration) active:scale-95"
+            :class="activeTag === t ? 'border-transparent bg-primary font-medium text-on-primary' : 'border-border-strong text-fg-muted hover:bg-surface-muted hover:text-fg'"
+            :aria-pressed="activeTag === t"
+            @click="activeTag = activeTag === t ? null : t"
+          >
+            {{ t ?? '全部' }}
+          </button>
+        </div>
       </div>
-    </div>
 
-    <QSkeleton v-if="loadState === 'loading'" :rows="4" label="正在读取插件目录" />
-    <QEmpty v-else-if="loadState === 'error'" :icon="PackageSearch" title="读不到插件目录" :description="`${loadError}。目录地址：${CATALOG_INDEX_URL}`" />
-    <QEmpty v-else-if="!shown.length" :icon="PackageSearch" title="没有符合条件的插件" description="换个关键词或标签试试。" />
-    <ul v-else class="divide-y divide-border">
-      <CatalogItem
-        v-for="p in shown"
-        :key="p.name"
-        :plugin="p"
-        :installed="installed.get(p.name)"
-        :installed-from="installedFrom(p)"
-        :selected="selected.has(p.name)"
-        :disabled="busy"
-        :loading="install.previewing.value && selected.size === 1 && selected.has(p.name)"
-        @select="toggleSelected(p.name, $event)"
-        @install="installOne(p)"
-      />
-    </ul>
-  </QCard>
+      <QSkeleton v-if="loadState === 'loading'" :rows="4" label="正在读取插件目录" />
+      <QEmpty v-else-if="loadState === 'error'" :icon="PackageSearch" title="读不到插件目录" :description="`${loadError}。目录地址：${CATALOG_INDEX_URL}`" />
+      <QEmpty v-else-if="!shown.length" :icon="PackageSearch" title="没有符合条件的插件" description="换个关键词或标签试试。" />
+      <ul v-else class="divide-y divide-border">
+        <CatalogItem
+          v-for="p in shown"
+          :key="p.name"
+          :plugin="p"
+          :installed="installed.get(p.name)"
+          :installed-from="installedFrom(p)"
+          :selected="selected.has(p.name)"
+          :disabled="busy"
+          :loading="install.previewing.value && selected.size === 1 && selected.has(p.name)"
+          @select="toggleSelected(p.name, $event)"
+          @install="installOne(p)"
+        />
+      </ul>
+    </QCard>
 
-  <CatalogPreviewDialog
-    :rows="install.rows.value"
-    :installing="install.installing.value"
-    :installable-count="install.installableRows.value.length"
-    @cancel="install.cancel"
-    @confirm="install.confirm"
-  />
+    <CatalogPreviewDialog
+      :rows="install.rows.value"
+      :installing="install.installing.value"
+      :installable-count="install.installableRows.value.length"
+      @cancel="install.cancel"
+      @confirm="install.confirm"
+    />
+  </div>
 </template>

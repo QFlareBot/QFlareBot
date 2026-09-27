@@ -23,9 +23,14 @@ const TABS = [
     <RouterLink to="/plugins" class="mb-3 inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"><ArrowLeft class="size-4" aria-hidden="true" />插件列表</RouterLink>
     <PageHeader title="添加插件" description="从插件目录挑，或粘贴插件仓库的链接。装之前都会先预检。" />
     <div class="mb-4"><QSegmented v-model="tab" :options="TABS" label="安装方式" /></div>
+    <!-- 切走的标签留着：市场的搜索与勾选、仓库链接里填到一半的地址切回来都还在 -->
     <div role="tabpanel">
-      <MarketCatalog v-if="tab === 'market'" />
-      <RepoInstall v-else :initial-source="initialSource" />
+      <Transition name="tab" mode="out-in">
+        <KeepAlive>
+          <MarketCatalog v-if="tab === 'market'" />
+          <RepoInstall v-else :initial-source="initialSource" />
+        </KeepAlive>
+      </Transition>
     </div>
   </div>
 </template>

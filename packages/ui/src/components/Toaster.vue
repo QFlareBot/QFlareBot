@@ -9,12 +9,12 @@ const bars = { info: 'bg-fg-subtle', success: 'bg-success', warning: 'bg-warning
 </script>
 
 <template>
-  <!-- 手机放在顶栏下面：浏览器的底部工具栏会挡住贴底的东西 -->
   <div
     class="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+60px)] z-50 flex flex-col items-center gap-2 px-4 md:top-auto md:bottom-4 md:items-end"
     role="status"
     aria-live="polite"
   >
+    <!-- 手机放在顶栏下面：浏览器的底部工具栏会挡住贴底的东西 -->
     <TransitionGroup name="toast">
       <div
         v-for="t in toasts"

@@ -27,8 +27,9 @@ const section = useQueryTab('section', SECTIONS.map((s) => s.value), 'bot')
   <div>
     <PageHeader title="设置" />
     <div class="mb-5"><QSegmented v-model="section" :options="[...SECTIONS]" label="设置分区" /></div>
+    <!-- 过渡与调试、添加插件同一套（tab）；分区不缓存：每次打开都重新读设置快照，免得显示别处刚改掉的旧值 -->
     <div role="tabpanel" class="max-w-3xl">
-      <Transition name="fade" mode="out-in">
+      <Transition name="tab" mode="out-in">
         <BotSection v-if="section === 'bot'" />
         <RuntimeSection v-else-if="section === 'runtime'" />
         <PermissionSection v-else-if="section === 'permission'" />
