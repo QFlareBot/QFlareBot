@@ -6,9 +6,10 @@
  *            → git: 源码按 commit 下载到机器人仓库外的临时目录，按插件自己的 lockfile 装依赖（有才装），
  *              在去掉凭证的子进程里打包、抽清单，与声明清单比对（见 plugin-build.mjs）→ 写 manifest.resolved.json
  *            → 调 qqbot-project 生成 dist/ 与 wrangler.generated.jsonc
- *            有插件构建失败：全部试完，把原因报回 Worker（/admin/build-report）再失败，线上保持上一次成功的版本
- *   deploy   有 CLOUDFLARE_API_TOKEN 时走 Versions API：上传 → 预览地址健康检查 → 切流量；
- *            无凭证时退回 `wrangler deploy`（本地/CI 未注入凭证的场景）。
+ *            有插件构建失败：全部试完，把原因报回 Worker（/admin/build-report）再失败，线上保持上一次成功的版本；
+ *            下载源码 / 装依赖的网络问题重试后仍不行的，报成这次构建的整体错误，不记到插件头上
+ *   deploy   有 CLOUDFLARE_API_TOKEN 时走 Versions API：上传 → 预览地址健康检查（带 ?plugins=1，
+ *            有插件加载失败时逐个报回面板）→ 切流量；无凭证时退回 `wrangler deploy`（本地/CI 未注入凭证的场景）。
  *
  * 用法：
  *   node scripts/build-deploy.mjs prepare
@@ -24,12 +25,22 @@ import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { CloudflareWorkersApi, computeIntegrity, createHttpFetcher, deploy, parseJsonc } from '@qqbot/projector'
 import {
+  TransientBuildError,
   buildReportUrl,
-  classifyDeployError,
+  ciOverrideName,
+  compareDeclaredManifest,
+  describeNameMismatch,
   describePluginFailures,
+  describeTransientFailures,
+  describeUnresolvedBindings,
   envFromRemoteConfig,
+  healthFailures,
+  isTransientBuildError,
+  isTransientFetchError,
+  isTransientHttpStatus,
   manifestPolicy,
   originOf,
+  planDeployFallback,
   resolveScriptName,
   unresolvedBindings,
 } from './deploy-policy.mjs'
@@ -44,13 +55,11 @@ const BUILD_UUID = process.env.WORKERS_CI_BUILD_UUID?.trim() || null
 
 const GIT_SOURCE = /^git:([^/\s]+)\/([^#\s@]+)@([0-9a-f]{7,40})(?:#([^#\s]+))?$/
 
-function stableStringify(value) {
-  if (value === undefined) return 'undefined'
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const keys = Object.keys(value).sort()
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
-}
+/** 下载一个插件源码 tarball 的时限（含把响应体写完）与总尝试次数：codeload 偶尔 5xx 或卡住不动 */
+const DOWNLOAD_TIMEOUT_MS = 60_000
+const DOWNLOAD_ATTEMPTS = 3
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
  * 拉取 D1 插件集。
@@ -140,6 +149,35 @@ async function fetchRemoteConfig() {
   }
 }
 
+/**
+ * 下载到文件：每次尝试限时 DOWNLOAD_TIMEOUT_MS（响应体写完才算），网络错误与 5xx / 429 重试。
+ * 重试完仍是网络问题就抛 TransientBuildError——那是构建环境的问题，不能记到插件头上；
+ * 404 之类是来源本身的问题（commit 不存在、仓库是私有的），直接按插件自己的错误抛。
+ */
+async function downloadToFile(url, file, label) {
+  let lastError = ''
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
+      if (res.ok && res.body) {
+        await pipeline(Readable.fromWeb(res.body), createWriteStream(file))
+        return
+      }
+      await res.body?.cancel().catch(() => {})
+      if (!isTransientHttpStatus(res.status)) throw new Error(`下载 ${label} 源码失败：HTTP ${res.status}`)
+      lastError = `HTTP ${res.status}`
+    } catch (err) {
+      if (!isTransientFetchError(err)) throw err
+      lastError = err.name === 'TimeoutError' ? `${DOWNLOAD_TIMEOUT_MS / 1000} 秒内没下载完` : (err.cause?.message ?? err.message)
+    }
+    if (attempt < DOWNLOAD_ATTEMPTS) {
+      process.stdout.write(` 下载出错（${lastError}），${attempt * 3} 秒后重试…`)
+      await sleep(attempt * 3000)
+    }
+  }
+  throw new TransientBuildError(`下载 ${label} 源码失败（已试 ${DOWNLOAD_ATTEMPTS} 次）：${lastError}`)
+}
+
 /** 下载 git:<owner>/<repo>@<sha> 的源码 tarball 并解包，返回插件目录 */
 async function extractGitSource(name, source) {
   const match = GIT_SOURCE.exec(source)
@@ -150,9 +188,7 @@ async function extractGitSource(name, source) {
   await mkdir(dest, { recursive: true })
 
   const tgz = path.join(os.tmpdir(), `qqbot-src-${name}-${sha}.tar.gz`)
-  const res = await fetch(`https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`, { redirect: 'follow' })
-  if (!res.ok || !res.body) throw new Error(`下载 ${owner}/${repo}@${sha} 源码失败：HTTP ${res.status}`)
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(tgz))
+  await downloadToFile(`https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`, tgz, `${owner}/${repo}@${sha}`)
   execFileSync('tar', ['xzf', tgz, '-C', dest])
   await rm(tgz, { force: true })
 
@@ -195,11 +231,15 @@ async function buildGitPlugin(entry) {
   if (manifest.name !== entry.name) {
     throw new Error(`${entry.name} 的源码声明 name 为 ${manifest.name}——插件源与安装记录不一致，请卸载后重装`)
   }
-  if (declared && stableStringify(declared) !== stableStringify(manifest)) {
-    const fields = Object.keys({ ...manifest, ...declared }).filter((k) => stableStringify(manifest[k]) !== stableStringify(declared[k]))
-    throw new Error(
-      `${entry.name} 的声明清单与源码不一致（字段：${fields.join('、') || '整体'}）——请重新运行 qqbot-plugin build 并提交新的 manifest.json`,
-    )
+  // 声明清单是作者当时的 SDK 生成的，抽取用的是机器人仓库的 SDK：框架后加的带默认值字段不算不一致（见 compareDeclaredManifest）
+  if (declared) {
+    const diff = compareDeclaredManifest(declared, manifest)
+    for (const w of diff.warnings) console.warn(`\n  ⚠️ ${entry.name}：${w}`)
+    if (!diff.ok) {
+      throw new Error(
+        `${entry.name} 的声明清单与源码不一致（字段：${diff.fields.join('、')}）——请重新运行 qqbot-plugin build 并提交新的 manifest.json`,
+      )
+    }
   }
 
   const code = await readFile(outFile, 'utf8')
@@ -267,6 +307,8 @@ async function prepare() {
   await rm(BUILD_PLUGINS_DIR, { recursive: true, force: true })
   const plugins = []
   const failures = []
+  /** 构建环境的网络问题（重试过了仍不行）：与插件无关，不进 failures，见 TransientBuildError */
+  const transient = []
   for (const entry of merged) {
     // 出处随清单进投影、再进运行时：面板靠它分清「线上这一份是面板装的还是内置的、钉在哪个 commit」
     const origin = originOf(entry, overrides)
@@ -281,16 +323,22 @@ async function prepare() {
         // 不在第一个失败处停：每个插件都试一遍、一次报全，面板上才看得出该卸载哪几个
         console.log(' 失败')
         console.error(`  ${err.message}`)
-        failures.push({ name: entry.name, source: entry.source, error: err.message })
+        const record = { name: entry.name, source: entry.source, error: err.message }
+        if (isTransientBuildError(err)) transient.push(record)
+        else failures.push(record)
       }
     } else {
       plugins.push({ ...entry, origin })
     }
   }
-  // 有插件构建失败就不部署：线上保持上一次成功的版本。失败的条目留在 D1 里，由人在面板上卸载或撤销
-  if (failures.length > 0) {
-    const reported = await reportFailure({ phase: 'prepare', failures })
-    const err = new Error(describePluginFailures(failures, { reported }))
+  // 有插件构建失败就不部署：线上保持上一次成功的版本。失败的条目留在 D1 里，由人在面板上卸载或撤销。
+  // 网络问题报成这次构建的整体错误（build-report 的 error），不记到插件条目上——免得面板建议卸载一个没问题的插件
+  if (failures.length > 0 || transient.length > 0) {
+    const overall = transient.length > 0 ? describeTransientFailures(transient) : null
+    const reported = await reportFailure({ phase: 'prepare', failures, ...(overall ? { error: overall } : {}) })
+    const err = new Error(
+      [failures.length > 0 ? describePluginFailures(failures, { reported }) : null, overall].filter(Boolean).join('\n\n'),
+    )
     reportedErrors.add(err)
     throw err
   }
@@ -323,8 +371,17 @@ async function collectModules(dir, prefix = '') {
   return out
 }
 
+/** 按生成配置跑一次 wrangler deploy（引导首次部署与降级共用） */
+function execWranglerDeploy() {
+  execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+    cwd: appDir,
+    stdio: 'inherit',
+    env: process.env,
+  })
+}
+
 /**
- * 跑 wrangler deploy，并把它与 Versions API 的关键差异说清楚。
+ * 降级为 wrangler deploy，并把它与 Versions API 的关键差异说清楚。
  *
  * Versions API 只上传代码与绑定，**不碰脚本级设置**；wrangler deploy 会把 workers_dev、
  * triggers.crons 同步成配置文件里的样子（CF_WORKERS_DEV=0 关掉的 workers.dev 会被重新打开，
@@ -333,11 +390,16 @@ async function collectModules(dir, prefix = '') {
  * 这里不拦（拦了会让人连退路都没有），但必须让它在构建日志里显眼。
  */
 function runWranglerDeploy(generated, reason) {
+  // Workers Builds 注入了 WRANGLER_CI_OVERRIDE_NAME 时 wrangler 部署到它，不看配置里的 name
+  const override = ciOverrideName()
   console.warn(
     [
       '',
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       `⚠️  降级为 wrangler deploy：${reason}`,
+      ...(override && override !== generated.name
+        ? [`   目标 Worker   ${override}（WRANGLER_CI_OVERRIDE_NAME 顶掉了生成配置里的 ${generated.name ?? '（未声明）'}）`]
+        : []),
       '   wrangler 会按生成配置同步脚本级设置，本次将把线上改成：',
       `     routes       ${generated.routes?.length ? `${generated.routes.map((r) => r.pattern).join('、')}（整体替换，后台另绑的会被摘掉）` : '（未声明——线上的自定义域名保持不动）'}`,
       `     workers_dev  ${generated.workers_dev ?? '（未声明，由 wrangler 决定）'}`,
@@ -347,11 +409,17 @@ function runWranglerDeploy(generated, reason) {
       '',
     ].join('\n'),
   )
-  execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
-    cwd: appDir,
-    stdio: 'inherit',
-    env: process.env,
-  })
+  execWranglerDeploy()
+}
+
+/** prepare 写下的插件清单（带出处）：健康检查报出插件加载失败时，靠它找回 D1 里记的原始来源 */
+async function readResolvedPlugins() {
+  try {
+    const data = JSON.parse(await readFile(RESOLVED_MANIFEST, 'utf8'))
+    return Array.isArray(data.plugins) ? data.plugins : []
+  } catch {
+    return []
+  }
 }
 
 async function deployPhase() {
@@ -364,6 +432,9 @@ async function deployPhase() {
   if (!scriptName) throw new Error('缺少 Worker 名称（wrangler.generated.jsonc 的 name 或环境变量 CF_WORKER_NAME）')
   // 打出来：部署到哪个 Worker 是这一步最值得当场核对的事，错了会把版本传到同名的另一个 Worker 上
   console.log(`部署目标 Worker：${scriptName}`)
+  // Workers Builds 连着的 Worker 不是它：两条部署路径会部署到两个不同的 Worker，必须当场喊出来
+  const mismatch = describeNameMismatch(scriptName)
+  if (mismatch) console.warn(mismatch)
 
   const { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID } = process.env
   let accountId = CLOUDFLARE_ACCOUNT_ID
@@ -394,25 +465,14 @@ async function deployPhase() {
     if (unresolved === null) {
       throw new Error('dist/projection.json 缺少 bindings 解析状态，无法确认绑定是否齐全——请重新运行 prepare 后再部署')
     }
-    if (unresolved.length > 0) {
-      throw new Error(
-        `基础设施绑定未解析：${unresolved.join('、')}。` +
-          '拒绝部署——继续下去会把它们当成新资源自动预配，静默丢掉现有快照与插件数据。' +
-          '请确认 MANIFEST_URL 指向的 /admin/build-config 可达，且 Worker 上已写入 CF_KV_ID / CF_D1_ID / CF_R2_NAME。' +
-          '若确实是想让 wrangler 自动预配全新资源，请改用 `pnpm --filter @qqbot/seed run deploy`。',
-      )
-    }
+    if (unresolved.length > 0) throw new Error(describeUnresolvedBindings(unresolved))
   }
 
   if (isInitialBootstrap) {
     // 引导首次部署本来就该走 wrangler：脚本创建、workers.dev 与 Cron 触发器都靠它落地。
     // 配置里不声明 routes，重跑引导也不会动用户在后台绑的自定义域名。
     console.log('检测到引导首次部署（INITIAL_BOOTSTRAP），使用 wrangler deploy 创建脚本并绑定 workers.dev 与 Cron 触发器…')
-    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.generated.jsonc'], {
-      cwd: appDir,
-      stdio: 'inherit',
-      env: process.env,
-    })
+    execWranglerDeploy()
     return
   }
 
@@ -432,18 +492,25 @@ async function deployPhase() {
       onProgress: (step) => console.log(`[${step.stage}] ${step.message}`),
     })
   } catch (err) {
-    // 兜底只覆盖「这条路在当前环境走不通」的两种情况：
+    // 兜底只覆盖**上传那一步**「这条路在当前环境走不通」的两种情况：
     //   10007 = 脚本还不存在（首次创建）；401/403 = 构建环境注入的凭证与主 token 权限模型不同。
-    // 其余错误（含 SecretLossError / HealthCheckError 这两个安全阀）一律向上抛，不做兜底。
-    const kind = classifyDeployError(err)
-    if (kind !== 'rethrow') {
-      runWranglerDeploy(
-        generated,
-        kind === 'script-not-found'
-          ? `Worker ${scriptName} 尚未在 Cloudflare 创建`
-          : `Versions API 拒绝了本次调用（HTTP ${err.status}：${err.message}）`,
-      )
+    // 版本传上去之后的任何一步、以及 SecretLossError / HealthCheckError 这两个安全阀，一律向上抛，不做兜底；
+    // 10007 而部署目标名与 Workers Builds 连着的 Worker 对不上时也不兜（见 planDeployFallback）。
+    const plan = planDeployFallback(err, scriptName)
+    if (plan.action === 'wrangler') {
+      runWranglerDeploy(generated, plan.reason)
       return
+    }
+    if (plan.action === 'fail') throw new Error(plan.message, { cause: err })
+
+    // 预览版本里有插件加载失败：像插件构建失败一样逐个报回面板，面板上才看得出是哪个插件、该卸载哪个
+    if (err?.name === 'HealthCheckError' && Array.isArray(err.pluginErrors) && err.pluginErrors.length > 0) {
+      const failures = healthFailures(err.pluginErrors, await readResolvedPlugins())
+      // phase 用 health：旧 Worker 不认识的 phase 按 prepare 记（不会拒收），failures 照样逐条记到 D1 条目上
+      const reported = await reportFailure({ phase: 'health', failures, error: err.message })
+      const wrapped = new Error(`${err.message}\n${describePluginFailures(failures, { reported, phase: 'health' })}`, { cause: err })
+      reportedErrors.add(wrapped)
+      throw wrapped
     }
     throw err
   }

@@ -1,4 +1,5 @@
-import { stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
@@ -59,6 +60,73 @@ const frameworkGuard: esbuild.Plugin = {
   },
 }
 
+/** SDK 在产物里的虚拟命名空间：产物注释写成 `// qqbot-sdk:src/plugin.ts`，见 sdkNamespace */
+const SDK_NAMESPACE = 'qqbot-sdk'
+
+/** SDK 包根目录：从入口往上找最近的 package.json；找不到就用入口所在目录 */
+function packageRootOf(file: string): string {
+  let dir = path.dirname(file)
+  for (;;) {
+    if (existsSync(path.join(dir, 'package.json'))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) return path.dirname(file)
+    dir = parent
+  }
+}
+
+const LOADERS: Record<string, esbuild.Loader> = {
+  '.ts': 'ts',
+  '.mts': 'ts',
+  '.cts': 'ts',
+  '.tsx': 'tsx',
+  '.js': 'js',
+  '.mjs': 'js',
+  '.cjs': 'js',
+  '.jsx': 'jsx',
+  '.json': 'json',
+}
+
+/**
+ * 把 alias 指过去的 SDK 解析进固定的虚拟命名空间，让产物与构建机无关。
+ *
+ * SDK 一律用机器人仓库（或 plugin-cli 自带）的那一份，经 alias 指向一个绝对路径。esbuild 会把每个输入文件
+ * 相对 absWorkingDir 的路径写进产物注释：git 插件解包在构建机的临时目录里，SDK 却在机器人仓库里，
+ * 注释就成了 `// ../../../../opt/buildhome/repo/packages/sdk/src/plugin.ts`——同一组插件换一台机器、
+ * 换个仓库位置，plugin.js 的 integrity 就不同，投影哈希跟着变。放进虚拟命名空间后路径只相对 SDK 自己的
+ * 包根目录，产物只取决于 SDK 的内容与目录结构。
+ *
+ * 只接管 `@qqbot/sdk` 本身，子路径仍按 alias 走（与以前一样）；SDK 内部的相对 import 用 esbuild 自己的
+ * 解析规则（`./x.js` 找到 `x.ts` 之类）解析出真实文件，还在 SDK 目录里的继续留在命名空间内，
+ * 外部的（`cloudflare:*`）原样交还。
+ */
+function sdkNamespace(sdkEntry: string): esbuild.Plugin {
+  const root = packageRootOf(sdkEntry)
+  const toVirtual = (result: esbuild.ResolveResult): esbuild.OnResolveResult => {
+    if (result.errors.length > 0) return { errors: result.errors, warnings: result.warnings }
+    if (result.external || result.namespace !== 'file') return result
+    const rel = path.relative(root, result.path)
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return result
+    return { path: rel.split(path.sep).join('/'), namespace: SDK_NAMESPACE, sideEffects: result.sideEffects }
+  }
+  return {
+    name: 'qqbot-sdk-namespace',
+    setup(build) {
+      build.onResolve({ filter: /^@qqbot\/sdk$/ }, async (args) =>
+        toVirtual(await build.resolve(sdkEntry, { kind: args.kind, resolveDir: args.resolveDir })),
+      )
+      build.onResolve({ filter: /.*/, namespace: SDK_NAMESPACE }, async (args) =>
+        toVirtual(
+          await build.resolve(args.path, { kind: args.kind, resolveDir: args.resolveDir, importer: path.join(root, args.importer) }),
+        ),
+      )
+      build.onLoad({ filter: /.*/, namespace: SDK_NAMESPACE }, async (args) => {
+        const file = path.join(root, args.path)
+        return { contents: await readFile(file, 'utf8'), loader: LOADERS[path.extname(file)] ?? 'js', resolveDir: path.dirname(file) }
+      })
+    },
+  }
+}
+
 function resolveDefaultAlias(custom?: Record<string, string>): Record<string, string> {
   const merged: Record<string, string> = { ...custom }
   if (!merged['@qqbot/sdk']) {
@@ -84,6 +152,9 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Bui
   const outFile = path.join(outDir, 'plugin.js')
   const resolvedAlias = resolveDefaultAlias(options.alias)
   const alias = Object.keys(resolvedAlias).length > 0 ? { alias: resolvedAlias } : {}
+  // alias 指到的 SDK 走虚拟命名空间（见 sdkNamespace）；没指（解析不到 SDK）就照常从插件自己的 node_modules 解析，
+  // 那时路径本来就在插件目录里、与机器无关
+  const sdkEntry = resolvedAlias['@qqbot/sdk']
 
   // 先抽清单：定义或校验有问题时不留下半成品
   const manifest = await extractPluginManifest({ entry, cwd, ...alias })
@@ -103,7 +174,7 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Bui
     minify: options.minify ?? false,
     metafile: true,
     logLevel: 'warning',
-    plugins: [frameworkGuard],
+    plugins: sdkEntry ? [frameworkGuard, sdkNamespace(sdkEntry)] : [frameworkGuard],
     ...alias,
   })
 

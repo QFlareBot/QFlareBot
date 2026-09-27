@@ -29,6 +29,31 @@ describe('jsonc', () => {
     expect(out.split('\n')).toHaveLength(4)
     expect(JSON.parse(out)).toEqual({ x: 1 })
   })
+
+  // 回归：逗号与 ] / } 之间隔着注释时以前认不出是尾随逗号，JSON.parse 直接报错——
+  // 照提示往 wrangler.jsonc 的 migrations 里补一项时很容易这样写
+  it('尾随逗号后面跟着注释也能去掉', () => {
+    expect(parseJsonc('{"a":[1, // c\n]}')).toEqual({ a: [1] })
+    expect(parseJsonc('{"a":1, /* c */ }')).toEqual({ a: 1 })
+    expect(parseJsonc('{"a":1, /* c */ // d\n /* e */ }')).toEqual({ a: 1 })
+    expect(
+      parseJsonc(`{
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Own"] },
+    { "tag": "p-foo-game", "new_sqlite_classes": ["P_foo_Game"] }, // 装 foo 时补的
+  ],
+}`),
+    ).toEqual({
+      migrations: [
+        { tag: 'v1', new_sqlite_classes: ['Own'] },
+        { tag: 'p-foo-game', new_sqlite_classes: ['P_foo_Game'] },
+      ],
+    })
+  })
+
+  it('字符串里的逗号、注释符号与括号原样保留', () => {
+    expect(parseJsonc('{"a":", ]", "b":"// , }", "c":"/* , */"}')).toEqual({ a: ', ]', b: '// , }', c: '/* , */' })
+  })
 })
 
 describe('deriveBindings', () => {
@@ -105,6 +130,17 @@ describe('deriveBindings', () => {
       delete process.env.CF_R2_NAME
     }
   })
+
+  it('CF_KV_ID=none 不算跳过：KV 是必需资源，给出不受支持的提醒', () => {
+    process.env.CF_KV_ID = 'none'
+    try {
+      const { bindings, warnings } = deriveBindings({ kv_namespaces: [{ binding: 'KV' }], d1_databases: [{ binding: 'DB', database_id: 'd1' }] })
+      expect(bindings.kv.namespaceId).toBe(PROVISIONED_PLACEHOLDER)
+      expect(warnings).toEqual([expect.stringContaining('CF_KV_ID=none 不受支持')])
+    } finally {
+      delete process.env.CF_KV_ID
+    }
+  })
 })
 
 describe('generateWranglerConfig', () => {
@@ -161,6 +197,83 @@ describe('generateWranglerConfig', () => {
     expect(() => generateWranglerConfig({ base, projection, mainPath: 'o/index.js' })).toThrow(
       /new_sqlite_classes": \["P_foo_Game"\]/,
     )
+  })
+
+  describe('migrations 按历史重放', () => {
+    const withDo = (...names: string[]) =>
+      makeProjection({
+        metadata: {
+          ...makeProjection().metadata,
+          exports: Object.fromEntries(names.map((n) => [n, { type: 'durable-object' as const, storage: 'sqlite' as const }])),
+        },
+      })
+
+    it('改名进来的（renamed_classes 的 to）与从别的脚本挪进来的（transferred_classes 的 to）都算已有', () => {
+      const migrationsBase = {
+        name: 'bot',
+        migrations: [
+          { tag: 'v1', new_sqlite_classes: ['P_foo_Old'] },
+          { tag: 'v2', renamed_classes: [{ from: 'P_foo_Old', to: 'P_foo_Game' }] },
+          { tag: 'v3', transferred_classes: [{ from: 'Room', from_script: 'other-bot', to: 'P_bar_Room' }] },
+        ],
+      }
+      const warnings: string[] = []
+      expect(() =>
+        generateWranglerConfig({ base: migrationsBase, projection: withDo('P_foo_Game', 'P_bar_Room'), mainPath: 'o/index.js', warnings }),
+      ).not.toThrow()
+      expect(warnings).toEqual([])
+    })
+
+    it('改名前的旧名、删掉的类从已有里减掉', () => {
+      const renamed = {
+        name: 'bot',
+        migrations: [
+          { tag: 'v1', new_sqlite_classes: ['P_foo_Old'] },
+          { tag: 'v2', renamed_classes: [{ from: 'P_foo_Old', to: 'P_foo_New' }] },
+        ],
+      }
+      expect(() => generateWranglerConfig({ base: renamed, projection: withDo('P_foo_Old'), mainPath: 'o/index.js' })).toThrow(/P_foo_Old/)
+
+      const deleted = {
+        name: 'bot',
+        migrations: [
+          { tag: 'v1', new_sqlite_classes: ['P_foo_Game'] },
+          { tag: 'v2', deleted_classes: ['P_foo_Game'] },
+        ],
+      }
+      expect(() => generateWranglerConfig({ base: deleted, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })).toThrow(
+        /没有出现在 migrations 里：P_foo_Game/,
+      )
+    })
+
+    it('删掉之后又新建回来（按顺序处理）算已有', () => {
+      const base = {
+        name: 'bot',
+        migrations: [
+          { tag: 'v1', new_sqlite_classes: ['P_foo_Game'] },
+          { tag: 'v2', deleted_classes: ['P_foo_Game'] },
+          { tag: 'v3', new_sqlite_classes: ['P_foo_Game'] },
+        ],
+      }
+      expect(() => generateWranglerConfig({ base, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })).not.toThrow()
+    })
+
+    it('类建在 new_classes（KV 后端）而版本元数据按 sqlite 声明：只警告，不失败；改名沿用旧类的后端', () => {
+      const base = {
+        name: 'bot',
+        migrations: [
+          { tag: 'v1', new_classes: ['P_foo_Old'] },
+          { tag: 'v2', renamed_classes: [{ from: 'P_foo_Old', to: 'P_foo_Game' }] },
+          { tag: 'v3', new_sqlite_classes: ['P_bar_Room'] },
+        ],
+      }
+      const warnings: string[] = []
+      generateWranglerConfig({ base, projection: withDo('P_foo_Game', 'P_bar_Room'), mainPath: 'o/index.js', warnings })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('P_foo_Game')
+      expect(warnings[0]).not.toContain('P_bar_Room')
+      expect(warnings[0]).toContain('new_sqlite_classes')
+    })
   })
 
   it('模板用 exports 声明 DO 生命周期时不校验 migrations（Cloudflare 规定两者互斥）', () => {
@@ -314,6 +427,78 @@ describe('generateWranglerConfig', () => {
     }
   })
 
+  // 回归：CF_KV_ID=none 以前算「显式跳过」，生成不带 id 的 KV 绑定，降级到 wrangler deploy 时
+  // 它会自动预配一个全新的 KV，快照与插件配置当场失联
+  it('CF_KV_ID=none 不剥离 KV，也不当成跳过：解析状态是 unresolved，交给部署护栏拒绝', () => {
+    const templateBase = { name: 'qqbot', kv_namespaces: [{ binding: 'KV' }] }
+    process.env.CF_KV_ID = 'none'
+    try {
+      const { bindings } = deriveBindings(templateBase)
+      expect(resolveState(bindings).kv).toBe('unresolved')
+      const out = generateWranglerConfig({ base: templateBase, projection: makeProjection(), mainPath: 'out/index.js', bindings })
+      expect(out.kv_namespaces).toEqual([{ binding: 'KV' }])
+    } finally {
+      delete process.env.CF_KV_ID
+    }
+  })
+
+  it('CF_KV_ID=none 而模板写着 id：照用模板的，none 不把它顶掉', () => {
+    const templateBase = { name: 'qqbot', kv_namespaces: [{ binding: 'KV', id: 'kv-tmpl' }] }
+    process.env.CF_KV_ID = 'none'
+    try {
+      const { bindings } = deriveBindings(templateBase)
+      expect(resolveState(bindings).kv).toBe('resolved')
+      const out = generateWranglerConfig({ base: templateBase, projection: makeProjection(), mainPath: 'out/index.js', bindings })
+      expect(out.kv_namespaces).toEqual([{ binding: 'KV', id: 'kv-tmpl' }])
+    } finally {
+      delete process.env.CF_KV_ID
+    }
+  })
+
+  // 回归：以前 D1/R2 分支里有的读法 trim、有的不 trim，` none ` 在推导里算跳过、在剥离判断里不算
+  it('哨兵两边带空白也一样算跳过，剥离判断与解析状态一致', () => {
+    const templateBase = {
+      name: 'qqbot',
+      kv_namespaces: [{ binding: 'KV', id: 'kv1' }],
+      d1_databases: [{ binding: 'DB', database_id: 'd1-tmpl' }],
+      r2_buckets: [{ binding: 'R2', bucket_name: 'b-tmpl' }],
+    }
+    process.env.CF_D1_ID = ' none '
+    process.env.CF_R2_NAME = 'none\n'
+    try {
+      // 不传 bindings：按 base 与环境变量现推，与 CLI 同一套规则
+      const out = generateWranglerConfig({ base: templateBase, projection: makeProjection(), mainPath: 'out/index.js' })
+      expect(out.d1_databases).toBeUndefined()
+      expect(out.r2_buckets).toBeUndefined()
+      expect(out.kv_namespaces).toEqual([{ binding: 'KV', id: 'kv1' }])
+    } finally {
+      delete process.env.CF_D1_ID
+      delete process.env.CF_R2_NAME
+    }
+  })
+
+  it('不传 bindings 时照样从环境变量补 id（去掉首尾空白）', () => {
+    const templateBase = {
+      name: 'qqbot',
+      kv_namespaces: [{ binding: 'KV' }],
+      d1_databases: [{ binding: 'DB', database_name: 'qqbot' }],
+      r2_buckets: [{ binding: 'R2' }],
+    }
+    process.env.CF_KV_ID = ' kv-env '
+    process.env.CF_D1_ID = 'd1-env'
+    process.env.CF_R2_NAME = 'r2-env'
+    try {
+      const out = generateWranglerConfig({ base: templateBase, projection: makeProjection(), mainPath: 'out/index.js' })
+      expect(out.kv_namespaces).toEqual([{ binding: 'KV', id: 'kv-env' }])
+      expect(out.d1_databases).toEqual([{ binding: 'DB', database_name: 'qqbot', database_id: 'd1-env' }])
+      expect(out.r2_buckets).toEqual([{ binding: 'R2', bucket_name: 'r2-env' }])
+    } finally {
+      delete process.env.CF_KV_ID
+      delete process.env.CF_D1_ID
+      delete process.env.CF_R2_NAME
+    }
+  })
+
   // 跨包守门：apps/seed/wrangler.jsonc 是「模板只声明 binding 名、资源标识一律由环境注入」的
   // 唯一范本。一旦有人在模板里写回 bucket_name / database_id / id，上面那条降级路径就会失效，
   // 而未激活 R2 的账户只会在首次部署时才炸——所以在这里把契约钉死。
@@ -363,6 +548,12 @@ describe('resolveState', () => {
       d1: { binding: 'DB', databaseId: PROVISIONED_PLACEHOLDER },
     })
     expect(state).toEqual({ kv: 'resolved', d1: 'skipped', r2: 'skipped' })
+  })
+
+  it('KV 永远不是 skipped：CF_KV_ID=none 时没有 id 就是 unresolved', () => {
+    process.env.CF_KV_ID = 'none'
+    expect(resolveState({ ...base, kv: { binding: 'KV', namespaceId: PROVISIONED_PLACEHOLDER } }).kv).toBe('unresolved')
+    expect(resolveState(base).kv).toBe('resolved')
   })
 })
 

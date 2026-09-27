@@ -36,7 +36,7 @@ describe('project', () => {
     expect(result.modules['runtime.js']).toBe(CODE['runtime'])
     expect(result.modules['plugins/foo.js']).toBe(CODE['foo'])
     expect(result.modules['index.js']).toContain(`const PROJECTION = "sha256-${result.hash}"`)
-    expect(result.hash).toBe(await computeProjectionHash(manifest))
+    expect(result.hash).toBe(await computeProjectionHash(manifest, { core: await computeIntegrity(CODE['runtime'] as string) }))
     expect(result.metadata.annotations['workers/tag']).toBe(result.hash.slice(0, 20))
     expect(result.metadata.exports).toEqual({ P_foo_Game: { type: 'durable-object', storage: 'sqlite' } })
     expect(result.integrity.plugins).toEqual({ foo: manifest.plugins[0]!.integrity, bar: manifest.plugins[1]!.integrity })
@@ -53,7 +53,21 @@ describe('project', () => {
     const result = await project({ manifest, fetchArtifact: fetcher(), bindings, compatibilityDate: '2025-09-01' })
     const expected = await manifestWithRealIntegrity()
     expect(result.integrity.plugins['foo']).toBe(expected.plugins[0]!.integrity)
-    expect(result.hash).toBe(await computeProjectionHash(expected))
+    expect(result.hash).toBe(await computeProjectionHash(expected, { core: result.integrity.core }))
+  })
+
+  // 回归：运行时从机器人仓库现编，改了代码不一定改版本号——以前哈希只看版本号，换了运行时哈希却不变
+  it('runtime 版本号不变、代码变了，投影哈希跟着变', async () => {
+    const manifest = await manifestWithRealIntegrity()
+    const before = await project({ manifest, fetchArtifact: fetcher(), bindings, compatibilityDate: '2025-09-01' })
+    const changed = vi.fn(async (ref: ArtifactRef) =>
+      ref.kind === 'runtime' ? `${CODE['runtime']}\n// 修了个 bug` : (CODE[ref.name] as string),
+    )
+    const after = await project({ manifest, fetchArtifact: changed, bindings, compatibilityDate: '2025-09-01' })
+    expect(after.hash).not.toBe(before.hash)
+    // 同样的输入再投一次，哈希不变
+    const again = await project({ manifest, fetchArtifact: fetcher(), bindings, compatibilityDate: '2025-09-01' })
+    expect(again.hash).toBe(before.hash)
   })
 
   it('integrity 不匹配时抛 IntegrityError', async () => {
@@ -113,5 +127,18 @@ describe('ui 制品', () => {
     expect(without.modules['ui.js']).toBeUndefined()
     expect(without.modules['index.js']).not.toContain('ui')
     expect(withUi.hash).not.toBe(without.hash)
+  })
+
+  it('ui 版本号不变、制品内容变了，投影哈希跟着变', async () => {
+    const { project } = await import('./project.js')
+    const { makeDeployManifest, bindings } = await import('./__fixtures__/manifest.js')
+    const seeded = makeDeployManifest()
+    const manifest = { ...seeded, ui: { version: '0.1.0' }, plugins: seeded.plugins.map(({ integrity: _i, ...p }) => p) }
+    const fetcherWithUi = (ui: string) => async (ref: { kind: string; name: string }) =>
+      ref.kind === 'plugin' ? ref.name : ref.kind === 'ui' ? ui : '// runtime'
+    const base = { bindings, compatibilityDate: '2026-09-01', manifest }
+    const a = await project({ ...base, fetchArtifact: fetcherWithUi('// ui v1') })
+    const b = await project({ ...base, fetchArtifact: fetcherWithUi('// ui v1，改了个按钮') })
+    expect(a.hash).not.toBe(b.hash)
   })
 })

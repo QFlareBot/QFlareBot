@@ -38,6 +38,7 @@ export {
   canonicalProjectionInput,
   computeProjectionHash,
   projectionId,
+  type FrameworkIntegrity,
 } from './hash.js'
 
 export {
@@ -88,8 +89,10 @@ export {
   HealthCheckError,
   SecretLossError,
   type DeployApi,
+  type DeployErrorStage,
   type DeployOptions,
   type HealthCheckOptions,
+  type PluginLoadError,
 } from './deploy.js'
 
 export { stripJsonComments, parseJsonc } from './jsonc.js'
@@ -101,6 +104,7 @@ export {
   suggestMigrationTag,
   PROVISIONED_PLACEHOLDER,
   type WranglerConfig,
+  type WranglerMigration,
   type DerivedBindings,
   type BindingResolution,
 } from './wrangler.js'

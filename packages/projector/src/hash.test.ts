@@ -53,6 +53,19 @@ describe('computeProjectionHash', () => {
     )
   })
 
+  it('给了 core / ui 的 integrity 就一并进规范文本；不给时与以前逐字一致', async () => {
+    const withUi = { ...makeDeployManifest(), ui: { version: '0.1.0' } }
+    expect(canonicalProjectionInput(withUi, { core: 'sha256-cmVudA==', ui: 'sha256-dWk=' })).toBe(
+      'core@0.3.0+sha256-cmVudA==\nui@0.1.0+sha256-dWk=\nbar@2.0.0+sha256-YmFy\nfoo@1.2.0+sha256-Zm9v',
+    )
+    expect(canonicalProjectionInput(withUi)).toBe('core@0.3.0\nui@0.1.0\nbar@2.0.0+sha256-YmFy\nfoo@1.2.0+sha256-Zm9v')
+
+    // 版本号不变、运行时内容变了：哈希必须不同
+    const a = await computeProjectionHash(makeDeployManifest(), { core: 'sha256-a' })
+    const b = await computeProjectionHash(makeDeployManifest(), { core: 'sha256-b' })
+    expect(a).not.toBe(b)
+  })
+
   it('projectionId 加 sha256- 前缀', () => {
     expect(projectionId('abc')).toBe('sha256-abc')
   })

@@ -111,6 +111,37 @@ describe('buildPlugin', () => {
     expect(result.manifest.name).toBe('demo')
   })
 
+  // 回归：SDK 经 alias 指向构建机上机器人仓库的绝对路径，esbuild 把它相对插件目录的路径写进产物注释
+  // （`// ../../../../opt/buildhome/repo/packages/sdk/src/plugin.ts`），同一组插件换台机器 integrity 就不同
+  it('产物与插件目录在哪无关：SDK 在固定的虚拟命名空间里', async () => {
+    await writePlugin(PLUGIN_SOURCE)
+    const first = await readFile((await buildPlugin({ cwd: dir, alias })).outFile, 'utf8')
+
+    // 同样的源码放到深了三层的另一个目录：相对 SDK 的路径完全不同
+    const deeper = path.join(dir, 'a', 'b', 'c')
+    await mkdir(path.join(deeper, 'src'), { recursive: true })
+    await writeFile(path.join(deeper, 'package.json'), await readFile(path.join(dir, 'package.json'), 'utf8'))
+    await writeFile(path.join(deeper, 'src/index.ts'), PLUGIN_SOURCE)
+    const second = await readFile((await buildPlugin({ cwd: deeper, alias })).outFile, 'utf8')
+
+    expect(second).toBe(first)
+    expect(first).toContain('// qqbot-sdk:src/')
+    expect(first).not.toMatch(/^\/\/ \.\.\//m)
+    // 内容与以前一样：SDK 照常打进来，cloudflare:* 照常留作外部依赖
+    expect(first).toContain('function definePlugin')
+    expect(importSpecifiers(first)).toEqual(['cloudflare:workers'])
+  })
+
+  it('SDK 在命名空间里照样按 package.json 的 sideEffects 摇树：只用 definePlugin 时不带 DO 基类', async () => {
+    await writePlugin(`
+import { definePlugin } from '@qqbot/sdk'
+export default definePlugin({ name: 'demo', commands: { hi: () => {} } })
+`)
+    const code = await readFile((await buildPlugin({ cwd: dir, alias })).outFile, 'utf8')
+    expect(code).not.toContain('cloudflare:workers')
+    expect(code).not.toContain('PluginDurableObject')
+  })
+
   it('入口未默认导出 definePlugin 时报错且不产出文件', async () => {
     await writePlugin(`export const plugin = { name: 'demo' }`)
     await expect(buildPlugin({ cwd: dir, alias })).rejects.toThrow('入口必须默认导出 definePlugin')

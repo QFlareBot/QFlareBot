@@ -21,7 +21,9 @@ if (!cwd || !resultFile) {
   process.exit(2)
 }
 
-// SDK 一律用机器人仓库这一份：插件自己装的（或者写成 file:../ 的）不算数，契约只能有一个版本
+// SDK 一律用机器人仓库这一份：插件自己装的（或者写成 file:../ 的）不算数，契约只能有一个版本。
+// 它是构建机上的绝对路径，buildPlugin 会把它解析进固定的虚拟命名空间（plugin-cli 的 sdkNamespace），
+// 产物里不带这台机器的目录结构，同一组插件在哪台机器上构建 integrity 都一样
 let sdkEntry
 try {
   sdkEntry = fileURLToPath(import.meta.resolve('@qqbot/sdk'))

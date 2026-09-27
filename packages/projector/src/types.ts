@@ -64,7 +64,7 @@ export interface Projection {
   mainModule: 'index.js'
   /** 文件名 → 源码 */
   modules: Record<string, string>
-  /** 由 core 版本 + 各插件 name@version+integrity 确定性计算的 sha256（hex） */
+  /** 由 core / ui 的版本与实际制品 integrity + 各插件 name@version+integrity 确定性计算的 sha256（hex） */
   hash: string
   metadata: VersionMetadata
   /** 本次实际拉取到的制品摘要（SRI），供上层回写清单锁定版本 */

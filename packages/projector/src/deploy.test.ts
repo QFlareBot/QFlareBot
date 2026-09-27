@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
+import { CloudflareApiError } from './cloudflare.js'
 import { type DeployApi, HealthCheckError, SecretLossError, deploy } from './deploy.js'
 import type { DeployStep } from './types.js'
 
@@ -38,8 +39,9 @@ describe('deploy', () => {
     expect(result).toEqual({ versionId: 'ver-1', hash: projection.hash, previewUrl: 'https://ver-1-my-bot.acme.workers.dev' })
     expect(api.uploadVersion).toHaveBeenCalledWith({ scriptName: 'my-bot', projection, message: '发布' })
     expect(api.deployVersion).toHaveBeenCalledWith({ scriptName: 'my-bot', versionId: 'ver-1', message: '发布' })
+    // 默认带 plugins=1：让运行时把插件都求值一遍，import 就抛错的插件在切流量前现形
     expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
-      'https://ver-1-my-bot.acme.workers.dev/healthz',
+      'https://ver-1-my-bot.acme.workers.dev/healthz?plugins=1',
     )
     expect(steps.map((s) => s.stage)).toEqual(['upload', 'upload', 'health', 'health', 'promote', 'done'])
   })
@@ -110,6 +112,65 @@ describe('deploy', () => {
     expect(api.deployVersion).toHaveBeenCalledTimes(1)
   })
 
+  it('503 带 pluginErrors：错误里列出是哪些插件，不切流量（重试次数照旧）', async () => {
+    const api = fakeDeployApi()
+    const body = JSON.stringify({ ok: false, plugins: 2, pluginErrors: [{ name: 'weather', message: 'boom at import' }, { name: 1 }] })
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 503, headers: { 'content-type': 'application/json' } }))
+    const err = await deploy({
+      api,
+      scriptName: 's',
+      projection: makeProjection(),
+      healthCheck: { retries: 2, intervalMs: 0 },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    }).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(HealthCheckError)
+    expect((err as HealthCheckError).pluginErrors).toEqual([{ name: 'weather', message: 'boom at import' }])
+    expect((err as Error).message).toContain('weather（boom at import）')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(api.deployVersion).not.toHaveBeenCalled()
+  })
+
+  it('最后一次是网络抖动时，之前报过的插件加载失败不丢', async () => {
+    const api = fakeDeployApi()
+    const body = JSON.stringify({ ok: false, pluginErrors: [{ name: 'weather', message: 'boom' }] })
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(body, { status: 503 }))
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+    const err = await deploy({
+      api,
+      scriptName: 's',
+      projection: makeProjection(),
+      healthCheck: { retries: 2, intervalMs: 0 },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    }).catch((e: unknown) => e)
+    expect((err as HealthCheckError).pluginErrors).toEqual([{ name: 'weather', message: 'boom' }])
+    expect((err as Error).message).toContain('ECONNRESET')
+    expect((err as Error).message).toContain('weather（boom）')
+  })
+
+  it('旧运行时（不认识 plugins=1）或非 JSON 的错误页：pluginErrors 为空，行为同以前', async () => {
+    const api = fakeDeployApi()
+    const fetchImpl = healthFetch([502])
+    const err = await deploy({
+      api,
+      scriptName: 's',
+      projection: makeProjection(),
+      healthCheck: { retries: 1, intervalMs: 0 },
+      fetchImpl,
+    }).catch((e: unknown) => e)
+    expect((err as HealthCheckError).pluginErrors).toEqual([])
+    expect((err as Error).message).toBe('健康检查失败（1 次）：HTTP 502，未切换流量')
+  })
+
+  it('显式给了 path 就原样用，不追加 plugins=1', async () => {
+    const api = fakeDeployApi()
+    const fetchImpl = healthFetch([200])
+    await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: { path: '/ready' }, fetchImpl })
+    expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe('https://ver-1-s.acme.workers.dev/ready')
+  })
+
   it('含 DO 但显式传入 healthCheck 对象时仍执行检查', async () => {
     const api = fakeDeployApi()
     const projection = makeProjection({
@@ -118,6 +179,45 @@ describe('deploy', () => {
     const fetchImpl = healthFetch([200])
     await deploy({ api, scriptName: 's', projection, healthCheck: {}, fetchImpl })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('deploy 错误带阶段（调用方据此决定能不能降级）', () => {
+  const cfError = (status: number) => new CloudflareApiError(`HTTP ${status}`, status, [])
+  const stageOf = (err: unknown) => (err as { stage?: string }).stage
+
+  it('上传失败标 upload', async () => {
+    const api = { ...fakeDeployApi(), uploadVersion: vi.fn(async () => Promise.reject(cfError(403))) }
+    const err = await deploy({ api, scriptName: 's', projection: makeProjection(), healthCheck: false }).catch((e: unknown) => e)
+    expect(stageOf(err)).toBe('upload')
+  })
+
+  it('版本上传之后的每一步都标出自己的阶段——这些 403 不能降级（会绕过健康检查）', async () => {
+    const subdomain = { ...fakeDeployApi(), getWorkersSubdomain: vi.fn(async () => Promise.reject(cfError(403))) }
+    const e1 = await deploy({ api: subdomain, scriptName: 's', projection: makeProjection(), healthCheck: {} }).catch((e: unknown) => e)
+    expect(stageOf(e1)).toBe('subdomain')
+    expect(subdomain.deployVersion).not.toHaveBeenCalled()
+
+    const promote = { ...fakeDeployApi(), deployVersion: vi.fn(async () => Promise.reject(cfError(403))) }
+    const e2 = await deploy({ api: promote, scriptName: 's', projection: makeProjection(), healthCheck: false }).catch((e: unknown) => e)
+    expect(stageOf(e2)).toBe('promote')
+
+    const health = await deploy({
+      api: fakeDeployApi(),
+      scriptName: 's',
+      projection: makeProjection(),
+      healthCheck: { retries: 1, intervalMs: 0 },
+      fetchImpl: healthFetch([500]),
+    }).catch((e: unknown) => e)
+    expect(stageOf(health)).toBe('health')
+
+    const secrets = {
+      ...fakeDeployApi(),
+      listSecretNames: vi.fn().mockResolvedValueOnce(['A']).mockResolvedValueOnce([]),
+    }
+    const e3 = await deploy({ api: secrets, scriptName: 's', projection: makeProjection(), healthCheck: false }).catch((e: unknown) => e)
+    expect(e3).toBeInstanceOf(SecretLossError)
+    expect(stageOf(e3)).toBe('secrets')
   })
 })
 

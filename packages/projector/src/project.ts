@@ -35,7 +35,10 @@ export async function project(opts: ProjectOptions): Promise<Projection> {
   )
   const resolved: DeployManifest = { core: manifest.core, plugins: resolvedPlugins }
   if (manifest.ui) resolved.ui = manifest.ui
-  const hash = await computeProjectionHash(resolved)
+  // 运行时 / 面板的实际内容也进哈希：它们从机器人仓库现编，改了代码不一定改版本号
+  const coreIntegrity = await computeIntegrity(runtimeCode)
+  const uiIntegrity = uiCode !== null ? await computeIntegrity(uiCode) : undefined
+  const hash = await computeProjectionHash(resolved, { core: coreIntegrity, ...(uiIntegrity ? { ui: uiIntegrity } : {}) })
 
   const modules: Record<string, string> = {
     'index.js': generateGlue({ manifest: resolved, hash }),
@@ -61,8 +64,8 @@ export async function project(opts: ProjectOptions): Promise<Projection> {
     hash,
     metadata,
     integrity: {
-      core: await computeIntegrity(runtimeCode),
-      ...(uiCode !== null ? { ui: await computeIntegrity(uiCode) } : {}),
+      core: coreIntegrity,
+      ...(uiIntegrity ? { ui: uiIntegrity } : {}),
       plugins: Object.fromEntries(resolvedPlugins.map((p) => [p.name, p.integrity as string])),
     },
   }
