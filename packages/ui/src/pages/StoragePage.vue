@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CloudOff, Database } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client.js'
 import type { StorageReport, StorageUsage } from '../api/types.js'
@@ -80,26 +81,17 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
 
 <template>
   <div>
-    <PageHeader
-      title="存储"
-      description="插件的数据按名字前缀归属框架管理。卸载默认保留数据，留下的会列在孤儿数据里，可以单独清掉。"
-    />
+    <PageHeader title="存储" description="卸载插件默认保留它的数据，留下的列在「孤儿数据」里，可以单独清掉。" />
 
     <QCard flush title="已装插件" description="每个插件占用的 KV 键、D1 表与行数、R2 对象">
       <template #actions>
         <QButton size="sm" variant="ghost" :loading="loading" @click="refresh">刷新</QButton>
       </template>
       <QSkeleton v-if="!report && loading" :rows="3" label="正在读取存储用量" />
-      <QEmpty
-        v-else-if="!report"
-        title="读不到存储信息"
-        description="管理 API 未就绪或请求失败，点刷新重试。"
-      />
-      <QEmpty
-        v-else-if="empty"
-        title="还没有任何插件数据"
-        description="插件往 ctx.kv / ctx.db / ctx.r2 写入后会出现在这里。"
-      />
+      <QEmpty v-else-if="!report" :icon="CloudOff" title="读不到存储信息" description="管理 API 未就绪或请求失败，点刷新重试。">
+        <QButton size="sm" @click="refresh">重试</QButton>
+      </QEmpty>
+      <QEmpty v-else-if="empty" :icon="Database" title="还没有任何插件数据" description="插件往 ctx.kv / ctx.db / ctx.r2 写入后会出现在这里。" />
       <ul v-else-if="report.plugins.length" class="divide-y divide-border">
         <li v-for="u in report.plugins" :key="u.plugin" class="px-4 py-2.5">
           <div class="flex flex-wrap items-center gap-2">
@@ -119,7 +111,7 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
       flush
       class="mt-4"
       title="孤儿数据"
-      description="不属于任何已装插件——卸载时选了保留，或插件被手工移出清单"
+      description="不属于任何已装插件：卸载时选了保留，或插件被手工移出了清单"
     >
       <ul class="divide-y divide-border">
         <li v-for="u in report.orphans" :key="u.plugin" class="flex items-center gap-2 px-4 py-2.5">
@@ -142,7 +134,7 @@ const empty = computed(() => report.value && !report.value.plugins.length && !re
       flush
       class="mt-4"
       title="对不上插件的表"
-      description="表名带 p_ 前缀但匹配不到任何已知插件名（安装账本被清空后可能出现），只能用 wrangler d1 手工处置"
+      description="表名带 p_ 前缀、但对不上任何已知插件（安装账本被清空后会出现），只能用 wrangler d1 手工处置"
     >
       <p class="px-4 py-2.5 font-mono text-xs break-all text-fg-muted">{{ report.unattributedTables.join('  ') }}</p>
     </QCard>

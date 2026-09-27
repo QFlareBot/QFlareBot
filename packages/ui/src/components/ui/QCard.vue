@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** flush：内容区不留内边距（表格、列表直接贴边） */
-defineProps<{ title?: string; description?: string; flush?: boolean }>()
+/** flush：内容区不留内边距（表格、列表直接贴边），与标题之间画一条分隔线；divider=false 去掉这条线（内容折叠起来时） */
+withDefaults(defineProps<{ title?: string; description?: string; flush?: boolean; divider?: boolean }>(), { divider: true })
 </script>
 
 <template>
@@ -12,6 +12,6 @@ defineProps<{ title?: string; description?: string; flush?: boolean }>()
       </div>
       <div v-if="$slots.actions" class="flex shrink-0 items-center gap-2"><slot name="actions" /></div>
     </header>
-    <div :class="flush ? 'border-t border-border' : title || $slots.actions ? 'px-4 pt-1 pb-4' : 'p-4'"><slot /></div>
+    <div :class="flush ? divider && 'border-t border-border' : title || $slots.actions ? 'px-4 pt-1 pb-4' : 'p-4'"><slot /></div>
   </section>
 </template>

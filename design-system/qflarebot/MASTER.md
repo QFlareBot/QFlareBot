@@ -23,12 +23,14 @@
 | 更弱的文字 | `--qb-fg-subtle` | `#8E9A93` | `#6A766F` |
 | 分隔线 | `--qb-border` | `#E6EBE7` | `#222A26` |
 | 控件边框 | `--qb-border-strong` | `#D2DAD4` | `#313B35` |
-| 强调色（主按钮、开关、选中） | `--qb-accent` | `#16A34A` | `#2FCA6A` |
-| 焦点环 | `--qb-ring` | `#15803D` | `#4ADE80` |
+| 主按钮（淡绿底深绿字） | `--qb-primary` / `--qb-on-primary` | `#D5EADC` / `#1B5A38` | 16% 透明绿 / `#A6E8C1` |
+| 强调色（开关、勾选、焦点、链接） | `--qb-accent` | `#34885A` | `#5FC58A` |
+| 焦点环 | `--qb-ring` | `#34885A` | `#7FD9A5` |
+| 品牌绿（只用于标志） | `--qb-brand` | `#16A34A` | `#22C55E` |
 
 **状态色三档，旁边必须有文字或图标**，不靠颜色单独传达：成功 `--qb-success`、警告 `--qb-warning`、失败 `--qb-danger`，各有一个浅底 `*-bg` 用于徽标和提示条。浅色下三者都压到了 4.5:1 以上。
 
-强调色只有一个（品牌绿），用于主按钮、开关打开、侧栏里的状态点；其余交互用前景色的深浅表达。
+绿色分三档：主按钮用最淡的一档（`--qb-primary`，文字对比度约 6.5:1），开关、勾选框、焦点用压低饱和度的 `--qb-accent`，鲜艳的品牌绿只留给标志。其余交互用前景色的深浅表达。
 
 ## 层次
 
@@ -78,12 +80,18 @@
 
 - **桌面（≥768px）**：左侧 240px 的浮动半透明侧栏，内容区最宽 1152px。页面跟着文档滚动。
 - **手机**：顶栏（菜单按钮 + 标志 + 机器人状态）+ 左侧抽屉。**底部不放任何固定元素**：iOS 26 的 Safari 底栏是悬浮的，贴底的 fixed 元素会被画偏或挡住；toast 也放在顶栏下方。四周按 `env(safe-area-inset-*)` 留边。
+- **主导航 5 项**：概览、插件、存储、调试、设置。「添加插件」（`/#/market`，市场 + 仓库链接）从插件页进，点亮「插件」。
+- **一页里有几块不相干的内容时用页内标签**（`QSegmented`），标签记在地址的查询参数里（`useQueryTab`），刷新、分享都停在同一处：设置页的分区、调试页的模拟 / 真实发送、添加插件的两种方式。
+- **说明文字一句话**：卡片标题下的说明只写一句，细节放进字段的 hint 或可展开的地方。
 
 ## 组件
 
-基础组件在 `packages/ui/src/components/ui/`：`QButton`（primary / secondary / ghost / danger 浅红 / destructive 实心红）、`QCard`、`QBadge`、`QInput` / `QSelect` / `QTextarea`（共用 `.qb-control`）、`QSwitch`、`StatusDot`、`QEmpty`、`QSkeleton`、`QCollapse`、`QDialog`。
+基础组件在 `packages/ui/src/components/ui/`：`QButton`（primary 淡绿 / secondary / ghost / danger 浅红 / destructive 实心红）、`QCard`、`QBadge`、`QInput` / `QSelect` / `QTextarea`（共用 `.qb-control`）、`QListInput`、`QSegmented`、`QSettingRow`、`QSwitch`、`StatusDot`、`QEmpty`（可带图标与下一步按钮）、`QSkeleton`、`QCollapse`、`QDialog`。
 
-**确认一律用 `useConfirm()`**，不用浏览器的 `confirm()`：危险操作红色按钮、默认聚焦「取消」，可带一条警告和一个勾选项（如「同时清空数据」）。
+- **确认一律用 `useConfirm()`**，不用浏览器的 `confirm()`：危险操作红色按钮、默认聚焦「取消」，可带一条警告和一个勾选项（如「同时清空数据」）。
+- **列表型的值用 `QListInput` 逐条输入**（管理员 openid、群 ID、插件配置里的字符串列表），不用「一行一个」的文本框：回车新增下一条，空行退格删掉，一次粘贴多行自动拆开。对外仍是 `string[]`。
+- **下拉框和勾选框统一画**：`QSelect` 仍是原生 select（键盘和手机选择器照旧），只换箭头；勾选框在 base 层统一样式。
+- **设置项用 `QSettingRow`**：左边名称与说明，右边控件。
 
 ## 插件页面
 

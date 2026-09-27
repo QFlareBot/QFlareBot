@@ -20,6 +20,10 @@
   --color-overlay: var(--qb-overlay);
   --color-accent: var(--qb-accent);
   --color-on-accent: var(--qb-on-accent);
+  --color-primary: var(--qb-primary);
+  --color-primary-hover: var(--qb-primary-hover);
+  --color-on-primary: var(--qb-on-primary);
+  --color-brand: var(--qb-brand);
   --color-ring: var(--qb-ring);
   --color-success: var(--qb-success);
   --color-warning: var(--qb-warning);
@@ -85,9 +89,58 @@
     outline: 2px solid var(--qb-ring);
     outline-offset: 2px;
   }
-  input[type='checkbox'],
   input[type='radio'] {
     accent-color: var(--qb-accent);
+  }
+  /* 勾选框统一画：浏览器自带的那个在柔光风格里太突兀；勾号用遮罩画，颜色跟着主题走 */
+  input[type='checkbox'] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-grid;
+    place-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1.5px solid var(--qb-border-strong);
+    border-radius: 5px;
+    background: var(--qb-input);
+    cursor: pointer;
+    transition:
+      background-color var(--qb-duration) var(--qb-ease),
+      border-color var(--qb-duration) var(--qb-ease);
+  }
+  input[type='checkbox']::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    background: var(--qb-on-accent);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.3 5 8.8l4.5-5.6'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.3 5 8.8l4.5-5.6'/%3E%3C/svg%3E") center / contain no-repeat;
+    transform: scale(0);
+    transition: transform var(--qb-duration-slow) var(--qb-ease-spring);
+  }
+  input[type='checkbox']:checked {
+    border-color: var(--qb-accent);
+    background: var(--qb-accent);
+  }
+  input[type='checkbox']:checked::before {
+    transform: scale(1);
+  }
+  input[type='checkbox']:indeterminate {
+    border-color: var(--qb-accent);
+    background: var(--qb-accent);
+  }
+  input[type='checkbox']:indeterminate::before {
+    height: 2px;
+    border-radius: 1px;
+    -webkit-mask: none;
+    mask: none;
+    transform: scale(1);
+  }
+  input[type='checkbox']:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }
 

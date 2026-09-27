@@ -59,9 +59,14 @@
   --qb-border: #e6ebe7;
   --qb-border-strong: #d2dad4;
   --qb-card-border: rgb(255 255 255 / 0.9);
-  --qb-accent: #16a34a;
+  /* 强调色（开关、选中、焦点）：压低了饱和度的绿；主按钮用更淡的一档，品牌绿只留给标志 */
+  --qb-accent: #34885a;
   --qb-on-accent: #ffffff;
-  --qb-ring: #15803d;
+  --qb-primary: #d5eadc;
+  --qb-primary-hover: #c8e2d1;
+  --qb-on-primary: #1b5a38;
+  --qb-brand: #16a34a;
+  --qb-ring: #34885a;
 
   /* 状态色：三档，旁边必须有文字或图标 */
   --qb-success: #15803d;
@@ -103,9 +108,13 @@
   --qb-border: #222a26;
   --qb-border-strong: #313b35;
   --qb-card-border: rgb(255 255 255 / 0.05);
-  --qb-accent: #2fca6a;
-  --qb-on-accent: #062512;
-  --qb-ring: #4ade80;
+  --qb-accent: #5fc58a;
+  --qb-on-accent: #07210f;
+  --qb-primary: rgb(95 197 138 / 0.16);
+  --qb-primary-hover: rgb(95 197 138 / 0.24);
+  --qb-on-primary: #a6e8c1;
+  --qb-brand: #22c55e;
+  --qb-ring: #7fd9a5;
   --qb-success: #3ccf78;
   --qb-warning: #eab04c;
   --qb-danger: #ef6b6b;
@@ -139,9 +148,13 @@
     --qb-border: #222a26;
     --qb-border-strong: #313b35;
     --qb-card-border: rgb(255 255 255 / 0.05);
-    --qb-accent: #2fca6a;
-    --qb-on-accent: #062512;
-    --qb-ring: #4ade80;
+    --qb-accent: #5fc58a;
+    --qb-on-accent: #07210f;
+    --qb-primary: rgb(95 197 138 / 0.16);
+    --qb-primary-hover: rgb(95 197 138 / 0.24);
+    --qb-on-primary: #a6e8c1;
+    --qb-brand: #22c55e;
+    --qb-ring: #7fd9a5;
     --qb-success: #3ccf78;
     --qb-warning: #eab04c;
     --qb-danger: #ef6b6b;
@@ -233,12 +246,11 @@
   transform: scale(0.97);
 }
 .qb-btn--primary {
-  background: var(--qb-accent);
-  color: var(--qb-on-accent);
+  background: var(--qb-primary);
+  color: var(--qb-on-primary);
 }
 .qb-btn--primary:hover {
-  background: var(--qb-accent);
-  opacity: 0.88;
+  background: var(--qb-primary-hover);
 }
 .qb-input {
   height: var(--qb-control-height);

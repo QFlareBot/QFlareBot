@@ -4,7 +4,10 @@ import { nextTick, ref, toRef, watch } from 'vue'
 import { useScrollLock } from '../../composables/useScrollLock.js'
 import { focusFirst, trapTab } from '../../lib/focusTrap.js'
 
-const props = withDefaults(defineProps<{ open: boolean; labelledby?: string; describedby?: string; role?: 'dialog' | 'alertdialog' }>(), { role: 'dialog' })
+const props = withDefaults(
+  defineProps<{ open: boolean; labelledby?: string; describedby?: string; role?: 'dialog' | 'alertdialog'; size?: 'md' | 'lg' }>(),
+  { role: 'dialog', size: 'md' },
+)
 const emit = defineEmits<{ close: [] }>()
 
 const panel = ref<HTMLElement | null>(null)
@@ -50,7 +53,8 @@ function onKeydown(e: KeyboardEvent) {
           :aria-labelledby="labelledby"
           :aria-describedby="describedby"
           tabindex="-1"
-          class="qb-dialog max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl border border-card-border bg-surface p-5 shadow-overlay outline-none"
+          class="qb-dialog max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-xl border border-card-border bg-surface p-5 shadow-overlay outline-none"
+          :class="size === 'lg' ? 'max-w-xl' : 'max-w-md'"
         >
           <slot />
         </div>

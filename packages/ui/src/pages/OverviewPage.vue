@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { Activity, Blocks, Bot, Check, Copy, Radio, RefreshCw, Trash2, TriangleAlert } from 'lucide-vue-next'
+import { Activity, Blocks, Bot, Check, Copy, Inbox, KeyRound, Radio, RefreshCw, Trash2, TriangleAlert } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api/client.js'
-import type { EventRecord, LogsResult, MatchRecord } from '../api/types.js'
+import type { EventRecord, LogsResult } from '../api/types.js'
+import EventList from '../components/EventList.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatTile from '../components/StatTile.vue'
-import QBadge from '../components/ui/QBadge.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
 import QSkeleton from '../components/ui/QSkeleton.vue'
-import StatusDot from '../components/ui/StatusDot.vue'
 import { useConfirm } from '../composables/useConfirm.js'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
@@ -136,10 +135,10 @@ async function clear() {
 
 const eventsDescription = computed(() =>
   live.value
-    ? '实时调试中：新事件连同正文写进 D1，最多留 50 条；关掉页面或切到后台即停止'
+    ? '实时调试中：新事件连同正文写进 D1，最多 50 条，离开页面就停'
     : status.value?.snapshot.logContent
-      ? '来自 Workers Logs，约 15 秒延迟；正文按设置记在日志里'
-      : '来自 Workers Logs，约 15 秒延迟，不含消息正文；要看正文请开实时调试，或在设置里让日志记录正文',
+      ? '来自 Workers Logs，约 15 秒延迟'
+      : '来自 Workers Logs，约 15 秒延迟，不含正文；要看正文就开实时调试',
 )
 /** 实时调试总带正文；日志里有正文（设置开过）时也显示这一列 */
 const showContent = computed(() => live.value || events.value.some((e) => e.content))
@@ -182,24 +181,6 @@ function copyWebhook() {
     () => push('浏览器不让写剪贴板，请手动选中复制', 'warning'),
   )
 }
-function fmtTime(ts: number) {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
-}
-function matched(e: EventRecord): MatchRecord[] {
-  try {
-    return JSON.parse(e.matched) as MatchRecord[]
-  } catch {
-    return []
-  }
-}
-function errorCount(e: EventRecord): number {
-  try {
-    return (JSON.parse(e.errors) as unknown[]).length
-  } catch {
-    return 0
-  }
-}
-const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', guild: '频道', guild_dm: '频道私信', unknown: '—' }
 </script>
 
 <template>
@@ -282,43 +263,15 @@ const sceneLabel: Record<string, string> = { group: '群聊', c2c: '单聊', gui
         <QSkeleton :rows="4" label="正在读取 Workers Logs" />
         <p class="border-t border-border px-4 py-2.5 text-xs text-fg-muted">正在读取 Workers Logs：日志查询要扫整个账户的日志，可能要十几秒。</p>
       </template>
-      <QEmpty v-else-if="!live && logsHint" :title="logsHint.title" :description="logsHint.description" />
-      <!-- 只有真实 webhook 会写记录，「调试」页的模拟是干跑，不要在这里引导过去 -->
+      <QEmpty v-else-if="!live && logsHint" :icon="KeyRound" :title="logsHint.title" :description="logsHint.description" />
+      <!-- 只有真实 webhook 会写记录，「调试」页的模拟是干跑，不计入这里 -->
       <QEmpty
         v-else-if="!events.length"
+        :icon="Inbox"
         title="还没有事件"
-        :description="
-          live
-            ? '实时调试开着，机器人收到真实消息后会马上出现在这里。「调试」页的模拟事件是干跑，不计入记录。'
-            : '机器人收到真实消息后，约 15 秒会出现在这里。「调试」页的模拟事件是干跑，不计入记录。'
-        "
+        :description="live ? '机器人收到真实消息后会马上出现在这里。' : '机器人收到真实消息后，约 15 秒会出现在这里。调试页的模拟事件不计入。'"
       />
-      <div v-else class="overflow-x-auto">
-        <table class="qb-table">
-          <thead><tr><th>时间</th><th>事件</th><th>场景</th><th v-if="showContent">内容</th><th>命中</th><th>结果</th></tr></thead>
-          <!-- 轮询拉到的新事件淡入并短暂高亮；首屏不做（TransitionGroup 默认不对初次渲染动画） -->
-          <TransitionGroup tag="tbody" name="row">
-            <tr v-for="e in events" :key="e.id">
-              <td class="font-mono text-xs text-fg-muted">{{ fmtTime(e.ts) }}</td>
-              <td class="font-mono text-xs">{{ e.event.replace(/^qq\./, '') }}</td>
-              <td class="text-fg-muted">{{ sceneLabel[e.scene] ?? (e.scene || '—') }}</td>
-              <td v-if="showContent" class="max-w-64 truncate" :title="e.content">{{ e.content || '—' }}</td>
-              <td>
-                <span class="flex flex-wrap gap-1">
-                  <QBadge v-for="m in matched(e)" :key="m.plugin + m.name" tone="neutral">{{ m.plugin }}<span class="text-fg-subtle">/{{ m.name }}</span></QBadge>
-                  <span v-if="!matched(e).length" class="text-xs text-fg-subtle">无</span>
-                </span>
-              </td>
-              <td>
-                <StatusDot v-if="errorCount(e)" tone="danger" :label="`${errorCount(e)} 个错误`" />
-                <StatusDot v-else-if="e.failed" tone="danger" :label="`发送失败 ${e.failed} 条`" />
-                <StatusDot v-else-if="e.outbox" tone="success" :label="`回复 ${e.outbox} 条`" />
-                <StatusDot v-else tone="neutral" label="无回复" />
-              </td>
-            </tr>
-          </TransitionGroup>
-        </table>
-      </div>
+      <EventList v-else :events="events" :show-content="showContent" />
     </QCard>
   </div>
 </template>

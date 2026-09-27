@@ -11,6 +11,7 @@ import type { JsonSchema } from '../api/types.js'
 import { enumIndex, enumOptions, enumValueAt, parseJsonDraft } from '../lib/schemaForm.js'
 import QField from './ui/QField.vue'
 import QInput from './ui/QInput.vue'
+import QListInput from './ui/QListInput.vue'
 import QSelect from './ui/QSelect.vue'
 import QSwitch from './ui/QSwitch.vue'
 import QTextarea from './ui/QTextarea.vue'
@@ -73,8 +74,8 @@ function kind(s: JsonSchema): 'enum' | 'string' | 'number' | 'boolean' | 'string
 function str(v: unknown): string {
   return v === undefined || v === null ? '' : String(v)
 }
-function lines(v: unknown): string {
-  return Array.isArray(v) ? v.join('\n') : ''
+function list(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(String) : []
 }
 function jsonText(v: unknown): string {
   return v === undefined ? '' : JSON.stringify(v, null, 2)
@@ -123,14 +124,13 @@ function jsonText(v: unknown): string {
           <QSwitch :model-value="!!(modelValue[key] ?? s.default)" :label="s.title ?? key" @update:model-value="set(key, $event)" />
           <span class="text-sm text-fg-muted">{{ modelValue[key] ?? s.default ? '开' : '关' }}</span>
         </div>
-        <QTextarea
+        <QListInput
           v-else-if="kind(s) === 'string[]'"
           :id="`cfg-${key}`"
-          :model-value="lines(modelValue[key])"
-          placeholder="每行一项"
-          :rows="3"
+          :model-value="list(modelValue[key])"
+          :label="s.title ?? key"
           :described-by="describedBy"
-          @update:model-value="set(key, $event.split('\n').map((l) => l.trim()).filter(Boolean))"
+          @update:model-value="set(key, $event)"
         />
         <QTextarea
           v-else

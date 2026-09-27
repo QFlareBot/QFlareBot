@@ -15,6 +15,6 @@ const gap = `qb-logo-gap-${useId()}`
       <circle cx="29" cy="34" r="18" fill="none" class="stroke-fg" stroke-width="11" />
       <path d="M50.3 43.9 55 59 38.9 55.3 38.2 43.2Z" class="fill-fg" />
     </g>
-    <path d="M47 4Q48.6 14.4 59 16 48.6 17.6 47 28 45.4 17.6 35 16 45.4 14.4 47 4Z" class="fill-accent" />
+    <path d="M47 4Q48.6 14.4 59 16 48.6 17.6 47 28 45.4 17.6 35 16 45.4 14.4 47 4Z" class="fill-brand" />
   </svg>
 </template>

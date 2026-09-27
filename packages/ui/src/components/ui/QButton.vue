@@ -19,7 +19,7 @@ const classes = computed(() => [
   'disabled:opacity-50 disabled:cursor-not-allowed',
   props.size === 'sm' ? 'h-7 px-3 text-xs' : 'h-8 px-4 text-sm',
   {
-    primary: 'bg-accent border-accent text-on-accent enabled:hover:opacity-90',
+    primary: 'bg-primary border-transparent text-on-primary enabled:hover:bg-primary-hover',
     secondary: 'bg-surface border-border-strong text-fg shadow-[0_1px_2px_rgb(0_0_0/0.04)] enabled:hover:bg-surface-muted',
     ghost: 'bg-transparent border-transparent text-fg-muted enabled:hover:bg-surface-muted enabled:hover:text-fg',
     danger: 'bg-danger-bg border-transparent text-danger enabled:hover:bg-danger/15',

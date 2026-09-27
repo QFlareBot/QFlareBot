@@ -10,7 +10,7 @@ withDefaults(defineProps<{ tone?: 'neutral' | 'success' | 'warning' | 'danger' |
       success: 'bg-success-bg text-success',
       warning: 'bg-warning-bg text-warning',
       danger: 'bg-danger-bg text-danger',
-      accent: 'bg-success-bg text-accent',
+      accent: 'bg-primary text-on-primary',
     }[tone]"
   >
     <slot />
