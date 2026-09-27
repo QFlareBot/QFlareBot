@@ -49,15 +49,21 @@ export default definePlugin({
 
 工作方式：
 
-1. 面板向 `/admin/plugins/foo/bridge` 取一个 **1 小时、限定 foo** 的桥接令牌，首次通过 `?token=` 传给 iframe（iframe 首个请求带不了 Authorization 头），之后通过 postMessage 每 45 分钟刷新。面板上的「新窗口打开」同样把一枚新令牌放进 `?token=`，但新窗口里没有桥来刷新，1 小时后要回面板重新打开。
-2. iframe 带 `sandbox="allow-scripts allow-forms allow-popups allow-downloads"`，没有 `allow-same-origin`，所以是 opaque origin：拿不到面板的 localStorage 与会话令牌。它对同源接口的请求按跨域处理，因此面板资源与 `/p/*` 路由都返回 `Access-Control-Allow-Origin: *`——令牌走头部不走 cookie，放开 CORS 不扩大权限。
+1. 面板向 `/admin/plugins/foo/bridge` 取一个 **1 小时、限定 foo** 的桥接令牌，首次通过 `?token=` 传给 iframe（iframe 首个请求带不了 Authorization 头），之后通过 postMessage 每 45 分钟刷新。在 iframe 里跳到同插件的下一页（`/p/foo/ui/` → `/p/foo/ui/detail`）时，新页面调 `createBridge()` 照常握手拿令牌。面板上的「新窗口打开」同样把一枚新令牌放进 `?token=`，但新窗口里没有桥来刷新，1 小时后要回面板重新打开。
+2. iframe 带 `sandbox="allow-scripts allow-forms allow-popups allow-downloads"`，没有 `allow-same-origin`，所以是 opaque origin：读不到面板的 localStorage（会话令牌就存在那里）。运行时还给 `auth: 'admin'` 路由返回的 HTML 加上 `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-downloads`，不在 iframe 里打开（「新窗口打开」、直接访问）也是同样的 opaque origin。**公开路由不加**，和面板同源，见下面的[安全边界](#安全边界)。opaque origin 对同源接口的请求按跨域处理，因此面板资源与 `/p/*` 路由都返回 `Access-Control-Allow-Origin: *`——令牌走头部不走 cookie，放开 CORS 不扩大权限。
 3. 运行时对 `auth: 'admin'` 的路由接受面板会话或**本插件**的桥接令牌，其他插件的令牌一律 401。`RouteInput.authenticated` 告诉公开路由当前请求是否已登录。
 4. 令牌只在 iframe 的第一个请求里（`?token=`），页面再加载的脚本、样式、图片带不上它。所以 `auth: 'admin'` 的页面要么是单个 HTML 文件（内置插件都是这样），要么把静态资源设成公开、只把 `/api/*` 设成 `auth: 'admin'`、用 `bridge.fetch` 调。
 5. 有构建步骤的插件页面（Vue/React 等）用 `serveAssets('/ui/*', assets)` 托管：前端在本地构建好，转成资源表提交进仓库（构建机不跑前端构建），做法见[插件开发指南 · 自带 Web 页面](./plugin-guide.md#_8-自带-web-页面与-http-接口)。
 
-示例：`plugins/keyboard` 的「按键点击记录」页面——回调按键把点击写进插件自己的 KV，页面通过桥读出来并可清空。
+示例：`plugins/keyboard` 的「按键点击记录」页面——回调按键把点击写进插件自己的 KV，页面通过桥读出来并可清空（按键数据按文本写进 DOM，不拼 HTML）。
 
 页面也可以不进面板：不写 `auth` 的路由是公开的，直接用 `https://<机器人域名>/p/<插件名>/…` 打开。这时 `createBridge()` 握手超时后按独立模式工作（`bridge.embedded` 为 false）：主题跟随系统，令牌只从地址里的 `?token=` 取，`bridge.fetch` 照样按 `/p/<插件名>` 解析相对路径。
+
+### 安全边界
+
+- **公开页和面板同源，里面的 XSS 能读到面板的会话令牌。** 公开路由返回的页面没有上面那条 CSP，跑在面板的 origin 上，能读面板的 localStorage，也就能拿走会话令牌（7 天有效，等于登录了面板）。所以**公开页不要用 `innerHTML` 拼用户数据**（QQ 消息、昵称、按键数据、地址参数……），用 `textContent` 或框架的文本插值。`auth: 'admin'` 的页面是 opaque origin，XSS 拿不到会话令牌，但能拿到本插件的桥接令牌、调本插件的接口，同样按这个规矩写。
+- **插件页里的外链要开新窗口。** iframe 里所有文档的 origin 都是 `null`，面板分不清「同插件的下一页」和「链接过去的外站」。插件页里一个普通链接把 iframe 带到外站，外站发一条 `ready`，仍然能拿到一枚**该插件的、1 小时有效**的桥接令牌。面板能做的收紧是：每次 iframe 加载只应答一次 `ready`；每 45 分钟的刷新只推给本次加载里握过手的文档，iframe 换了文档、新文档还没握手时一枚都不推。外链请写 `target="_blank" rel="noopener"`：sandbox 带 `allow-popups`，新窗口里的页面接不到桥。
+- 页面端 `createBridge()` 只认 `window.parent` 发来的消息，`init` 只认第一次（之后的令牌走刷新消息），页面里再嵌的 iframe 或弹出的窗口伪造不了。同一个页面多次调用返回同一个桥（选项以第一次为准）。消息格式没变，插件自己打包的旧版 `@qqbot/ui-bridge` 照常和新面板握手；只是旧版在同一个页面里调用两次的话，第二次的 `ready` 会被当成重复，那个桥等不到 `init`、按独立模式工作——只调一次，或改用 `/bridge.js`。
 
 ## 本地开发
 

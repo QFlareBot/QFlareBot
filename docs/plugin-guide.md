@@ -73,7 +73,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 构建失败时线上保持上一次成功的版本，失败原因回报到面板：插件页「未上线的改动」列出所有写进了清单、却还没在线上生效的安装 / 升级 / 卸载，从没装上的可以直接卸载，升级失败的可以改回线上那一版。
 
-调试分两步：逻辑先用 `npm test` 在本地测（不需要机器人）；装上之后用面板「调试」页的事件模拟器，伪造一条消息或一次按键点击，看命中了哪个插件、回了什么。模拟器的回复只记录不发给 QQ，但插件里的存储读写和直接调 `ctx.api` 的请求是真的。
+调试分两步：逻辑先用 `npm test` 在本地测（不需要机器人）——测试替身守线上的规矩，`ctx.db` 的 SQL 过同一套表名检查（见第 6 节），`session.reply` 超过被动回复上限同样返回失败、不记进 `replies`（默认 5 条，`createMockSession({ maxPassiveReplies })` 可调），线上会报的错本地就能看到；装上之后用面板「调试」页的事件模拟器，伪造一条消息或一次按键点击，看命中了哪个插件、回了什么。模拟器的回复只记录不发给 QQ，但插件里的存储读写和直接调 `ctx.api` 的请求是真的。
 
 面板的「市场」页列出[插件目录](./market.md)里的插件，勾选几个一起装：逐个预检，按依赖顺序写进清单，最后只构建一次。写好了想让别人用：见[发布插件](./publish.md)，向插件目录提一个 PR。
 
@@ -87,6 +87,8 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   3. 能在 Workers 里运行：不依赖 Node 内置模块（`fs`、`net`、`child_process`……，构建时就会报找不到）、不用 `eval` / `new Function`（运行到那一行才报错）。另外依赖的体积和初始化耗时算在全机器人共享的 CPU 里（见第 9 节），别拿大库做小事；只在浏览器里能加载的包（顶层就碰 `window` 之类）要在处理器里按需 `import()`，因为构建机是在 Node 里执行入口抽清单的。
 
   构建机只装插件自己声明的依赖，而且在机器人仓库外面构建：以前「先在机器人仓库 `pnpm add` 再重建」的做法不再有效。没有第三方依赖的插件不走安装，与以前一样。
+
+  抽清单的子进程只带白名单里的环境变量（PATH、HOME、代理、npm 源这类），入口顶层读不到构建机上的任何凭证。上线前还有一道：新版本先在预览地址上把每个插件都加载一遍（`/healthz?plugins=1`），入口一加载就抛错的插件会让这次部署不切流量、线上保持旧版，面板「未上线的改动」里会写明是哪个插件加载失败。
 - **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
@@ -104,7 +106,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 | `buttons` | `interaction`、`buttonId`、`buttonData` | `block: true` |
 | `cron` | `job`、`scheduledAt`（**没有 session**） | — |
 | `routes` | `request`、`params`、`authenticated` | public |
-| `middleware` | `next()`，不调即拦截 | 按 priority 排序 |
+| `middleware` | `next()`，不调即拦截；调多次也只执行一次，建议 `await next()` | 按 priority 排序 |
 
 `block` / `priority`（大者先执行）/ `scenes`（限定 `group | c2c | guild | guild_dm`）写在匹配器对象形式里。命令前缀默认 `/`，面板可改；命令名大小写不敏感。
 
@@ -194,7 +196,9 @@ commands: {
 
 `keyboard` 会自动把消息升级为 markdown（平台要求）。按键的 `id` 对应 `buttons` 匹配器的键；按键处理器返回数字即回应平台（0 成功 · 4 无权限 …），返回消息则回复并自动 ack——客户端永远不会转圈。
 
-辅助：`session.typing(seconds)`（仅单聊，≤60s）、`session.stream()`（仅单聊流式，群聊退化为 end 时一次性回复）、`session.recall(id?)`（不传撤回自己最后一条，平台限 2 分钟内）。
+辅助：`session.typing(seconds)`（仅单聊，≤60s；占用一个 `msg_seq`，但不计入被动回复的条数上限）、`session.stream()`（仅单聊流式，群聊退化为 end 时一次性回复）、`session.recall(id?)`（不传撤回自己最后一条，平台限 2 分钟内）。
+
+处理器有时限：一次事件的全部处理（所有插件加起来）在给 QQ 回 ACK 之后只有 30 秒，慢活要自己拆，见[第 9 节](#_9-平台限额-免费版的硬预算)。
 
 ## 5. 配置
 
@@ -245,7 +249,7 @@ hooks: {
 
 `exec` 可以一次写多条语句、随意换行和写 `--` 注释：D1 的 `exec` 本身按行拆语句，跨行的 `CREATE TABLE` 会从第一行断掉，框架交给 D1 之前会先压成一行。唯一的限制是**引号里不能换行**（压行会改掉值，框架会直接报错），带换行的数据用 `run()` 绑定参数写入。
 
-D1 的 `{表名}` 不是语法糖，是硬规则：SQL 里出现不带本插件前缀的表名会**直接抛错**，`sqlite_master`、加引号、加库名限定都拦，`ATTACH` / `PRAGMA` 整条拒绝。字符串字面量和注释里的内容不受影响，往库里塞 JSON 不会被误伤。
+D1 的 `{表名}` 不是语法糖，是硬规则：SQL 里出现不带本插件前缀的表名会**直接抛错**，`sqlite_master`、加引号、加库名限定都拦，`ATTACH` / `PRAGMA` 整条拒绝；索引、视图、触发器名同样要写占位（`CREATE INDEX {notes_ts} ON {notes}(ts)`）。检查只看表名所在的位置：字符串字面量和注释里的内容不受影响，往库里塞 JSON 不会被误伤；CTE 名（包括 `WITH RECURSIVE cnt(x) AS (…)` 这种带列清单的）、叫 `view` / `trigger` 的列、`a IS [NOT] DISTINCT FROM b` 也都照常能写。`npm test` 里的 mock `ctx.db` 走同一套检查（`exec` 还会查引号里的换行），写错了本地就抛同样的错。
 
 这么做有两个原因，第二个才是重点：一是插件之间不会撞表或误删；二是**框架凭前缀才知道你建过哪些表，卸载时才清得掉你的数据**。表名一旦逃出命名空间，那部分数据就永远变成没人管的孤儿。
 
@@ -253,6 +257,8 @@ D1 的 `{表名}` 不是语法糖，是硬规则：SQL 里出现不带本插件�
 await ctx.db.run('INSERT INTO {notes} (user_id, note, ts) VALUES (?, ?, ?)', id, note, Date.now())
 const rows = await ctx.db.all<Note>('SELECT * FROM {notes} WHERE user_id = ? ORDER BY ts DESC', id)
 ```
+
+`onInstall` / `onBoot` 跑完之前，同一个 isolate 里进来的其他请求会等它（不会趁它没跑完就进处理器），所以迁移放在 `onBoot` 里是安全的；反过来它卡住也会挡住这个插件在该 isolate 的所有请求，要快。
 
 注意：**没有 onUpgrade 钩子**——升级版本不触发任何钩子，表结构/数据迁移请在 `onBoot` 里做惰性检查（`onInstall` 的 KV 标记保证它跨部署只跑一次）。`onEnable` / `onDisable` 已在契约中但运行时尚未接入；`onUninstall` 已接入，见下。
 
@@ -327,13 +333,15 @@ export default definePlugin({
 ```ts
 cron: {
   daily: {
-    cron: '0 1 * * *', // 5 段，UTC！北京时间 9 点 = 1 点；支持 * a-b a,b 与 / 步进
+    cron: '0 1 * * *', // 5 段，UTC！北京时间 9 点 = 1 点；支持 * a-b a,b、/ 步进与英文缩写
     async handler({ ctx, job, scheduledAt }) {
       await ctx.api.sendMessage({ scene: 'group', id: '群openid' }, `日报：${job}@${new Date(scheduledAt).toISOString()}`)
     },
   },
 },
 ```
+
+表达式照标准 cron（Vixie）：星期 0 和 7 都是周日，`1-7`、`5-7` 这样写没问题；月和星期可以写英文缩写 `JAN`-`DEC`、`SUN`-`SAT`（不分大小写，区间里也行，如 `MON-FRI`）。日和星期**都**写了具体值时，任一命中就跑——`0 1 1 * MON` 是「每月 1 号，加上每个周一」，不是「恰逢周一的 1 号」；有一段以 `*` 开头（含 `*/2`）时两段都得满足。写错的表达式一次都不会触发，`qqbot-plugin build` 会打警告指出哪一段错了（不拦构建），构建日志里留意 ⚠。
 
 `cron` 处理器**没有 session**（不是事件），主动推送用 `ctx.api.sendMessage`。群聊主动消息需要群主在群里打开机器人的「主动消息」权限，见[配置 QQ 开放平台](./deploy-qq#_5-在群里打开权限)。`ctx.api` 上还有 `raw(method, path, body)`（框架未封装的接口直接调，永远可用）与 `group.*`（群管理）。
 
@@ -350,11 +358,11 @@ routes: [
 ],
 ```
 
-`path` 支持 `:param` 与末尾 `/*` 通配（值在 `params['*']`）。插件被停用时它的路由全部返回 404。
+`path` 支持 `:param` 与末尾 `/*` 通配（值在 `params['*']`）。插件被停用时它的路由全部返回 404，面板开了安全模式时返回 503。路由被访问时和事件、定时任务一样，会先跑 `onInstall` / `onBoot`（每个 isolate 第一次时）——新装的插件第一个请求是打开页面也不要紧，`onInstall` 里建的表在路由处理器里可以直接用。
 
 常见的三种用法：
 
-- **面板里的管理页**：声明 `ui` 并配 `auth: 'admin'` 的路由，面板在 sandbox iframe 里打开它，页面用 `/bridge.js` 拿令牌、跟随主题、自动撑高。示例是内置的 `plugins/keyboard`（按键点击记录）与 `plugins/t2i`（渲染测试）。细节见[面板与插件页面](./ui.md#插件页面-解耦方案)。
+- **面板里的管理页**：声明 `ui` 并配 `auth: 'admin'` 的路由，面板在 sandbox iframe 里打开它，页面用 `/bridge.js` 拿令牌、跟随主题、自动撑高。`auth: 'admin'` 路由返回的 HTML 会带 `Content-Security-Policy: sandbox`，所以在新窗口里打开也和 iframe 里一样是 opaque origin：拿不到面板的 localStorage（面板会话就在里面），页面自己也用不了 localStorage / cookie，要存东西走接口。公开路由不受影响。示例是内置的 `plugins/keyboard`（按键点击记录）与 `plugins/t2i`（渲染测试）。细节见[面板与插件页面](./ui.md#插件页面-解耦方案)。
 - **给所有人看的公开页**：不写 `auth` 的路由谁都能打开，比如 `https://bot.example.com/p/rank/` 的排行榜，把链接发到群里即可。不需要声明 `ui`；想和面板同样的配色，页面里引 `/tokens.css`。
 - **接收外部回调**：公开的 `POST` 路由可以接 GitHub、支付平台这类 webhook，收到后用 `ctx.api.sendMessage` 推到群里。公开路由谁都能调，**签名要自己验**。处理器的 `authenticated` 告诉你这次请求有没有登录，公开路由也能据此区分管理员。
 
@@ -393,6 +401,7 @@ Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟
 
 - **每条消息都要看一眼的插件，写入次数不能跟着消息数涨**。这是最容易把整台机器人拖垮的一条：框架自己每条消息只写 1 行 D1（事件去重），事件摘要进 Workers Logs、不进 D1；一个插件每条消息再写一次，全机器人能处理的消息量就直接打折，写 KV 更是一天 1,000 条消息就停摆。见下面「D1 写入怎么算」。
 - **CPU 是全家共用的 10 ms**。官方统计普通请求平均约 2.2 ms——验签、匹配、其他插件先分掉一波，留给你的是零头。CPU 或内存超限的表象都是整个 Worker 偶发 1102，砸的是所有人。别在 handler 里干重活：大 JSON 解析、长循环、密码学哈希、几 MB 媒体的 base64 编码。重活外移——t2i 把渲染扔给外部渲染服务就是这个模式，压缩、转码、OCR 同理；发媒体优先给 `image.url`，别在 Worker 里转 base64。
+- **一次事件只有 30 秒**。运行时先给 QQ 回 ACK，再在后台处理事件，平台只给后台 30 秒——这是这次事件里**所有插件**加起来的时间，不是每个插件一份。到点直接被平台掐断，事件摘要和插件后面的日志一行都不留；框架在 25 秒时会先打一条告警，日志里至少看得到是哪个事件卡住了。调慢接口、生成大图这类活要自己拆：先回一句「处理中」，重活交给外部服务（做完再用 `ctx.api.sendMessage` 主动推，或者回调插件的公开路由），或者交给 Durable Object 在 `alarm()` 里分批跑。
 - **子请求 50 是硬顶**。一次消息处理里，每次 KV / D1 / R2 / fetch 都计 1。循环里逐条 `kv.put` 的写法 50 次就断：热路径（计数器、排行榜）用 D1 一条 SQL 顶 N 次 KV，批量写合并进 `exec` / batch。
 - **日配额是全机器人共享的**，不是每插件一份。"每条消息都写库"的设计（签到、积分）会把 KV 每天 1,000 次写几天内打满，同一 key 还限 1 次/秒，并发就报错——加去重、攒批、内存缓存 + 定时落盘（落盘那次的 CPU 依然在 10 ms 里）。请求 100,000 次/天看着多：一条群消息就是一次 webhook，几个活跃群加 cron 底座就能摸到，真到量就升级付费版——CPU 30 s、子请求 10,000，上面大半焦虑直接消失。
 - **内存 128 MB 同样共享**。大响应别整个读进内存，能流式就流式（`ctx.r2.getStream`）；大媒体先落 R2。`ctx.waitUntil` 的后台任务和本次请求共享 CPU / 内存预算，不是白给的。

@@ -44,7 +44,7 @@
 
 向导的完成页会给出一个 `https://qqbot.<你的子域>.workers.dev` 的面板地址，可以先用它登录面板看看；但**不要把它当成回调地址**，下一步要换成自己的域名。
 
-这个地址和你的账户信息只显示在向导页面上。公开仓库的 Actions 日志和运行页 Summary 谁都能看，所以那里不写地址、账户 ID 和资源 ID，日志里出现的会被打成 `***`。之后想再找面板地址，到 Cloudflare 后台 Worker 的 **Settings → Domains & Routes** 里看。
+这个地址和你的账户信息只显示在向导页面上。公开仓库的 Actions 日志和运行页 Summary 谁都能看，所以那里不写地址、账户 ID 和资源 ID，日志里出现的（包括部署时打印的 Version ID、报错里带的构建 ID）会被打成 `***` 或 `…`。之后想再找面板地址，到 Cloudflare 后台 Worker 的 **Settings → Domains & Routes** 里看。
 
 `ADMIN_TOKEN` 只有你知道，引导不会在任何地方输出它，记好。Token 权限清单、无 UI 模式、手动部署与自部署原理见仓库里的 [apps/seed/README.md](https://github.com/QFlareBot/QFlareBot/blob/main/apps/seed/README.md)。
 

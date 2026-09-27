@@ -30,7 +30,8 @@ export default createRuntime({ plugins, projection: PROJECTION })
 ```
 
 - 插件用动态 import，运行时可按需加载并隔离求值错误；Durable Object 类必须静态重导出，导出名 `P_<插件名非字母数字换为 _>_<类名>`，同时作为 DO binding 名与 `class_name`
-- `hash`：由 `core@version` 与各插件 `name@version+integrity`（按 name 排序）确定性计算的 sha256 hex；与插件顺序、enabled 无关。`PROJECTION = 'sha256-' + hash`，`workers/tag` 取 hash 前 20 位
+- `hash`：由 `core@version+integrity`、`ui@version+integrity`（有面板时）与各插件 `name@version+integrity`（按 name 排序）确定性计算的 sha256 hex；与插件顺序、enabled 无关。core / ui 的 integrity 是实际拉到的制品算的：它们从机器人仓库现编，改了代码不一定改版本号。`PROJECTION = 'sha256-' + hash`，`workers/tag` 取 hash 前 20 位。哈希只用来展示与打 tag，没有地方跨版本比较它
+- git 插件由 `qqbot-plugin build` 打包时，alias 指过去的 `@qqbot/sdk` 解析在固定的虚拟命名空间里（产物注释是 `// qqbot-sdk:src/…`），产物不带构建机的目录结构——同一组插件在哪台机器上构建 integrity 都一样，哈希才稳定
 
 ## API
 
@@ -51,21 +52,24 @@ const projection = await project({
 const api = new CloudflareWorkersApi({ accountId, apiToken })
 const { versionId, previewUrl } = await deploy({
   api, scriptName: 'my-bot', projection,
-  healthCheck: { path: '/healthz', retries: 10, intervalMs: 2000 },   // false 跳过
+  healthCheck: { path: '/healthz?plugins=1', retries: 10, intervalMs: 2000 },   // 默认值；false 跳过
   onProgress: (step) => sse.send(step),   // { stage: 'upload'|'health'|'promote'|'done', message }
 })
 ```
+
+- 健康检查默认打 `/healthz?plugins=1`：运行时把每个插件都求值一遍，有插件加载失败就回 503 并带 `pluginErrors: [{ name, message }]`，`HealthCheckError` 的 `pluginErrors` 与错误信息里列出是哪些插件（旧运行时忽略这个参数、照常回 200）
+- `deploy()` 抛出的错误带 `stage`（`upload` / `secrets` / `subdomain` / `health` / `promote`，见 `DeployErrorStage`）。调用方据此判断能不能换条路重来：只有 `upload` 这一步走不通才值得降级，版本传上去之后任何一步报错都不能降级，否则会绕过健康检查直接上线
 
 其他导出：
 
 | 模块 | 导出 |
 | --- | --- |
-| `hash` | `computeProjectionHash(manifest)`、`canonicalProjectionInput`、`projectionId`、`sha256Hex`… |
+| `hash` | `computeProjectionHash(manifest, { core?, ui? })`、`canonicalProjectionInput`、`projectionId`、`sha256Hex`… |
 | `glue` | `generateGlue`、`collectDurableObjects`、`doExportName`、`pluginModulePath` |
 | `metadata` | `buildVersionMetadata`、`buildBindings` |
 | `artifacts` | `resolveArtifactUrl`、`createHttpFetcher`、`computeIntegrity`、`verifyIntegrity`、`listNpmVersions`、`parseSource` |
 | `cloudflare` | `CloudflareWorkersApi`（`uploadVersion` / `deployVersion` / `listVersions` / `listDeployments` / `getWorkersSubdomain` / `previewUrl`）、`CloudflareApiError` |
-| `deploy` | `deploy`、`HealthCheckError`、`DeployApi`（便于注入假实现） |
+| `deploy` | `deploy`、`HealthCheckError`、`SecretLossError`、`DeployApi`（便于注入假实现）、`DeployErrorStage`、`PluginLoadError` |
 | `jsonc` / `wrangler` | `parseJsonc`、`deriveBindings`、`generateWranglerConfig`（CLI 复用，无 Node 依赖） |
 
 ### 制品来源
@@ -87,9 +91,11 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 
 - 写入 `<out>/index.js`、`runtime.js`、`plugins/*.js` 与 `projection.json`（hash、integrity、metadata）
 - 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings`
-- **不合成 `migrations`**：迁移是只追加的历史，构建机没有「上次应用到哪个 tag」的持久状态，造不出来。模板里的 `migrations` 原样保留，并在插件 DO 类没被任何一项覆盖时**报错**（附上该追加的条目）。生产路径走 Versions API，用 `exports` 声明 DO 生命周期，不涉及 `migrations`
+- **不合成 `migrations`**：迁移是只追加的历史，构建机没有「上次应用到哪个 tag」的持久状态，造不出来。模板里的 `migrations` 原样保留，并在插件 DO 类没被覆盖时**报错**（附上该追加的条目）。「覆盖」按顺序重放历史来算：`new_classes` / `new_sqlite_classes`、`renamed_classes` 的 `to`、`transferred_classes` 的 `to` 算现存，`deleted_classes` 与 `renamed_classes` 的 `from` 从现存里减掉。类建在 `new_classes`（KV 存储后端）而版本元数据按 sqlite 声明时给一条警告（不失败）。生产路径走 Versions API，用 `exports` 声明 DO 生命周期，不涉及 `migrations`
 - bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒
 - `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵：它优先于模板里硬编码的值，命中就把对应字段从生成配置里剥掉。所以**模板只该声明 binding 名，别硬编码 `bucket_name` / `database_id`**——硬编码会让剥离分支永远进不去，「R2 不可用即不绑定」的降级随之失效
+- KV 没有这个哨兵：运行时无条件用它，`CF_KV_ID=none` 不受支持，按「没解析出来」处理（`projection.json` 的 `bindings.kv` 是 `unresolved`，部署护栏拒绝）
+- JSONC 解析先去注释、再单独扫一遍去尾随逗号，逗号与 `]` / `}` 之间隔着注释（`[1, // 说明\n]`）也认得出
 - 之后 `wrangler dev -c wrangler.generated.jsonc` 即可本地运行
 
 ## 已知限制
