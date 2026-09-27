@@ -26,7 +26,7 @@ const SCHEMA = [
     error TEXT,
     ts INTEGER NOT NULL
   )`,
-  // 卸载的后半段：等插件真的不在部署里了再收尾（见 adminManifest.ts 的 processPendingCleanups）
+  // 卸载的后半段：等插件真的不在部署里了再收尾（见 uninstall.ts 的 processPendingCleanups）
   `CREATE TABLE IF NOT EXISTS ${TABLE_CLEANUPS} (
     name TEXT PRIMARY KEY,
     purge INTEGER NOT NULL,
