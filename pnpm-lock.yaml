@@ -35,18 +35,6 @@ importers:
       '@qqbot/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      qflarebot-plugin-echo:
-        specifier: workspace:*
-        version: link:../../plugins/echo
-      qflarebot-plugin-image:
-        specifier: workspace:*
-        version: link:../../plugins/image
-      qflarebot-plugin-keyboard:
-        specifier: workspace:*
-        version: link:../../plugins/keyboard
-      qflarebot-plugin-multi-reply:
-        specifier: workspace:*
-        version: link:../../plugins/multi-reply
       qflarebot-plugin-sid:
         specifier: workspace:*
         version: link:../../plugins/sid
@@ -148,42 +136,6 @@ importers:
         version: 3.3.11(typescript@5.9.3)
 
   packages/ui-bridge: {}
-
-  plugins/echo:
-    devDependencies:
-      '@qqbot/plugin-cli':
-        specifier: workspace:*
-        version: link:../../packages/plugin-cli
-      '@qqbot/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-
-  plugins/image:
-    devDependencies:
-      '@qqbot/plugin-cli':
-        specifier: workspace:*
-        version: link:../../packages/plugin-cli
-      '@qqbot/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-
-  plugins/keyboard:
-    devDependencies:
-      '@qqbot/plugin-cli':
-        specifier: workspace:*
-        version: link:../../packages/plugin-cli
-      '@qqbot/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-
-  plugins/multi-reply:
-    devDependencies:
-      '@qqbot/plugin-cli':
-        specifier: workspace:*
-        version: link:../../packages/plugin-cli
-      '@qqbot/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
 
   plugins/sid:
     devDependencies:

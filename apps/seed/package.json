@@ -20,10 +20,6 @@
     "@qqbot/runtime": "workspace:*",
     "@qqbot/sdk": "workspace:*",
     "@qqbot/ui": "workspace:*",
-    "qflarebot-plugin-echo": "workspace:*",
-    "qflarebot-plugin-image": "workspace:*",
-    "qflarebot-plugin-keyboard": "workspace:*",
-    "qflarebot-plugin-multi-reply": "workspace:*",
     "qflarebot-plugin-sid": "workspace:*",
     "qflarebot-plugin-t2i": "workspace:*"
   },

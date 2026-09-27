@@ -55,7 +55,7 @@ export default definePlugin({
 4. 令牌只在 iframe 的第一个请求里（`?token=`），页面再加载的脚本、样式、图片带不上它。所以 `auth: 'admin'` 的页面要么是单个 HTML 文件（内置插件都是这样），要么把静态资源设成公开、只把 `/api/*` 设成 `auth: 'admin'`、用 `bridge.fetch` 调。
 5. 有构建步骤的插件页面（Vue/React 等）用 `serveAssets('/ui/*', assets)` 托管：前端在本地构建好，转成资源表提交进仓库（构建机不跑前端构建），做法见[插件开发指南 · 自带 Web 页面](./plugin-guide.md#_8-自带-web-页面与-http-接口)。
 
-示例：`plugins/keyboard` 的「按键点击记录」页面——回调按键把点击写进插件自己的 KV，页面通过桥读出来并可清空（按键数据按文本写进 DOM，不拼 HTML）。
+示例：`plugins/t2i` 的「T2I 渲染服务」页面——通过桥调插件自己的 `auth: 'admin'` 接口测连通性、试渲染一段 HTML。
 
 页面也可以不进面板：不写 `auth` 的路由是公开的，直接用 `https://<机器人域名>/p/<插件名>/…` 打开。这时 `createBridge()` 握手超时后按独立模式工作（`bridge.embedded` 为 false）：主题跟随系统，令牌只从地址里的 `?token=` 取，`bridge.fetch` 照样按 `/p/<插件名>` 解析相对路径。
 

@@ -4,14 +4,10 @@
  */
 import { createRuntime } from '@qqbot/runtime'
 import ui from '@qqbot/ui'
-import echo from 'qflarebot-plugin-echo'
-import image from 'qflarebot-plugin-image'
-import keyboard from 'qflarebot-plugin-keyboard'
-import multiReply from 'qflarebot-plugin-multi-reply'
 import sid from 'qflarebot-plugin-sid'
 import t2i from 'qflarebot-plugin-t2i'
 
 export default createRuntime({
-  plugins: [echo, multiReply, image, t2i, keyboard, sid],
+  plugins: [t2i, sid],
   ui,
 })

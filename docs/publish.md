@@ -14,7 +14,7 @@
 
 `name` 在目录里先登记的先得。比较时把 `-` 当成 `_`：`my-plugin` 和 `my_plugin` 的 D1 表前缀都是 `p_my_plugin_`，同一个机器人里装不到一起。下面这些名字保留，不能登记：
 
-- 内置插件：`echo`、`multi-reply`、`image`、`keyboard`、`sid`、`t2i`
+- 内置插件：`sid`、`t2i`
 - 框架自己用的：`qqbot`、`qflarebot`、`core`、`admin`、`system`、`runtime`
 
 ## 提交
