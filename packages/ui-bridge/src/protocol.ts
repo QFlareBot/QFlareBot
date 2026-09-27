@@ -2,6 +2,9 @@
  * 面板（host）与插件页面（guest，iframe 内）之间的 postMessage 协议。
  * iframe 以 sandbox 运行在 opaque origin，所以 origin 校验用 `'*'`，
  * 靠 `channel` 前缀与 nonce 过滤无关消息；权限边界由桥接 token 决定，不靠 origin。
+ *
+ * 消息格式是公共契约：插件自己打包的旧版页面端要能和新面板握手，只能加可选字段，不能改已有字段。
+ * 收紧都在两端各自的判断里做（面板按 iframe 的 load 事件分段应答，页面只认 window.parent 与第一次 init）。
  */
 
 export const CHANNEL = 'qqbot-bridge/1'

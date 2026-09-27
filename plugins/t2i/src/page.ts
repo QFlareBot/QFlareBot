@@ -94,7 +94,11 @@ export const PAGE_HTML = `<!doctype html>
       $('render').disabled = false
       if (!r.ok) { $('renderMeta').textContent = '失败：' + (r.error || '未知错误'); return }
       $('renderMeta').textContent = r.latencyMs + ' ms · ' + (r.byteSize / 1024).toFixed(1) + ' KB'
-      $('preview').innerHTML = '<img alt="渲染结果" src="data:image/jpeg;base64,' + r.base64 + '" />'
+      // 不拼 innerHTML：base64 来自外部渲染服务的响应，拼进属性里等于让它往页面里写标签
+      const img = document.createElement('img')
+      img.alt = '渲染结果'
+      img.src = 'data:image/jpeg;base64,' + r.base64
+      $('preview').replaceChildren(img)
       bridge.resize()
     }
 

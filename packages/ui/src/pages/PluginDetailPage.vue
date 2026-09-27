@@ -29,6 +29,8 @@ const configText = ref('')
 const configError = ref('')
 /** 服务端 schema 校验的逐字段错误，喂给 SchemaForm 显示在对应输入框下 */
 const fieldErrors = ref<Record<string, string>>({})
+/** SchemaForm 里 JSON 文本框还解析不了的字段：有就不能保存，否则存进去的是改之前的旧值 */
+const unparsedFields = ref<string[]>([])
 const priority = ref('0')
 /** 生效的群：all 即不设 groups */
 const groupMode = ref<string>('all')
@@ -81,6 +83,12 @@ async function toggle(enabled: boolean) {
 async function save() {
   if (!plugin.value) return
   let next: unknown = config.value
+  const schema = plugin.value.configSchema
+  if (schema && unparsedFields.value.length) {
+    const names = unparsedFields.value.map((k) => schema.properties?.[k]?.title ?? k)
+    push(`「${names.join('」「')}」不是合法的 JSON，改好再保存`, 'error')
+    return
+  }
   if (!plugin.value.configSchema) {
     try {
       next = configText.value.trim() ? JSON.parse(configText.value) : {}
@@ -169,7 +177,13 @@ async function uninstall() {
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <QCard title="配置" description="保存后写入快照，无需重新部署">
           <form class="flex flex-col gap-4" @submit.prevent="save">
-            <SchemaForm v-if="plugin.configSchema" v-model="config" :schema="plugin.configSchema" :errors="fieldErrors" />
+            <SchemaForm
+              v-if="plugin.configSchema"
+              v-model="config"
+              :schema="plugin.configSchema"
+              :errors="fieldErrors"
+              @invalid="unparsedFields = $event"
+            />
             <QField v-else id="cfg-json" label="配置（JSON）" hint="该插件没有声明 configSchema，直接编辑 JSON" :error="configError">
               <template #default="{ describedBy, invalid }">
                 <QTextarea id="cfg-json" v-model="configText" mono :rows="8" :described-by="describedBy" :invalid="invalid" />

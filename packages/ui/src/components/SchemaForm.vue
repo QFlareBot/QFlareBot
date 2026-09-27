@@ -2,9 +2,13 @@
 /**
  * 按 JSON Schema 渲染配置表单。覆盖插件配置常见的五种：string（含 enum）、number/integer、boolean、string[]，
  * 其余类型退化为 JSON 文本框。
+ *
+ * JSON 文本框解析不了的时候不改 modelValue，只在字段下报错，并通过 `invalid` 事件把这些字段名告诉父组件——
+ * 父组件据此拦住保存，不然点保存会把旧值当成「已保存」。
  */
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, shallowReactive, toRaw, watch } from 'vue'
 import type { JsonSchema } from '../api/types.js'
+import { enumIndex, enumOptions, enumValueAt, parseJsonDraft } from '../lib/schemaForm.js'
 import QField from './ui/QField.vue'
 import QInput from './ui/QInput.vue'
 import QSelect from './ui/QSelect.vue'
@@ -12,7 +16,11 @@ import QSwitch from './ui/QSwitch.vue'
 import QTextarea from './ui/QTextarea.vue'
 
 const props = defineProps<{ schema: JsonSchema; modelValue: Record<string, unknown>; errors?: Record<string, string> }>()
-const emit = defineEmits<{ 'update:modelValue': [value: Record<string, unknown>] }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: Record<string, unknown>]
+  /** JSON 文本框里还解析不了的字段；非空时不该保存 */
+  invalid: [keys: string[]]
+}>()
 
 const fields = computed(() => Object.entries(props.schema.properties ?? {}))
 const required = computed(() => new Set(props.schema.required ?? []))
@@ -20,6 +28,38 @@ const required = computed(() => new Set(props.schema.required ?? []))
 function set(key: string, value: unknown) {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
 }
+
+/**
+ * JSON 文本框里用户敲的原文。只要它还对应着当前的值就一直显示原文：解析失败时原样留着让人改，
+ * 合法时也不按 JSON.stringify 重排——重排会把光标甩到末尾。
+ * base 是这份原文对应的 modelValue[key]；父组件换了值（重新加载、保存后刷新）就对不上，原文作废。
+ */
+const drafts = shallowReactive<Record<string, { text: string; base: unknown; error: string }>>({})
+
+function onJsonInput(key: string, text: string) {
+  const parsed = parseJsonDraft(text)
+  if (parsed.ok) {
+    drafts[key] = { text, base: parsed.value, error: '' }
+    set(key, parsed.value)
+  } else {
+    drafts[key] = { text, base: props.modelValue[key], error: parsed.error }
+  }
+}
+
+// 比较时去掉响应式代理：父组件把值存进 ref 之后读回来的是代理，与我们 emit 出去的原对象不是同一个引用
+watch(
+  () => props.modelValue,
+  (value) => {
+    for (const [key, d] of Object.entries(drafts)) if (toRaw(value[key]) !== toRaw(d.base)) delete drafts[key]
+  },
+)
+
+const invalidKeys = computed(() => fields.value.map(([key]) => key).filter((key) => drafts[key]?.error))
+watch(
+  () => invalidKeys.value.join('\n'),
+  () => emit('invalid', invalidKeys.value),
+)
+onBeforeUnmount(() => emit('invalid', []))
 
 function kind(s: JsonSchema): 'enum' | 'string' | 'number' | 'boolean' | 'string[]' | 'json' {
   if (s.enum) return 'enum'
@@ -39,13 +79,6 @@ function lines(v: unknown): string {
 function jsonText(v: unknown): string {
   return v === undefined ? '' : JSON.stringify(v, null, 2)
 }
-function parseJson(key: string, text: string) {
-  try {
-    set(key, text.trim() ? JSON.parse(text) : undefined)
-  } catch {
-    // 用户还在输入，保持原值
-  }
-}
 </script>
 
 <template>
@@ -56,16 +89,16 @@ function parseJson(key: string, text: string) {
       :id="`cfg-${key}`"
       :label="s.title ?? key"
       :hint="s.description"
-      :error="errors?.[key]"
+      :error="drafts[key]?.error || errors?.[key]"
       :required="required.has(key)"
     >
       <template #default="{ describedBy, invalid }">
         <QSelect
           v-if="kind(s) === 'enum'"
           :id="`cfg-${key}`"
-          :model-value="str(modelValue[key] ?? s.default)"
-          :options="(s.enum ?? []).map((v) => ({ value: String(v), label: String(v) }))"
-          @update:model-value="set(key, $event)"
+          :model-value="String(enumIndex(s.enum ?? [], modelValue[key] ?? s.default))"
+          :options="enumOptions(s.enum ?? [])"
+          @update:model-value="set(key, enumValueAt(s.enum ?? [], $event))"
         />
         <QInput
           v-else-if="kind(s) === 'string'"
@@ -102,12 +135,13 @@ function parseJson(key: string, text: string) {
         <QTextarea
           v-else
           :id="`cfg-${key}`"
-          :model-value="jsonText(modelValue[key])"
+          :model-value="drafts[key]?.text ?? jsonText(modelValue[key])"
           mono
           :rows="4"
           placeholder="JSON"
           :described-by="describedBy"
-          @update:model-value="parseJson(key, $event)"
+          :invalid="invalid"
+          @update:model-value="onJsonInput(key, $event)"
         />
       </template>
     </QField>

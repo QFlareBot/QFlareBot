@@ -26,13 +26,29 @@ export const PAGE_HTML = `<!doctype html>
     import { createBridge } from '/bridge.js'
     const list = document.getElementById('list')
     let bridge
+    // 按键数据、用户 openid 都来自 QQ 的回调，一律按文本写进 DOM，不拼进 innerHTML：
+    // 拼进去的话，一条带 <img onerror> 的按键数据就能在这个页面里跑脚本，拿着桥接令牌调插件接口
+    function el(tag, className, text) {
+      const node = document.createElement(tag)
+      if (className) node.className = className
+      if (text !== undefined) node.textContent = String(text)
+      return node
+    }
+    function message(text) {
+      list.replaceChildren(el('p', 'qb-muted', text))
+    }
     async function load() {
       const res = await bridge.fetch('/api/clicks')
-      if (!res.ok) { list.innerHTML = '<p class="qb-muted">读取失败：' + res.status + '</p>'; return }
+      if (!res.ok) { message('读取失败：' + res.status); return }
       const { clicks } = await res.json()
-      list.innerHTML = clicks.length
-        ? clicks.map((c) => '<div class="row"><span><b>' + c.buttonId + '</b> <span class="qb-muted">' + (c.buttonData || '') + '</span></span><span class="qb-mono qb-muted">' + c.userId + ' · ' + new Date(c.at).toLocaleTimeString('zh-CN', { hour12: false }) + '</span></div>').join('')
-        : '<p class="qb-muted">还没有人点过按键。在群里发 /panel 试试。</p>'
+      if (!clicks.length) message('还没有人点过按键。在群里发 /panel 试试。')
+      else list.replaceChildren(...clicks.map((c) => {
+        const row = el('div', 'row')
+        const what = el('span')
+        what.append(el('b', '', c.buttonId), ' ', el('span', 'qb-muted', c.buttonData || ''))
+        row.append(what, el('span', 'qb-mono qb-muted', c.userId + ' · ' + new Date(c.at).toLocaleTimeString('zh-CN', { hour12: false })))
+        return row
+      }))
       bridge.resize()
     }
     createBridge().then(async (b) => {

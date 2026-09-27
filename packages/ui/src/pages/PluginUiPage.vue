@@ -29,18 +29,27 @@ const title = ref('')
 let host: BridgeHost | null = null
 
 let firstToken: string | null = null
+/** 每次换页面加一：只认最后一次请求的令牌 */
+let pageSeq = 0
 
 const withToken = (path: string, token: string) => `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 
 watch(
   pagePath,
   async (path) => {
+    const seq = ++pageSeq
     src.value = ''
+    firstToken = null
     if (!path || !plugin.value) return
     try {
-      firstToken = (await api.bridgeToken(plugin.value.name)).token
-      src.value = withToken(path, firstToken)
+      const { token } = await api.bridgeToken(plugin.value.name)
+      // 等令牌期间切到了别的插件：A→B→A 快速切换、响应又乱序时，B 的页面会配上 A 的令牌（或反过来）。
+      // 只认最后一次请求，比只核对 path 更严：A 的旧响应也不会再把刚打开的 iframe 重载一遍
+      if (seq !== pageSeq || pagePath.value !== path) return
+      firstToken = token
+      src.value = withToken(path, token)
     } catch (e) {
+      if (seq !== pageSeq) return
       push(`无法打开插件页面：${(e as Error).message}`, 'error')
     }
   },
@@ -70,10 +79,11 @@ function mount() {
   host?.destroy()
   host = null
   if (!frame.value || !plugin.value) return
+  const name = plugin.value.name
   host = attachBridgeHost({
     iframe: frame.value,
-    plugin: plugin.value.name,
-    base: `/p/${plugin.value.name}`,
+    plugin: name,
+    base: `/p/${name}`,
     theme: theme.value,
     getToken: async () => {
       if (firstToken) {
@@ -81,7 +91,7 @@ function mount() {
         firstToken = null
         return t
       }
-      return (await api.bridgeToken(plugin.value!.name)).token
+      return (await api.bridgeToken(name)).token
     },
     onResize: (h) => (height.value = Math.max(240, Math.min(4000, h))),
     onToast: (level, message) => push(message, level),
@@ -90,7 +100,9 @@ function mount() {
   })
 }
 
-watch([frame, plugin], mount)
+// 按插件名而不是插件对象：状态一刷新 pluginByName 就返回新对象，重接一次桥会换掉 nonce、丢掉握手，
+// 已经握过手的页面不会再发 ready，之后的主题、令牌刷新就都到不了它那里
+watch([frame, () => plugin.value?.name], mount)
 watch(theme, (t) => host?.setTheme(t))
 onBeforeUnmount(() => host?.destroy())
 </script>

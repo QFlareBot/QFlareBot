@@ -13,6 +13,8 @@ import QInput from '../components/ui/QInput.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
+import { writeBatch } from '../lib/batchInstall.js'
+import { installOrder } from '../lib/catalog.js'
 import { eachLimit, resolveSource } from '../lib/gitSource.js'
 
 const { plugins, patchLocal, refresh } = useStatus()
@@ -298,36 +300,37 @@ function toggleSelected(name: string, on: boolean) {
   else selected.value.delete(name)
 }
 
-/** 勾选的逐个写进清单（build: false，不构建），全部写完只触发一次构建 */
+/**
+ * 勾选的按依赖顺序逐个写进清单（build: false，不构建），全部写完只触发一次构建。
+ *
+ * 顺序与市场批量安装同一个 installOrder：新版本可能依赖同一批里别的插件（新）提供的服务，排在提供者前面会被拒。
+ * 检查更新拿不到新版本的 depends / services，只能按线上这一份排（依赖关系一般不变）；
+ * 新版本新加的依赖关系由 writeBatch 在「依赖未满足」时排到后面重试兜住。
+ * 同一批的插件不算已经提供了服务，否则它们全都「就绪」、排序等于没排。
+ */
 async function updateSelected() {
   const names = [...selected.value].filter((n) => availableUpdate.value[n])
   if (!names.length || updatingBatch.value) return
   updatingBatch.value = true
-  const done: string[] = []
-  const failed: string[] = []
-  const warnings: string[] = []
-  for (const name of names) {
-    const u = availableUpdate.value[name]!
-    try {
-      const res = await api.installPlugin(u.source, { build: false })
-      done.push(name)
-      for (const w of res.warnings ?? []) warnings.push(`${name}：${w}`)
-    } catch (e) {
-      failed.push(`${name}：${(e as Error).message}`)
-    }
+  const batch = new Set(names)
+  const live = new Map(plugins.value.map((p) => [p.name, p]))
+  const available = new Set(plugins.value.filter((p) => !batch.has(p.name)).flatMap((p) => [p.name, ...p.services]))
+  const ordered = installOrder(
+    names.map((name) => ({
+      name,
+      depends: live.get(name)?.depends ?? [],
+      provides: [name, ...(live.get(name)?.services ?? [])],
+      source: availableUpdate.value[name]!.source,
+    })),
+    available,
+  )
+  const { done, failed, warnings, build } = await writeBatch(ordered, api)
+  for (const n of done) {
+    delete availableUpdate.value[n]
+    selected.value.delete(n)
   }
-  if (done.length) {
-    for (const n of done) {
-      delete availableUpdate.value[n]
-      selected.value.delete(n)
-    }
-    try {
-      await api.triggerBuild()
-      push(`已提交 ${done.length} 个插件的更新，只触发了一次构建，上线后版本号会变化`, 'success')
-    } catch (e) {
-      push(`${done.length} 个更新已写进清单，但触发构建失败：${(e as Error).message}——可在「未上线的改动」里重新构建`, 'warning')
-    }
-  }
+  if (build?.ok) push(`已提交 ${done.length} 个插件的更新，只触发了一次构建，上线后版本号会变化`, 'success')
+  else if (build) push(`${done.length} 个更新已写进清单，但触发构建失败：${build.error}——可在「未上线的改动」里重新构建`, 'warning')
   if (failed.length) push(`有 ${failed.length} 个没更新：${failed.join('；')}`, 'error')
   if (warnings.length) push(`提醒：${warnings.join('；')}`, 'warning')
   updatingBatch.value = false

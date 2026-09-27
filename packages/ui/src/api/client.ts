@@ -20,6 +20,11 @@ import type { SavedPanel, SavedPanelItem } from '../lib/qqPanel.js'
 
 const SESSION_KEY = 'qqbot.session'
 
+/** 设置页能改的快照顶层字段（PATCH /admin/snapshot）；null 表示清掉、回到默认 */
+export type SettingsPatch = {
+  [K in 'safeMode' | 'logContent' | 'commandPrefixes' | 'admins' | 'permissionDeniedReply']?: Snapshot[K] | null
+}
+
 /** 服务端按 configSchema 校验失败时逐字段返回 */
 export interface FieldError {
   path: string
@@ -84,6 +89,8 @@ export const api = {
   status: () => request<Status>('GET', '/status'),
   snapshot: () => request<{ ok: true; snapshot: Snapshot }>('GET', '/snapshot'),
   putSnapshot: (snapshot: Snapshot) => request<{ ok: true; snapshot: Snapshot }>('PUT', '/snapshot', snapshot),
+  /** 只改顶层设置字段，服务端在最新快照上合并；值为 null 表示清掉 */
+  patchSettings: (patch: SettingsPatch) => request<{ ok: true; snapshot: Snapshot }>('PATCH', '/snapshot', patch),
   patchPlugin: (name: string, patch: { enabled?: boolean; config?: unknown; priority?: number; groups?: GroupScope | null }) =>
     request<{ ok: true; revision: number }>('PATCH', `/plugins/${encodeURIComponent(name)}`, patch),
   bridgeToken: (name: string) => request<{ ok: true; token: string }>('POST', `/plugins/${encodeURIComponent(name)}/bridge`),
@@ -148,11 +155,20 @@ export const api = {
   uninstallPlugin: (name: string, purge = false) =>
     request<UninstallResult>('DELETE', `/manifest/plugins/${encodeURIComponent(name)}${purge ? '?purge=true' : ''}`),
   storage: () => request<StorageReport>('GET', '/storage'),
+  /** 一次只删一批；*Remaining 大于 0 就是没删完，再调一次（老版本 Worker 没有这几个字段，一次删完） */
   purgeOrphan: (name: string) =>
-    request<{ ok: true; plugin: string; kvKeys: number; tables: string[]; r2Objects: number }>(
-      'DELETE',
-      `/storage/orphans/${encodeURIComponent(name)}`,
-    ),
+    request<{
+      ok: true
+      plugin: string
+      kvKeys: number
+      tables: string[]
+      r2Objects: number
+      kvRemaining?: number
+      r2Remaining?: number
+      tablesRemaining?: number
+      /** 表前缀与别的插件重合、故意没删的表 */
+      skippedTables?: string[]
+    }>('DELETE', `/storage/orphans/${encodeURIComponent(name)}`),
 }
 
 /** 改完清单之后构建的去向，拼成一句 toast：触发了 / 不需要 / 触发失败（改动本身已生效） */

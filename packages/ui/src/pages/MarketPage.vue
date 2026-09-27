@@ -21,6 +21,7 @@ import {
   installUrlOf,
   type CatalogPlugin,
 } from '../lib/catalog.js'
+import { writeBatch } from '../lib/batchInstall.js'
 import { eachLimit, resolveSource } from '../lib/gitSource.js'
 
 const { plugins, refresh } = useStatus()
@@ -164,31 +165,17 @@ function cancelPreview() {
   rows.value = null
 }
 
-/** 按依赖顺序逐个写进清单（build: false），全部写完只触发一次构建 */
+/** 按依赖顺序（rows 预检时已按 installOrder 排好）逐个写进清单（build: false），全部写完只触发一次构建 */
 async function confirmInstall() {
   const list = installableRows.value
   if (!list.length || installing.value) return
   installing.value = true
-  const done: string[] = []
-  const failed: string[] = []
-  const warnings: string[] = []
-  for (const row of list) {
-    try {
-      const res = await api.installPlugin(row.source!, { build: false, acknowledgeDurableObjects: !!row.preview?.durableObjects && row.ackDo })
-      done.push(row.plugin.name)
-      for (const w of res.warnings ?? []) warnings.push(`${row.plugin.name}：${w}`)
-    } catch (e) {
-      failed.push(`${row.plugin.name}：${(e as Error).message}`)
-    }
-  }
-  if (done.length) {
-    try {
-      await api.triggerBuild()
-      push(`已安装 ${done.join('、')}，只触发了一次构建，上线后出现在插件列表里`, 'success')
-    } catch (e) {
-      push(`${done.length} 个插件已写进清单，但触发构建失败：${(e as Error).message}——可在插件页「未上线的改动」里重新构建`, 'warning')
-    }
-  }
+  const { done, failed, warnings, build } = await writeBatch(
+    list.map((row) => ({ name: row.plugin.name, source: row.source!, acknowledgeDurableObjects: !!row.preview?.durableObjects && row.ackDo })),
+    api,
+  )
+  if (build?.ok) push(`已安装 ${done.join('、')}，只触发了一次构建，上线后出现在插件列表里`, 'success')
+  else if (build) push(`${done.length} 个插件已写进清单，但触发构建失败：${build.error}——可在插件页「未上线的改动」里重新构建`, 'warning')
   if (failed.length) push(`有 ${failed.length} 个没装上：${failed.join('；')}`, 'error')
   if (warnings.length) push(`提醒：${warnings.join('；')}`, 'warning')
   installing.value = false

@@ -42,7 +42,23 @@ function guessBase(): string {
   return m ? m[0] : ''
 }
 
+/** 每个文档（window）只握一次手 */
+const connections = new WeakMap<object, Promise<Bridge>>()
+
+/**
+ * 同一个页面里多次调用返回同一个桥（选项以第一次为准）：面板每次 iframe 加载只应答一次 ready，
+ * 第二次调用再发 ready 会被当成重复忽略，各握各的手就会有一个永远等不到 init。
+ */
 export function createBridge(options: BridgeOptions = {}): Promise<Bridge> {
+  let bridge = connections.get(window)
+  if (!bridge) {
+    bridge = connect(options)
+    connections.set(window, bridge)
+  }
+  return bridge
+}
+
+function connect(options: BridgeOptions): Promise<Bridge> {
   const applyTheme = options.applyTheme ?? true
   const inFrame = window.parent !== window
   let nonce = ''
@@ -125,10 +141,14 @@ export function createBridge(options: BridgeOptions = {}): Promise<Bridge> {
       resolve(bridge)
     }
     window.addEventListener('message', (ev: MessageEvent) => {
+      // 只认面板：页面里再嵌的 iframe、弹出的窗口也能往这里 postMessage，伪造一条 init 就能换掉 token 与 base
+      if (ev.source !== window.parent) return
       const data: unknown = ev.data
       if (!isBridgeMessage(data)) return
       const msg = data as HostMessage
       if (msg.type === 'init') {
+        // 只认第一次：之后令牌走 token 消息刷新，重复的 init 不再改 nonce / base
+        if (nonce) return
         nonce = msg.nonce
         token = msg.token
         plugin = msg.plugin
@@ -141,7 +161,21 @@ export function createBridge(options: BridgeOptions = {}): Promise<Bridge> {
       if (msg.type === 'theme') setTheme(msg.theme)
       if (msg.type === 'token') token = msg.token
     })
-    post({ channel: CHANNEL, type: 'ready' })
+    const ready = () => post({ channel: CHANNEL, type: 'ready' })
+    ready()
+    // 面板每次 iframe 加载只应答一次 ready（见 host.ts）。上一页 load 之后才握手、这一页 load 之前就发了 ready，
+    // 两次 ready 落在同一段里，这一页的会被当成重复忽略——等自己 load 完、面板进了新的一段再补发一次。
+    // 延迟一下：面板那边的 load 事件排在页面自己的 load 之后
+    if (document.readyState !== 'complete') {
+      window.addEventListener(
+        'load',
+        () =>
+          setTimeout(() => {
+            if (!nonce) ready()
+          }, 300),
+        { once: true },
+      )
+    }
     setTimeout(done, options.timeout ?? 1500)
   })
 }

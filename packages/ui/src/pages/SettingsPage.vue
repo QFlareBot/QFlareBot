@@ -2,7 +2,7 @@
 import { Trash2 } from 'lucide-vue-next'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderSVG } from 'uqr'
-import { api } from '../api/client.js'
+import { api, type SettingsPatch } from '../api/client.js'
 import type { SavedBot } from '../api/types.js'
 import PageHeader from '../components/PageHeader.vue'
 import QQPanelEditor from '../components/QQPanelEditor.vue'
@@ -166,8 +166,13 @@ async function saveSnapshot(patch: {
 }) {
   savingSnap.value = true
   try {
-    const { snapshot } = await api.snapshot()
-    await api.putSnapshot({ ...snapshot, ...patch })
+    // 只把改的字段交给服务端合并：以前读整份快照再 PUT 回去，两次往返之间别处保存的插件配置会被盖掉。
+    // 值是 undefined 的字段（比如清空了权限不足回复）换成 null，JSON 里才留得住「清掉」这个意思
+    const body: SettingsPatch = {}
+    for (const [key, value] of Object.entries(patch) as [keyof SettingsPatch, unknown][]) {
+      ;(body as Record<string, unknown>)[key] = value === undefined ? null : value
+    }
+    await api.patchSettings(body)
     await refresh()
     push('已保存', 'success')
   } catch (e) {

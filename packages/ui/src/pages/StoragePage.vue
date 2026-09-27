@@ -7,7 +7,9 @@ import QBadge from '../components/ui/QBadge.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QEmpty from '../components/ui/QEmpty.vue'
+import { useToast } from '../composables/useToast.js'
 
+const { push } = useToast()
 const report = ref<StorageReport | null>(null)
 const loading = ref(false)
 const purging = ref<string | null>(null)
@@ -29,7 +31,20 @@ async function purge(name: string) {
   if (!confirm(`彻底删除 ${name} 的全部数据？KV 键、D1 表和 R2 对象都会清掉，不可恢复。`)) return
   purging.value = name
   try {
-    await api.purgeOrphan(name)
+    const res = await api.purgeOrphan(name)
+    // 键太多时服务端一次只删一批（一次请求的子请求有上限），剩下的要再点一次
+    const left = [
+      res.kvRemaining ? `${res.kvRemaining} 个 KV 键` : '',
+      res.r2Remaining ? `${res.r2Remaining} 个 R2 对象` : '',
+      res.tablesRemaining ? `${res.tablesRemaining} 张 D1 表` : '',
+    ].filter(Boolean)
+    if (left.length) push(`${name} 还剩 ${left.join('、')}没清完，再点一次「彻底删除」`, 'warning')
+    else push(`已删除 ${name} 的数据`, 'success')
+    if (res.skippedTables?.length) {
+      push(`${res.skippedTables.join('、')} 与别的插件表前缀重合，没有删，确认归属后用 wrangler d1 手工处置`, 'warning')
+    }
+  } catch (e) {
+    push(`删除失败：${(e as Error).message}`, 'error')
   } finally {
     purging.value = null
     void refresh()
