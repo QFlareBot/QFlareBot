@@ -154,7 +154,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     scene === 'group' && (role === 'owner' || role === 'admin' || role === 'member')
       ? (role as 'owner' | 'admin' | 'member')
       : undefined
-  // 群消息的被 @ 者是 member_openid / nickname，频道是 id / username；只读 id 的话群里 @ 谁都拿不到。
+  // 被 @ 者的 id / 名字：线上群全量消息带 id / username，腾讯官方适配器的类型里还有 member_openid / nickname，都读。
   // is_you（@ 的就是本机器人）也算 bot，插件过滤机器人时不会把自己当成被 @ 的群友
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
   const mentions: Mention[] = (d.mentions ?? []).map((m) => ({

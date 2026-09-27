@@ -41,8 +41,8 @@ export interface RawMessageEvent {
   }>
   /**
    * `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人）。
-   * 群消息里被 @ 者的 id 在 `member_openid`、名字在 `nickname`（腾讯官方适配器 openclaw-qqbot 的类型，2026-09 线上确认没有 `id`）；
-   * 频道是 `id` / `username`
+   * 被 @ 者的 id / 名字：线上群全量消息带 `id` / `username`（今日老婆的强娶记录能对上，AstrBot 也读这两个）；
+   * 腾讯官方适配器 openclaw-qqbot 的类型里另有 `member_openid` / `nickname`，两套都读
    */
   mentions?: Array<{
     id?: string
