@@ -7,7 +7,9 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./cron": "./src/cron.ts",
+    "./sqlScope": "./src/sqlScope.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

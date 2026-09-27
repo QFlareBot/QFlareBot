@@ -105,6 +105,57 @@ describe('越界的表名一律拒绝', () => {
   it('多语句里夹带一条越界的，整体拒绝', () => {
     expect(() => scope('CREATE TABLE {ok} (x); DROP TABLE rt_installs;')).toThrow(/不属于本插件的表名/)
   })
+
+  it('视图、索引、触发器名也得带前缀', () => {
+    for (const sql of [
+      'CREATE VIEW x AS SELECT * FROM {notes}',
+      'CREATE TEMP VIEW IF NOT EXISTS x AS SELECT 1',
+      'DROP VIEW x',
+      'DROP INDEX x',
+      'DROP INDEX IF EXISTS x',
+      'CREATE UNIQUE INDEX x ON {notes}(a)',
+      'CREATE TEMPORARY TRIGGER x AFTER INSERT ON {notes} BEGIN SELECT 1; END',
+      'DROP TRIGGER x',
+    ]) {
+      expect(() => scope(sql), sql).toThrow(/不属于本插件的表名 x/)
+    }
+  })
+
+  it('触发器挂到别人的表上也拦', () => {
+    expect(() => scope('CREATE TRIGGER {tr} AFTER INSERT ON rt_installs BEGIN SELECT 1; END')).toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+    // AFTER UPDATE 放行了，挂的表还是由 ON 管；OF 后面叫 view 的列也不影响
+    expect(() => scope('CREATE TRIGGER {tr} AFTER UPDATE ON rt_installs BEGIN SELECT 1; END')).toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+    expect(() => scope('CREATE TRIGGER {tr} AFTER UPDATE OF view ON rt_installs BEGIN SELECT 1; END')).toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+    // 触发器体里的 UPDATE 是真的 UPDATE 语句
+    expect(() => scope('CREATE TRIGGER {tr} AFTER INSERT ON {t} BEGIN UPDATE rt_installs SET x = 1; END')).toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+  })
+
+  it('列名叫 view / trigger 放行了，但后面真正的表名照样查', () => {
+    expect(() => scope('SELECT view FROM rt_installs')).toThrow(/不属于本插件的表名 rt_installs/)
+    expect(() => scope('SELECT trigger FROM {a} JOIN rt_installs ON 1')).toThrow(/不属于本插件的表名 rt_installs/)
+  })
+
+  it('IS [NOT] DISTINCT FROM 放行了，但语句自己的 FROM 照样查', () => {
+    expect(() => scope('SELECT a IS DISTINCT FROM b FROM rt_installs')).toThrow(/不属于本插件的表名 rt_installs/)
+    expect(() => scope('SELECT a IS NOT DISTINCT FROM b FROM rt_installs')).toThrow(/不属于本插件的表名 rt_installs/)
+    // 不是 IS 引出的 DISTINCT 不算
+    expect(() => scope('SELECT DISTINCT a FROM rt_installs')).toThrow(/不属于本插件的表名 rt_installs/)
+  })
+
+  it('CTE 列清单里的列名不会被当成 CTE 名放行', () => {
+    // 以前记下的"CTE 名"是 AS 前面的词，也就是列清单的最后一列
+    expect(() => scope('WITH c(rt_installs) AS (SELECT 1) SELECT * FROM rt_installs')).toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+  })
 })
 
 describe('不该误伤的地方', () => {
@@ -142,6 +193,49 @@ describe('不该误伤的地方', () => {
   it('递归 CTE 在自己体内引用自己', () => {
     const sql = 'WITH RECURSIVE t AS (SELECT 1 UNION SELECT n FROM t) SELECT * FROM t'
     expect(scope(sql)).toBe(sql)
+  })
+
+  it('带列清单的 CTE：名字取括号前面的词', () => {
+    const sql = 'WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x<5) SELECT x FROM cnt'
+    expect(scope(sql)).toBe(sql)
+    expect(
+      scope('WITH a (x) AS (SELECT 1), b(y, z) AS NOT MATERIALIZED (SELECT x, x FROM a) SELECT * FROM b JOIN {notes} ON 1'),
+    ).toBe('WITH a (x) AS (SELECT 1), b(y, z) AS NOT MATERIALIZED (SELECT x, x FROM a) SELECT * FROM b JOIN p_hello_notes ON 1')
+  })
+
+  it('列名可以叫 view / trigger：只有 CREATE / DROP 之类后面的才是视图、触发器', () => {
+    expect(scope('CREATE TABLE IF NOT EXISTS {t} (id INTEGER PRIMARY KEY, view INTEGER)')).toBe(
+      'CREATE TABLE IF NOT EXISTS p_hello_t (id INTEGER PRIMARY KEY, view INTEGER)',
+    )
+    expect(scope('SELECT view FROM {t}')).toBe('SELECT view FROM p_hello_t')
+    // 前面隔着逗号的 UNIQUE 不算
+    expect(scope('CREATE TABLE {t} (a TEXT UNIQUE, view INTEGER, trigger TEXT)')).toBe(
+      'CREATE TABLE p_hello_t (a TEXT UNIQUE, view INTEGER, trigger TEXT)',
+    )
+    // 以前 trigger 会让后面 JOIN 的 ON 被当成表名
+    expect(scope('SELECT trigger, view FROM {a} AS a JOIN {b} AS b ON a.id = b.id')).toBe(
+      'SELECT trigger, view FROM p_hello_a AS a JOIN p_hello_b AS b ON a.id = b.id',
+    )
+    expect(scope('UPDATE {t} SET view = view + 1 WHERE id = ?')).toBe('UPDATE p_hello_t SET view = view + 1 WHERE id = ?')
+    expect(scope('CREATE INDEX IF NOT EXISTS {t_view} ON {t}(view)')).toBe(
+      'CREATE INDEX IF NOT EXISTS p_hello_t_view ON p_hello_t(view)',
+    )
+  })
+
+  it('UPDATE 触发器：AFTER UPDATE [OF 列] 后面不是表名，挂的表看 ON', () => {
+    expect(scope('CREATE TRIGGER IF NOT EXISTS {tr} AFTER UPDATE ON {t} BEGIN UPDATE {log} SET n = n + 1; END')).toBe(
+      'CREATE TRIGGER IF NOT EXISTS p_hello_tr AFTER UPDATE ON p_hello_t BEGIN UPDATE p_hello_log SET n = n + 1; END',
+    )
+    expect(scope('CREATE TRIGGER {tr} BEFORE UPDATE OF view ON {t} BEGIN SELECT 1; END')).toBe(
+      'CREATE TRIGGER p_hello_tr BEFORE UPDATE OF view ON p_hello_t BEGIN SELECT 1; END',
+    )
+  })
+
+  it('IS [NOT] DISTINCT FROM 里的 FROM 不是表位置', () => {
+    expect(scope('SELECT a IS DISTINCT FROM b FROM {t}')).toBe('SELECT a IS DISTINCT FROM b FROM p_hello_t')
+    expect(scope('SELECT * FROM {t} WHERE a IS NOT DISTINCT FROM ?')).toBe(
+      'SELECT * FROM p_hello_t WHERE a IS NOT DISTINCT FROM ?',
+    )
   })
 
   it('CTE 的放行不跨语句泄漏', () => {

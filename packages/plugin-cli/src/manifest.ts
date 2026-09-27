@@ -10,6 +10,8 @@ import {
   type Manifest,
   type PluginDefinition,
 } from '@qqbot/sdk'
+// 和运行时调度用的是同一份实现；构建工具不依赖运行时，所以它放在 SDK 里
+import { cronError } from '@qqbot/sdk/cron'
 
 export interface ExtractManifestOptions {
   /** 入口文件，相对 cwd，默认 src/index.ts */
@@ -84,6 +86,19 @@ export function expectedPluginName(pkgName: string): string {
   return prefix ? unscoped.slice(prefix.length) : unscoped
 }
 
+/**
+ * 写错的 cron 表达式：运行时一次都不会触发它。只警告、不拦构建——以前的构建不查这个，
+ * 已装的插件同步上游后不能因为多了这道检查就构建失败。段数不对的 validateManifest 早就当错误拦了。
+ */
+export function cronWarnings(manifest: Pick<Manifest, 'name' | 'cron'>): string[] {
+  const out: string[] = []
+  for (const job of manifest.cron) {
+    const error = cronError(job.cron)
+    if (error) out.push(`${manifest.name}：定时任务「${job.name}」的 cron 表达式「${job.cron}」不合法，运行时不会触发：${error}`)
+  }
+  return out
+}
+
 function isPluginDefinition(value: unknown): value is PluginDefinition<unknown> {
   return typeof value === 'object' && value !== null && typeof (value as { name?: unknown }).name === 'string'
 }
@@ -141,5 +156,8 @@ export async function extractPluginManifest(options: ExtractManifestOptions = {}
     }
   }
   if (errors.length > 0) throw new ManifestValidationError(errors)
+  // 放在这里而不是 CLI 里：机器人的构建机直接调 buildPlugin，不经过 CLI，告警也得进它的构建日志。
+  // 带上插件名，因为一次构建日志里有好几个插件
+  for (const warning of cronWarnings(manifest)) console.warn(`  ⚠ ${warning}`)
   return manifest
 }

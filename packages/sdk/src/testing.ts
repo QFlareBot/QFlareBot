@@ -1,6 +1,9 @@
 /**
  * 插件单元测试工具：构造假的 Session / PluginContext，记录插件的出站行为。
  * 不依赖运行时，`vitest` 中直接调用插件处理器即可。
+ *
+ * 线上会拒绝的写法，这里也拒绝：`ctx.db` 的 SQL 走同一套表名检查，`session.reply` 有同样的被动回复上限。
+ * 否则本地测试全绿、装上机器人才报错，替身就失去了意义。
  */
 import type { BotApi, GroupApi, Logger, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from './context.js'
 import type { ScopedDurableObjects } from './durable.js'
@@ -22,6 +25,10 @@ import type { ButtonInput, CommandInput, PluginDefinition } from './plugin.js'
 import { normalizePlugin } from './normalize.js'
 import { deliverReply } from './reply.js'
 import { qqAvatar } from './identity.js'
+import { flattenForExec, scopeSql, tablePrefix } from './sqlScope.js'
+
+/** 同一条消息/事件最多被动回复几条（QQ 平台限制），与运行时的默认值一致 */
+const DEFAULT_MAX_PASSIVE_REPLIES = 5
 
 export interface MockSessionOptions {
   content?: string
@@ -42,10 +49,15 @@ export interface MockSessionOptions {
   raw?: unknown
   attachments?: Attachment[]
   interaction?: Partial<Pick<Interaction, 'id' | 'type' | 'buttonId' | 'buttonData' | 'featureId' | 'messageId' | 'feedback'>>
+  /**
+   * 被动回复上限，默认 5（和线上一样）。超出的 `reply` 像线上一样返回 `ok: false`，不记进 `replies`。
+   * `stream().end()` 也记一条（群聊里它就是一次 reply）；`typing` 不算
+   */
+  maxPassiveReplies?: number
 }
 
 export interface MockSession extends Session {
-  /** 按调用顺序记录的 reply */
+  /** 按调用顺序记录的 reply；超过被动回复上限、线上发不出去的不在里面 */
   readonly replies: OutgoingMessage[]
   /** 按调用顺序记录的 send */
   readonly sent: Array<{ message: OutgoingMessage; target: SendTarget | undefined }>
@@ -68,6 +80,19 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
   const acks: InteractionCode[] = []
 
   const messageId = options.messageId === null ? undefined : (options.messageId ?? 'mock-message-id')
+
+  // 与运行时 session.reply 同样的上限和同样的失败结果：超了不抛错，只是发不出去
+  const maxPassiveReplies = options.maxPassiveReplies ?? DEFAULT_MAX_PASSIVE_REPLIES
+  let passiveCount = 0
+  const passiveReply = (message: OutgoingMessage): SendResult => {
+    if (passiveCount >= maxPassiveReplies) {
+      return { ok: false, status: 0, error: `被动回复已达上限 ${maxPassiveReplies} 条`, raw: null }
+    }
+    passiveCount += 1
+    replies.push(message)
+    return OK
+  }
+
   let interaction: Interaction | undefined
   if (options.interaction) {
     const i = options.interaction
@@ -122,8 +147,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     typingSeconds,
     acks,
     async reply(message) {
-      replies.push(message)
-      return OK
+      return passiveReply(message)
     },
     async send(message, target) {
       sent.push({ message, target })
@@ -142,8 +166,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
         },
         async end(chunk) {
           if (chunk) streamed.push(chunk)
-          replies.push(streamed.join(''))
-          return OK
+          return passiveReply(streamed.join(''))
         },
       }
     },
@@ -354,6 +377,11 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
 export interface MockContextOptions<C> {
   config?: C
   services?: Record<string, unknown>
+  /**
+   * ctx.db 的替身。插件的 SQL 先按线上的规则检查（`{表名}` 占位、越界表名一律抛错，`exec` 还查引号内换行），
+   * 不合规就抛和线上一样的错；通过了再原样交给替身——替身收到的仍是插件写的 SQL，按原文断言的测试不受影响。
+   * `ctx.db.table()` 固定返回线上的前缀，不走替身
+   */
   db?: ScopedDB
   r2?: ScopedR2
   botId?: string
@@ -366,15 +394,31 @@ export function createMockContext<C = unknown>(
   options: MockContextOptions<C> = {},
 ): PluginContext<C> {
   const services = options.services ?? {}
-  const unavailable = async () => {
+  const unavailable = (): never => {
     throw new Error('mock 环境未提供 db，请通过 createMockContext 的 options.db 注入')
   }
-  const db: ScopedDB = options.db ?? {
-    table: (n) => `p_${plugin.name}_${n}`,
-    exec: unavailable,
-    run: unavailable,
-    all: unavailable,
-    first: unavailable,
+  // SQL 先过一遍线上的表名检查（见 sqlScope.ts），写错的在本地就抛同样的错；
+  // 没注入替身时检查完再报「未提供 db」，越界的 SQL 先看到的是越界那条错
+  const prefix = tablePrefix(plugin.name)
+  const inner = options.db
+  const db: ScopedDB = {
+    table: (n) => prefix + n,
+    async exec(sql) {
+      flattenForExec(scopeSql(sql, prefix))
+      return inner ? inner.exec(sql) : unavailable()
+    },
+    async run(sql, ...params) {
+      scopeSql(sql, prefix)
+      return inner ? inner.run(sql, ...params) : unavailable()
+    },
+    async all<T>(sql: string, ...params: unknown[]) {
+      scopeSql(sql, prefix)
+      return inner ? inner.all<T>(sql, ...params) : unavailable()
+    },
+    async first<T>(sql: string, ...params: unknown[]) {
+      scopeSql(sql, prefix)
+      return inner ? inner.first<T>(sql, ...params) : unavailable()
+    },
   }
 
   // DO 没法在 Node 里造真的，只能由调用方注入替身；没注入就抛错点名，别让测试
