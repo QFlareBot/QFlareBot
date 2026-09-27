@@ -7,12 +7,12 @@
  *  - 分发链自己抛错时按钮仍要 ack，否则客户端一直转圈
  */
 import { describe, expect, it } from 'vitest'
-import { definePlugin, type Logger, type SendResult } from '@qqbot/sdk'
+import { definePlugin, extractManifest, type Logger, type Manifest, type PluginDefinition, type SendResult } from '@qqbot/sdk'
 import { createMockSession } from '@qqbot/sdk/testing'
 import type { ContextFactory } from './context.js'
 import { dispatch, type DispatchDeps } from './dispatcher.js'
 import { PluginRegistry } from './registry.js'
-import type { RuntimeOptions, Snapshot } from './types.js'
+import type { LazyPluginEntry, RuntimeOptions, Snapshot } from './types.js'
 
 const accepted = (): SendResult => ({ ok: true, status: 200, messageId: 'm1', raw: null })
 const rejected = (): SendResult => ({ ok: false, status: 403, error: '内容审核未通过', raw: null })
@@ -212,5 +212,146 @@ describe('中间件的 next()', () => {
 
     // 畸形快照让候选收集抛错；错误经 await next() 冒到中间件，按以前的规矩记在中间件头上
     expect(report.errors.map((e) => e.plugin)).toEqual(['rethrow'])
+  })
+})
+
+describe('按清单预筛：用不上的插件不加载', () => {
+  /** 构建产物那样的懒加载条目：清单现成，代码 load() 时才求值；loads 记下谁被加载了 */
+  function lazy(def: PluginDefinition<unknown>, loads: string[], manifest?: Partial<Manifest>): LazyPluginEntry {
+    return {
+      manifest: { ...extractManifest(def, { version: '1.0.0' }), ...manifest } as Manifest,
+      load: async () => {
+        loads.push(def.name)
+        return { default: def }
+      },
+    }
+  }
+
+  function withPrepare(entries: RuntimeOptions['plugins'], snapshot?: Snapshot) {
+    const { deps, logged } = makeDeps(entries, snapshot)
+    const prepared: string[] = []
+    deps.prepare = async (plugin) => void prepared.push(plugin.manifest.name)
+    return { deps, logged, prepared }
+  }
+
+  it('命令只加载词对得上的插件，没命中的连 onBoot 都不跑', async () => {
+    const loads: string[] = []
+    const { deps, prepared } = withPrepare([
+      lazy(definePlugin({ name: 'greeter', commands: { hi: () => '你好' } }), loads),
+      lazy(definePlugin({ name: 'farewell', commands: { bye: () => '再见' } }), loads),
+      lazy(definePlugin({ name: 'weather', regex: { '^天气': () => '晴' } }), loads),
+      lazy(definePlugin({ name: 'welcome', events: { 'qq.group.member_added': () => '欢迎' } }), loads),
+    ])
+    const session = createMockSession({ content: '/hi' })
+
+    const report = await dispatch(session, deps)
+
+    expect(loads).toEqual(['greeter'])
+    expect(prepared).toEqual(['greeter'])
+    expect(session.replies).toEqual(['你好'])
+    expect(report.matched).toEqual([{ plugin: 'greeter', kind: 'command', name: 'hi' }])
+  })
+
+  it('有中间件的每个事件都加载；正则、事件、按键各自按清单命中', async () => {
+    const loads: string[] = []
+    const entries = [
+      lazy(definePlugin({ name: 'audit', middleware: async (_, next) => next() }), loads),
+      lazy(definePlugin({ name: 'weather', regex: { '/^天气/i': () => '晴' } }), loads),
+      lazy(definePlugin({ name: 'welcome', events: { 'qq.group.member_added': () => '欢迎' } }), loads),
+      lazy(definePlugin({ name: 'vote', buttons: { yes: { dataPattern: '^poll:', handler: () => 0 } } }), loads),
+    ]
+
+    await dispatch(createMockSession({ content: '天气怎么样' }), withPrepare(entries).deps)
+    expect(loads.sort()).toEqual(['audit', 'weather'])
+
+    loads.length = 0
+    await dispatch(createMockSession({ event: 'qq.group.member_added', content: '' }), withPrepare(entries).deps)
+    expect(loads.sort()).toEqual(['audit', 'welcome'])
+
+    loads.length = 0
+    const click = (buttonData: string) =>
+      createMockSession({ event: 'qq.interaction', content: '', interaction: { type: 'button', buttonId: 'yes', buttonData } })
+    await dispatch(click('poll:1'), withPrepare(entries).deps)
+    expect(loads.sort()).toEqual(['audit', 'vote'])
+    loads.length = 0
+    await dispatch(click('other'), withPrepare(entries).deps)
+    expect(loads).toEqual(['audit'])
+  })
+
+  it('没 @ 机器人的群消息只加载 bare 命令；@ 了就都参与', async () => {
+    const loads: string[] = []
+    const entries = [
+      lazy(definePlugin({ name: 'plain', commands: { 签到: () => '已签到' } }), loads),
+      lazy(definePlugin({ name: 'loose', commands: { 签到: { bare: true, handler: () => 'bare 签到' } } }), loads),
+    ]
+    await dispatch(createMockSession({ content: '签到', atMe: false }), withPrepare(entries).deps)
+    expect(loads).toEqual(['loose'])
+
+    loads.length = 0
+    await dispatch(createMockSession({ content: '签到', atMe: true }), withPrepare(entries).deps)
+    expect(loads.sort()).toEqual(['loose', 'plain'])
+  })
+
+  it('权限不足的命令也要加载：它要参与「最长命令名胜出」和统一的权限不足回复', async () => {
+    const loads: string[] = []
+    const entries = [
+      lazy(definePlugin({ name: 'pixiv', commands: { pixiv: () => '父命令' } }), loads),
+      lazy(definePlugin({ name: 'pixiv-admin', commands: { 'pixiv random': { permission: 'bot_admin', handler: () => '子命令' } } }), loads),
+    ]
+    const { deps } = withPrepare(entries, { revision: 1, plugins: {}, permissionDeniedReply: '没有权限' })
+    const session = createMockSession({ content: '/pixiv random' })
+
+    const report = await dispatch(session, deps)
+
+    expect(loads.sort()).toEqual(['pixiv', 'pixiv-admin'])
+    // 子命令权限不足也不退回父命令，统一回复补一句
+    expect(report.matched).toEqual([])
+    expect(session.replies).toEqual(['没有权限'])
+  })
+
+  it('用得上的插件依赖的服务提供者也要准备（onInstall / onBoot），但不参与这次匹配', async () => {
+    const loads: string[] = []
+    const provider = definePlugin({ name: 'store', services: { kv2: () => ({}) }, commands: { store: () => '不该执行' } })
+    const base = definePlugin({ name: 'base', services: { log2: () => ({}) } })
+    const consumer = definePlugin({ name: 'shop', depends: { kv2: '*' }, commands: { buy: () => '买了' } })
+    // 提供者自己也依赖别人：顺着往下找
+    const providerWithDeps = { ...provider, depends: { log2: '*' } }
+    const { deps, prepared } = withPrepare([lazy(providerWithDeps, loads), lazy(base, loads), lazy(consumer, loads)])
+    const session = createMockSession({ content: '/buy' })
+
+    const report = await dispatch(session, deps)
+
+    expect(loads.sort()).toEqual(['base', 'shop', 'store'])
+    expect(prepared.sort()).toEqual(['base', 'shop', 'store'])
+    expect(report.matched).toEqual([{ plugin: 'shop', kind: 'command', name: 'buy' }])
+  })
+
+  it('清单缺字段（旧制品来源）或正则编译不了：宁可多加载，交给收集候选照旧处理', async () => {
+    const loads: string[] = []
+    const { deps } = withPrepare([
+      lazy(definePlugin({ name: 'legacy', commands: { other: () => 'x' } }), loads, { hasMiddleware: undefined as unknown as boolean }),
+      lazy(definePlugin({ name: 'broken', regex: { '(': () => 'x' } }), loads),
+      lazy(definePlugin({ name: 'unrelated', commands: { other: () => 'x' } }), loads),
+    ])
+
+    const report = await dispatch(createMockSession({ content: '/hi' }), deps)
+
+    expect(loads.sort()).toEqual(['broken', 'legacy'])
+    // 坏正则照旧只废掉它自己，错误记在它头上
+    expect(report.errors).toEqual([expect.objectContaining({ plugin: 'broken', stage: 'match' })])
+  })
+
+  it('停用与本群不生效的插件照旧不加载', async () => {
+    const loads: string[] = []
+    const entries = [
+      lazy(definePlugin({ name: 'off', commands: { hi: () => 'x' } }), loads),
+      lazy(definePlugin({ name: 'elsewhere', commands: { hi: () => 'y' } }), loads),
+    ]
+    const snapshot: Snapshot = {
+      revision: 1,
+      plugins: { off: { enabled: false }, elsewhere: { enabled: true, groups: { mode: 'allow', ids: ['other-group'] } } },
+    }
+    await dispatch(createMockSession({ content: '/hi', scene: 'group', targetId: 'g1' }), withPrepare(entries, snapshot).deps)
+    expect(loads).toEqual([])
   })
 })

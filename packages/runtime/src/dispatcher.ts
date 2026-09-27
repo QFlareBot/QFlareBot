@@ -4,6 +4,7 @@ import {
   normalizePlugin,
   type InteractionCode,
   type Logger,
+  type Manifest,
   type NormalizedPlugin,
   type PermissionTier,
   type PluginDefinition,
@@ -184,18 +185,94 @@ interface CollectContext {
   send(plugin: string, stage: string, payload: ReplyPayload): Promise<void>
 }
 
+/** 这条事件的命令解析结果；不是消息事件为 null。清单预筛和收集候选共用这一份 */
+function commandOf(session: Session, deps: DispatchDeps): ParsedCommand | null {
+  if (!isMessageEvent(session.event)) return null
+  const prefixes = deps.snapshot.commandPrefixes ?? deps.commandPrefixes
+  return parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
+}
+
+/**
+ * 只看清单，判断插件这次事件**可能**用得上——用不上的连代码都不加载，onBoot / onInstall 也不跑。
+ *
+ * 以前每个事件都把全部启用的插件 import 一遍、跑一遍生命周期钩子，再逐个问「命中没有」。个人机器人流量低，
+ * isolate 经常是冷的，这一遍就落在每个事件头上，吃的是免费版每次请求那 10ms CPU——插件一多，
+ * 第一个事件就可能超时被掐掉。清单是构建时从同一份代码抽出来的（命令、正则、事件、按键、有没有中间件都在里面），
+ * 用它先筛一遍，和 collectForPlugin 的判断一致：
+ *
+ * - 有中间件：每个事件都要跑，一律加载
+ * - 命令：词对得上、场景允许（bare 规则同 collectForPlugin）；**不看权限**——权限不足的也要参与「最长命令名胜出」
+ *   和统一的权限不足回复
+ * - 正则、事件、按键：同 collectForPlugin
+ *
+ * 只允许多放、不能漏：清单缺字段（旧制品来源）、形状不对、正则编译失败，一律当作用得上，
+ * 交给 collectForPlugin 照旧处理（包括照旧把错误记到这个插件头上）。
+ */
+export function mayHandle(manifest: Manifest, session: Session, command: ParsedCommand | null): boolean {
+  try {
+    const { commands, regex, events, buttons, hasMiddleware } = manifest
+    if (!Array.isArray(commands) || !Array.isArray(regex) || !Array.isArray(events) || !Array.isArray(buttons)) return true
+    if (typeof hasMiddleware !== 'boolean' || hasMiddleware) return true
+
+    if (command) {
+      for (const cmd of commands) {
+        if (command.bare && !cmd.bare && !session.atMe) continue
+        if (!sceneAllowed(cmd.scenes, session)) continue
+        if ([cmd.name, ...(cmd.aliases ?? [])].some((c) => matchedWords(command, c) > 0)) return true
+      }
+    }
+    if (isMessageEvent(session.event)) {
+      for (const rule of regex) {
+        if (sceneAllowed(rule.scenes, session) && compileRegex(rule.pattern, rule.flags).test(session.content)) return true
+      }
+    }
+    const interaction = session.interaction
+    if (interaction && (interaction.type === 'button' || interaction.type === 'menu')) {
+      for (const rule of buttons) {
+        if (rule.id !== interaction.buttonId || !sceneAllowed(rule.scenes, session)) continue
+        if (!rule.dataPattern || compileRegex(rule.dataPattern).test(interaction.buttonData)) return true
+      }
+    }
+    return events.some((rule) => (Array.isArray(rule.event) ? rule.event.includes(session.event) : rule.event === session.event))
+  } catch {
+    return true
+  }
+}
+
+/**
+ * 这些插件 depends 里的服务由谁提供（顺着提供者自己的 depends 往下找）。提供者要先跑过 onInstall / onBoot，
+ * 服务才靠得住——以前每个事件把所有插件都准备一遍，这件事是顺带做到的；现在只加载用得上的，得显式补上。
+ * 提供者只做准备、不参与这次匹配（它自己没命中就不该执行），也不看它在本群生效没有：服务调用不受群范围限制。
+ */
+function providersOf(plugins: RegisteredPlugin[], deps: DispatchDeps): RegisteredPlugin[] {
+  const seen = new Set(plugins.map((p) => p.manifest.name))
+  const providers: RegisteredPlugin[] = []
+  const queue = [...plugins]
+  while (queue.length) {
+    const plugin = queue.pop()!
+    for (const service of Object.keys(plugin.manifest.depends ?? {})) {
+      const name = deps.registry.providerOf(service)
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      const provider = deps.registry.get(name)
+      // 提供者被停用时不管它：服务解析那一步会报出可读的错误（见 ContextFactory）
+      if (!provider || !isEnabled(deps.snapshot, name)) continue
+      providers.push(provider)
+      queue.push(provider)
+    }
+  }
+  return providers
+}
+
 function collectCandidates(
   session: Session,
+  command: ParsedCommand | null,
   plugins: Array<{ registered: RegisteredPlugin; def: PluginDefinition<unknown> }>,
   deps: DispatchDeps,
   hooks: CollectHooks,
 ): { candidates: Candidate[]; denied: DeniedMatch[] } {
   const candidates: Candidate[] = []
   const denied: DeniedMatch[] = []
-  const prefixes = deps.snapshot.commandPrefixes ?? deps.commandPrefixes
-  const command = isMessageEvent(session.event)
-    ? parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
-    : null
 
   /** 投递回复并检查结果：SendResult 被丢掉时只剩事件摘要里一个失败计数，定位不到是谁、为什么 */
   const send = async (plugin: string, stage: string, payload: ReplyPayload): Promise<void> => {
@@ -349,12 +426,18 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
     return report
   }
 
-  // 在本群不生效的插件连中间件都不跑：对这个群来说它就不存在
-  const enabled = deps.registry
+  const command = commandOf(session, deps)
+  // 在本群不生效的插件连中间件都不跑：对这个群来说它就不存在。
+  // 按清单这次用不上的也不加载（见 mayHandle），只加载用得上的与它们依赖的服务提供者
+  const relevant = deps.registry
     .all()
     .filter((p) => isEnabled(deps.snapshot, p.manifest.name) && groupAllowed(deps.snapshot, p.manifest.name, session))
-  const loaded = await Promise.all(enabled.map(async (registered) => ({ registered, def: await registered.load() })))
-  const plugins = loaded.filter((p): p is { registered: RegisteredPlugin; def: PluginDefinition<unknown> } => !!p.def)
+    .filter((p) => mayHandle(p.manifest, session, command))
+  const load = (list: RegisteredPlugin[]) =>
+    Promise.all(list.map(async (registered) => ({ registered, def: await registered.load() }))).then((loaded) =>
+      loaded.filter((p): p is { registered: RegisteredPlugin; def: PluginDefinition<unknown> } => !!p.def),
+    )
+  const [plugins, providers] = await Promise.all([load(relevant), load(providersOf(relevant, deps))])
 
   const fail = (plugin: string, stage: string, err: unknown) => {
     const info = errorInfo(err)
@@ -376,11 +459,13 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
   }
 
   if (deps.prepare) {
-    await Promise.all(plugins.map((p) => deps.prepare!(p.registered, p.def).catch((e) => fail(p.def.name, 'prepare', e))))
+    await Promise.all(
+      [...plugins, ...providers].map((p) => deps.prepare!(p.registered, p.def).catch((e) => fail(p.def.name, 'prepare', e))),
+    )
   }
 
   const runMatchers = async () => {
-    const { candidates, denied } = collectCandidates(session, plugins, deps, {
+    const { candidates, denied } = collectCandidates(session, command, plugins, deps, {
       onError: fail,
       onSendFailure: failSend,
     })
