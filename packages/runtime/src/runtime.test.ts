@@ -969,6 +969,32 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
     expect(guildFull.atMe).toBe(true)
   })
 
+  it('群消息的被 @ 者取 member_openid / nickname，@ 本机器人的那一项标成 bot', () => {
+    const s = buildSession(
+      {
+        op: 0,
+        id: 'GROUP_AT_MESSAGE_CREATE:m',
+        t: 'GROUP_AT_MESSAGE_CREATE',
+        d: {
+          id: 'm',
+          content: '<@B0AB0AB0> /购买奴隶 <@A1B2C3D4>',
+          author: { member_openid: 'U1' },
+          group_openid: 'G1',
+          mentions: [
+            { scope: 'single', member_openid: 'B0AB0AB0', nickname: '机器人', is_you: true },
+            { scope: 'single', member_openid: 'A1B2C3D4', nickname: '小明', bot: false, is_you: false },
+          ],
+        },
+      },
+      opts,
+    )
+    expect(s.content).toBe('/购买奴隶')
+    expect(s.mentions).toEqual([
+      { id: 'B0AB0AB0', username: '机器人', bot: true },
+      { id: 'A1B2C3D4', username: '小明', bot: false },
+    ])
+  })
+
   it('单聊天然 atMe，交互事件恒为 false', () => {
     const c2c = buildSession(
       { op: 0, id: 'C2C:x', t: 'C2C_MESSAGE_CREATE', d: { id: 'm', content: 'hi', author: { user_openid: 'U9' } } },

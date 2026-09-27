@@ -39,8 +39,21 @@ export interface RawMessageEvent {
     height?: number
     size?: number
   }>
-  /** `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人） */
-  mentions?: Array<{ id?: string; username?: string; bot?: boolean; is_you?: boolean }>
+  /**
+   * `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人）。
+   * 群消息里被 @ 者的 id 在 `member_openid`、名字在 `nickname`（腾讯官方适配器 openclaw-qqbot 的类型，2026-09 线上确认没有 `id`）；
+   * 频道是 `id` / `username`
+   */
+  mentions?: Array<{
+    id?: string
+    member_openid?: string
+    user_openid?: string
+    username?: string
+    nickname?: string
+    bot?: boolean
+    is_you?: boolean
+    scope?: string
+  }>
   /** ext 形如 ["msg_idx=REFIDX_...", "auth_token=..."] */
   message_scene?: { source?: string; ext?: string[] }
   message_type?: number

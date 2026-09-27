@@ -154,10 +154,13 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     scene === 'group' && (role === 'owner' || role === 'admin' || role === 'member')
       ? (role as 'owner' | 'admin' | 'member')
       : undefined
+  // 群消息的被 @ 者是 member_openid / nickname，频道是 id / username；只读 id 的话群里 @ 谁都拿不到。
+  // is_you（@ 的就是本机器人）也算 bot，插件过滤机器人时不会把自己当成被 @ 的群友
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
   const mentions: Mention[] = (d.mentions ?? []).map((m) => ({
-    id: typeof m.id === 'string' ? m.id : '',
-    username: typeof m.username === 'string' ? m.username : '',
-    bot: m.bot === true,
+    id: str(m.member_openid) || str(m.id) || str(m.user_openid),
+    username: str(m.nickname) || str(m.username),
+    bot: m.bot === true || m.is_you === true,
   }))
   const event = toEventName(rawType)
   // 是否在呼叫本机器人，规则照 AstrBot 的 QQ 官方适配器：单聊/频道私信天然是；at_message 事件平台只在被 @ 时推送；
