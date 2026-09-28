@@ -117,6 +117,11 @@ export interface Snapshot {
    * 就用先注册、且启用着的那个（见 services.ts）
    */
   serviceProviders?: Record<string, string>
+  /**
+   * 机器人的公开地址（`https://域名`，不带路径），设置页填的。插件拿 `ctx.publicUrl` 拼自己路由的完整地址，
+   * 让 QQ 来拉图片。不填时用当前请求进来的那个域名（见 publicUrlFor）；定时任务没有请求，只有填了才有
+   */
+  publicUrl?: string
 }
 
 export interface PluginState {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-/** 运行：安全模式、日志里记录正文、命令前缀 */
-import { onMounted, ref } from 'vue'
+/** 运行：安全模式、日志里记录正文、命令前缀、公开地址 */
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../../api/client.js'
 import { useSettingsPatch } from '../../composables/useSettingsPatch.js'
 import { useStatus } from '../../composables/useStatus.js'
+import { normalizePublicUrl } from '../../lib/publicUrl.js'
 import QButton from '../ui/QButton.vue'
 import QCard from '../ui/QCard.vue'
 import QInput from '../ui/QInput.vue'
@@ -13,15 +14,31 @@ import QSwitch from '../ui/QSwitch.vue'
 const { status } = useStatus()
 const { saving, save } = useSettingsPatch()
 const prefixes = ref('')
+const publicUrl = ref('')
+const publicUrlTouched = ref(false)
 
 onMounted(async () => {
   try {
     const { snapshot } = await api.snapshot()
     prefixes.value = (snapshot.commandPrefixes ?? ['/']).join(' ')
+    publicUrl.value = snapshot.publicUrl ?? ''
   } catch {
     prefixes.value = '/'
   }
 })
+
+/** 空着就是清掉，回到「用请求进来的域名」 */
+const normalized = computed(() => normalizePublicUrl(publicUrl.value))
+const publicUrlError = computed(() => (publicUrlTouched.value && normalized.value === null ? '要 https:// 开头的域名，不带路径，如 https://bot.example.com' : ''))
+
+async function savePublicUrl() {
+  publicUrlTouched.value = true
+  if (normalized.value === null) return
+  if (await save({ publicUrl: normalized.value || null })) {
+    publicUrl.value = normalized.value
+    publicUrlTouched.value = false
+  }
+}
 </script>
 
 <template>
@@ -41,6 +58,27 @@ onMounted(async () => {
       <QSettingRow title="命令前缀" for="prefixes" description="空格分隔，如「/ ! 。」；消息以任一前缀开头才会当命令解析">
         <form class="flex items-center gap-2" @submit.prevent="save({ commandPrefixes: prefixes.split(/\s+/).filter(Boolean) })">
           <QInput id="prefixes" v-model="prefixes" mono class="w-32" />
+          <QButton type="submit" size="sm" :loading="saving">保存</QButton>
+        </form>
+      </QSettingRow>
+      <QSettingRow
+        title="机器人公开地址"
+        for="public-url"
+        description="插件让 QQ 来拉图片时用这个地址。一般不用填：不填时用 QQ 推送消息用的那个域名。想让图片走别的域名，或者定时推送里也要发图，才需要填。"
+      >
+        <template #extra>
+          <p v-if="publicUrlError" id="public-url-error" class="mt-1 text-xs text-danger" role="alert">{{ publicUrlError }}</p>
+        </template>
+        <form class="flex w-full items-center gap-2 sm:w-auto" @submit.prevent="savePublicUrl">
+          <QInput
+            id="public-url"
+            v-model="publicUrl"
+            mono
+            class="min-w-0 flex-1 sm:w-64 sm:flex-none"
+            placeholder="https://bot.example.com"
+            :invalid="!!publicUrlError"
+            :described-by="publicUrlError ? 'public-url-error' : undefined"
+          />
           <QButton type="submit" size="sm" :loading="saving">保存</QButton>
         </form>
       </QSettingRow>

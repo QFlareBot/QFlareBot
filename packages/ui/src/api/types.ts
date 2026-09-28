@@ -163,6 +163,8 @@ export interface Snapshot {
   permissionDeniedReply?: string
   /** 事件摘要日志里带上消息正文（截到 200 字），默认关 */
   logContent?: boolean
+  /** 机器人的公开地址（https://域名），插件的 ctx.publicUrl；不填时用请求进来的域名 */
+  publicUrl?: string
 }
 
 /** —— 自部署（安装与构建账本），与 runtime 的 manifestStore.ts 保持一致 —— */

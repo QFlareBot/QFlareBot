@@ -22,6 +22,7 @@ import { clearEvents, listEvents, setLiveDebug } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
 import { dispatchStats, listDispatchLogs, LogsUnavailable } from './logs.js'
 import { listManifestPluginRecords, type ManifestPluginRecord } from './manifestStore.js'
+import { isHttpsOrigin } from './publicUrl.js'
 import { parseSavedItems, readSavedPanel, writeSavedPanel } from './qqPanelStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
@@ -223,6 +224,7 @@ const SETTINGS_FIELDS: Record<string, (v: unknown) => boolean> = {
   commandPrefixes: (v) => Array.isArray(v) && v.every((p) => typeof p === 'string'),
   admins: (v) => Array.isArray(v) && v.every((a) => typeof a === 'string'),
   permissionDeniedReply: (v) => typeof v === 'string',
+  publicUrl: isHttpsOrigin,
 }
 
 /**
@@ -281,7 +283,7 @@ function restoreSnapshot(registry: PluginRegistry, incoming: Snapshot, current: 
  *                                   配置里的 writeOnly 字段换成占位符，保存时原样交回即保留原值
  * GET  /admin/snapshot              读取快照（writeOnly 配置同样换成占位符）
  * PUT  /admin/snapshot              整体覆盖快照（占位符按当前快照换回真值）
- * PATCH /admin/snapshot             只改顶层设置字段（safeMode / logContent / commandPrefixes / admins / permissionDeniedReply，
+ * PATCH /admin/snapshot             只改顶层设置字段（safeMode / logContent / commandPrefixes / admins / permissionDeniedReply / publicUrl，
  *                                   null 表示清掉），在最新快照上合并；可带 expectedRevision，对不上返回 409
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority / groups（groups: null 恢复所有群）
  * PUT  /admin/services/:name        { provider } 同名服务由哪个插件提供；null 回到默认（先注册、且启用着的那个）

@@ -23,7 +23,7 @@ const SESSION_KEY = 'qqbot.session'
 
 /** 设置页能改的快照顶层字段（PATCH /admin/snapshot）；null 表示清掉、回到默认 */
 export type SettingsPatch = {
-  [K in 'safeMode' | 'logContent' | 'commandPrefixes' | 'admins' | 'permissionDeniedReply']?: Snapshot[K] | null
+  [K in 'safeMode' | 'logContent' | 'commandPrefixes' | 'admins' | 'permissionDeniedReply' | 'publicUrl']?: Snapshot[K] | null
 }
 
 /** 服务端按 configSchema 校验失败时逐字段返回 */

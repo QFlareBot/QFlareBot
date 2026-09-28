@@ -295,6 +295,19 @@ export interface BotApi {
 export interface PluginContext<C = unknown> {
   readonly plugin: { readonly name: string; readonly version: string }
   readonly botId: string
+  /**
+   * 机器人的公开地址，如 `https://bot.example.com`（不带结尾斜杠），拼上 `/p/<插件名>/…` 就是自己路由的完整地址，
+   * 交给 QQ 去拉图片就用它：
+   *
+   * ```ts
+   * const url = `${ctx.publicUrl}/p/${ctx.plugin.name}/img/${id}`
+   * ```
+   *
+   * 设置页填了用填的；没填时是这次请求进来的域名（事件里就是 QQ 推送用的回调地址）。
+   * 拿不到时是 undefined：定时任务里没填设置、本地 `wrangler dev`（http 的不算），以及 0.4 以前的机器人。
+   * 所以读的时候照样要有退路（比如插件自己的配置项），这样也不必为它提高 apiVersion
+   */
+  readonly publicUrl?: string
   readonly config: C
   readonly logger: Logger
   readonly kv: ScopedKV

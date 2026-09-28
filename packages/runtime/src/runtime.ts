@@ -83,7 +83,7 @@ export function createRuntime(options: RuntimeOptions): ExportedHandler<RuntimeE
           return error('Not Found', 404)
         }
 
-        const scope = await RequestScope.create(env, execCtx, registry, resolved, logger)
+        const scope = await RequestScope.create(env, execCtx, registry, resolved, logger, url.origin)
         if (isWebhook) return await handleWebhook(request, scope, resolved, logger)
         if (isAdmin) {
           return await handleAdmin(request, scope, { registry, options: resolved, logger, runtimeVersion: RUNTIME_VERSION })

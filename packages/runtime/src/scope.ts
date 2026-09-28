@@ -4,6 +4,7 @@ import { ContextFactory } from './context.js'
 import { dispatch, type DispatchReport } from './dispatcher.js'
 import { ensureReady } from './lifecycle.js'
 import type { PluginRegistry } from './registry.js'
+import { publicUrlFor } from './publicUrl.js'
 import { buildSession, type Sender } from './session.js'
 import { kvTokenCache, profileOf, readBotConfig, readSnapshot } from './store.js'
 import type { BotConfig, ResolvedOptions, RuntimeEnv, Snapshot } from './types.js'
@@ -29,6 +30,8 @@ export class RequestScope {
     registry: PluginRegistry,
     options: ResolvedOptions,
     logger: Logger,
+    /** 进来的请求的 origin，插件的 ctx.publicUrl 没填设置时用它；定时任务不传 */
+    requestOrigin?: string,
   ): Promise<RequestScope> {
     const [snapshot, bot] = await Promise.all([readSnapshot(env), readBotConfig(env)])
     const api = bot
@@ -41,6 +44,7 @@ export class RequestScope {
       snapshot,
       botId: bot?.appId ?? 'unconfigured',
       api: api ?? unavailableApi(),
+      publicUrl: publicUrlFor(snapshot, requestOrigin),
     })
     return new RequestScope(env, execCtx, snapshot, bot, api, contexts, registry, options, logger)
   }

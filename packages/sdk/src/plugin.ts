@@ -8,7 +8,7 @@ import type { Awaitable, PluginContext } from './context.js'
  * 用了新能力的插件装到老框架上，安装时就被拦下（而不是跑到那一行才报 "is not a function"）。
  *
  * - 1：初版契约
- * - 2：`ctx.db.batch()`
+ * - 2：`ctx.db.batch()`；`ctx.publicUrl`（可能没有值，读的时候照样要有退路，所以只用它的插件不必写 2）
  */
 export const API_VERSION = 2 as const
 

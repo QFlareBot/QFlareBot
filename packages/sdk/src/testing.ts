@@ -385,6 +385,8 @@ export interface MockContextOptions<C> {
   db?: ScopedDB
   r2?: ScopedR2
   botId?: string
+  /** `ctx.publicUrl`，默认没有（和定时任务里、没填设置时一样） */
+  publicUrl?: string
   /** Durable Object 替身：键为类名。不注入时取用会抛错，提示怎么注入 */
   durable?: Record<string, DurableObjectStub>
 }
@@ -449,6 +451,7 @@ export function createMockContext<C = unknown>(
   return {
     plugin: { name: plugin.name, version: plugin.version ?? '0.0.0' },
     botId: options.botId ?? 'test-bot',
+    ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
     config: (options.config ?? plugin.defaultConfig ?? {}) as C,
     logger: createSilentLogger(),
     kv: createMemoryKV(),

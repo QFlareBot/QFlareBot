@@ -15,6 +15,8 @@ export interface ContextFactoryOptions {
   snapshot: Snapshot
   api: BotApi
   botId: string
+  /** 见 publicUrl.ts；拿不到时是 undefined */
+  publicUrl?: string | undefined
 }
 
 /**
@@ -39,6 +41,7 @@ export class ContextFactory {
     const ctx: PluginContext<unknown> = {
       plugin: { name, version },
       botId: this.options.botId,
+      ...(this.options.publicUrl ? { publicUrl: this.options.publicUrl } : {}),
       config: withConfigDefaults(snapshot.plugins[name]?.config, defaultConfig, configSchema) ?? defaultConfig ?? {},
       logger: createLogger(`plugin:${name}`),
       kv: createScopedKV(env.KV, name),
