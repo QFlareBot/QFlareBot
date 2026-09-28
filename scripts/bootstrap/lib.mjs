@@ -537,16 +537,22 @@ export function pickProductionTrigger(triggers) {
 }
 
 /**
- * 把构建命令、清单环境变量与排除路径写进 trigger。
+ * 把构建命令、清单环境变量、排除路径与构建缓存开关写进 trigger。
  *
  * 这几项以前只出现在 Summary 的照抄块里，而向导用户那时早已离开 run 页：走完向导 →
  * 去面板装插件 → 构建机用默认命令跑 → 失败，面板上只显示「失败」。
- * 排除路径（BUILD_PATH_EXCLUDES）让只改文档的推送不再重建机器人。
+ * 排除路径（BUILD_PATH_EXCLUDES）让只改文档的推送不再重建机器人；
+ * 构建缓存（默认关）缓存 npm / pnpm 下载的包，装依赖快一些。
  */
 export async function configureTrigger(token, accountId, triggerUuid, { manifestUrl, buildToken, pathExcludes = [] }) {
   await cfFetch(token, `/accounts/${accountId}/builds/triggers/${triggerUuid}`, {
     method: 'PATCH',
-    body: { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND, path_excludes: mergePathExcludes(pathExcludes) },
+    body: {
+      build_command: BUILD_COMMAND,
+      deploy_command: DEPLOY_COMMAND,
+      path_excludes: mergePathExcludes(pathExcludes),
+      build_caching_enabled: true,
+    },
   })
   await cfFetch(token, `/accounts/${accountId}/builds/triggers/${triggerUuid}/environment_variables`, {
     method: 'PATCH',
@@ -641,7 +647,7 @@ export function renderSummary(result, { redactSecrets = false, publicView = fals
   lines.push('')
   if (triggerConfigured) {
     lines.push(
-      `3. **构建配置已自动写入**：Build command、Deploy command、\`MANIFEST_URL\`、\`MANIFEST_TOKEN\` 与排除路径都已经通过 Builds API ` +
+      `3. **构建配置已自动写入**：Build command、Deploy command、\`MANIFEST_URL\`、\`MANIFEST_TOKEN\`、排除路径与构建缓存都已经通过 Builds API ` +
         `写进了这个 Worker 的构建 trigger，[后台](${settingsLink})一个格子都不用填。到面板装一个插件即可验证重建链路。`,
     )
   } else {
@@ -659,6 +665,7 @@ export function renderSummary(result, { redactSecrets = false, publicView = fals
     lines.push(`   ${DEPLOY_COMMAND}`)
     lines.push('   # Build watch paths → Exclude paths（只改这些时不重建机器人）')
     lines.push(`   ${BUILD_PATH_EXCLUDES.join('  ')}`)
+    lines.push('   # Settings → Build → Build cache → Enable（可选：缓存下载的依赖，装依赖快一些）')
     lines.push('   # 环境变量（Settings → Builds → Environment variables）')
     lines.push(`   MANIFEST_URL=${publicView ? `https://${workerName}.<你的子域>.workers.dev/admin/build-manifest` : manifestUrl}`)
     // Worker 侧叫 BUILD_TOKEN、构建机侧叫 MANIFEST_TOKEN，是同一个值——名字不一致最容易配错

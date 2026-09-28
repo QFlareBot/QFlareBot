@@ -511,7 +511,7 @@ describe('自部署触发与状态同步', () => {
     expect(builds.every((b) => b.buildUuid === 'build-9')).toBe(true)
   })
 
-  it('触发构建时顺手把构建命令、清单环境变量与排除路径写进 trigger，且只写一次', async () => {
+  it('触发构建时顺手把构建命令、清单环境变量、排除路径与构建缓存写进 trigger，且只写一次', async () => {
     const { call, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
     await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
 
@@ -520,6 +520,7 @@ describe('自部署触发与状态同步', () => {
       build_command: BUILD_COMMAND,
       deploy_command: DEPLOY_COMMAND,
       path_excludes: ['notes/*', ...BUILD_PATH_EXCLUDES],
+      build_caching_enabled: true,
     })
     const envVars = triggerWrites.find((w) => w.url.endsWith('/environment_variables'))
     expect(envVars?.body).toEqual({
@@ -533,16 +534,37 @@ describe('自部署触发与状态同步', () => {
     expect(triggerWrites.length).toBe(before)
   })
 
-  it('老版本写过配置的（标记是时间字符串）：只补一次排除路径，构建命令与环境变量不再动', async () => {
+  it('老版本写过配置的（标记是时间字符串）：只补一次排除路径与构建缓存，构建命令与环境变量不再动', async () => {
     const { call, env, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
     await env.KV.put('rt:cf_trigger_configured', '2026-09-20T08:00:00.000Z')
     await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
 
-    expect(triggerWrites).toEqual([{ url: expect.stringMatching(/\/builds\/triggers\/trig-1$/), body: { path_excludes: ['notes/*', ...BUILD_PATH_EXCLUDES] } }])
-    expect(JSON.parse((await env.KV.get('rt:cf_trigger_configured'))!)).toMatchObject({ version: 2 })
+    expect(triggerWrites).toEqual([
+      {
+        url: expect.stringMatching(/\/builds\/triggers\/trig-1$/),
+        body: { path_excludes: ['notes/*', ...BUILD_PATH_EXCLUDES], build_caching_enabled: true },
+      },
+    ])
+    expect(JSON.parse((await env.KV.get('rt:cf_trigger_configured'))!)).toMatchObject({ version: 3 })
 
     await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
     expect(triggerWrites).toHaveLength(1)
+  })
+
+  it('写到第 2 版的：只补构建缓存，不再发排除路径——用户后来删掉的默认排除路径不会被加回去', async () => {
+    const { call, env, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
+    await env.KV.put('rt:cf_trigger_configured', JSON.stringify({ version: 2, at: '2026-09-26T08:00:00.000Z' }))
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+
+    expect(triggerWrites).toEqual([{ url: expect.stringMatching(/\/builds\/triggers\/trig-1$/), body: { build_caching_enabled: true } }])
+    expect(JSON.parse((await env.KV.get('rt:cf_trigger_configured'))!)).toMatchObject({ version: 3 })
+  })
+
+  it('写到第 3 版的：什么都不写（用户后来在后台关掉构建缓存也不会被打开）', async () => {
+    const { call, env, triggerWrites } = setup({ CF_DEFAULT_DOMAIN: 'qqbot.workers.dev' })
+    await env.KV.put('rt:cf_trigger_configured', JSON.stringify({ version: 3, at: '2026-09-28T08:00:00.000Z' }))
+    await call('/admin/builds', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(triggerWrites).toEqual([])
   })
 
   it('拿不到自己的对外地址时不写 trigger——写错的 MANIFEST_URL 比不写更难查', async () => {

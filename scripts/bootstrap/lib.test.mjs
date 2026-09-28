@@ -256,10 +256,11 @@ describe('renderSummary：公开版（写进 Step Summary）', () => {
     expect(md).toContain('| KV | （新建） |')
   })
 
-  it('手填清单里的 MANIFEST_URL 只给占位，并带上排除路径', () => {
+  it('手填清单里的 MANIFEST_URL 只给占位，并带上排除路径与构建缓存', () => {
     const md = renderSummary(result, { publicView: true })
     expect(md).toContain('MANIFEST_URL=https://qqbot.<你的子域>.workers.dev/admin/build-manifest')
     expect(md).toContain(BUILD_PATH_EXCLUDES.join('  '))
+    expect(md).toContain('Build cache → Enable')
   })
 
   it('完整版（向导页面用）照常带地址', () => {
@@ -406,7 +407,7 @@ describe('Workers Builds 调用', () => {
     await expect(listTriggers('tok', 'acc', 'tag', '主 Token')).rejects.toThrow('boom')
   })
 
-  it('configureTrigger 写命令、排除路径与清单变量；startBuild 按分支触发；getBuild 读状态', async () => {
+  it('configureTrigger 写命令、排除路径、构建缓存与清单变量；startBuild 按分支触发；getBuild 读状态', async () => {
     const calls = stubFetch(ok({}), ok({}), ok({ build_uuid: 'b1' }), ok({ status: 'running', build_outcome: null }))
     await configureTrigger('tok', 'acc', 'trig', { manifestUrl: 'https://x/admin/build-manifest', buildToken: 'bt', pathExcludes: ['notes/*'] })
     expect(await startBuild('tok', 'acc', 'trig', 'main')).toBe('b1')
@@ -419,6 +420,7 @@ describe('Workers Builds 调用', () => {
     ])
     // 用户在后台自己加的排除路径（notes/*）留着，补上本项目的
     expect(calls[0].body.path_excludes).toEqual(['notes/*', ...BUILD_PATH_EXCLUDES])
+    expect(calls[0].body.build_caching_enabled).toBe(true)
     expect(calls[1].body).toEqual({
       MANIFEST_URL: { value: 'https://x/admin/build-manifest', is_secret: false },
       MANIFEST_TOKEN: { value: 'bt', is_secret: true },

@@ -260,6 +260,22 @@ export function scrubbedEnv(env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([k, v]) => v !== undefined && isAllowedEnvName(k)))
 }
 
+/** 指向 npm 缓存、pnpm store 与用户目录的变量：执行插件代码的子进程拿不到它们（见 pluginCodeEnv） */
+const CACHE_LOCATION_ENV = /^(PNPM_HOME|XDG_.*|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|npm_config_(cache|cache_dir|store_dir|state_dir))$/i
+
+/**
+ * 打包、抽清单的子进程用的环境变量：在 scrubbedEnv 的基础上，HOME 换成一个一次性的空目录，
+ * 指向缓存的变量一概不给。
+ *
+ * 抽清单要执行插件代码。Workers Builds 开了构建缓存以后，HOME 下的 npm 缓存与 pnpm store 会留到之后的构建
+ * （最多 7 天），插件往里写的东西就不再只影响这一次。npm 与 pnpm 取缓存时都会校验内容，但更稳妥的是
+ * 让插件代码根本碰不到这些目录。装依赖不执行插件代码（--ignore-scripts），照旧用 scrubbedEnv、照旧命中缓存
+ */
+export function pluginCodeEnv(home, env = process.env) {
+  const kept = Object.entries(scrubbedEnv(env)).filter(([k]) => !CACHE_LOCATION_ENV.test(k) && !/^(HOME|USERPROFILE)$/i.test(k))
+  return { ...Object.fromEntries(kept), HOME: home, USERPROFILE: home }
+}
+
 /** 键排序后的 JSON：比较两份清单用，与字段顺序无关 */
 export function stableStringify(value) {
   if (value === undefined) return 'undefined'

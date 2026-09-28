@@ -17,6 +17,7 @@
 - **数据库表结构自己升级。** 运行时用到时自动建表、补字段，不用重跑引导工作流。
 - **概览页的最近事件要构建 Token 多一项权限。** 事件摘要改从 Workers Logs 读之后，构建 Token 要带「Workers Observability → Edit」。更早部署的 Token 没有这一项，概览页会提示：到 Cloudflare 后台 → My Profile → API Tokens 编辑这个 Token 勾上即可，Token 的值不变，不用重新部署。不补也不影响收发消息和构建，只是看不到最近事件和 24 小时统计。
 - **只改了文档的更新不会触发构建。** `docs/`、`templates/`、`.github/`、`scripts/`、`design-system/`、`*.md`、`LICENSE` 在构建的排除路径里。
+- **构建缓存会自动打开。** 引导部署时就会打开；更早部署的机器人，下一次从面板触发构建时补上。它缓存下载过的依赖，装依赖快十秒左右，其余步骤不受影响。怀疑缓存出了问题（比如装依赖报文件损坏），到 Cloudflare 后台 → Workers → 你的 Worker → Settings → Build → Build cache 点 Clear Cache；不想要就在同一处关掉，之后不会再被自动打开。
 - **同步触发的构建不在面板的「构建记录」里**，面板只记它自己触发的构建。这次构建的进度和日志到 Cloudflare 后台看，见下一节。
 
 ### 同步时有冲突

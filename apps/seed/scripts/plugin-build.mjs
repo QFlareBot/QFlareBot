@@ -7,7 +7,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,7 @@ import {
   explainBuildError,
   isTransientInstallFailure,
   planDependencyInstall,
+  pluginCodeEnv,
   scrubbedEnv,
   tailLines,
 } from './deploy-policy.mjs'
@@ -89,10 +90,12 @@ export async function installPluginDependencies(pluginDir) {
  */
 export async function buildPluginIsolated(pluginDir) {
   const resultFile = path.join(os.tmpdir(), `qqbot-build-result-${process.pid}-${randomUUID()}.json`)
+  // 抽清单会执行插件代码：给它一个一次性的 HOME，碰不到留给之后构建的 npm 缓存与 pnpm store（见 pluginCodeEnv）
+  const home = await mkdtemp(path.join(os.tmpdir(), 'qqbot-plugin-home-'))
   try {
     try {
       execFileSync(process.execPath, [CHILD_SCRIPT, pluginDir, resultFile], {
-        env: scrubbedEnv(),
+        env: pluginCodeEnv(home),
         stdio: ['ignore', 'inherit', 'inherit'],
         timeout: BUILD_TIMEOUT_MS,
       })
@@ -109,5 +112,6 @@ export async function buildPluginIsolated(pluginDir) {
     return result
   } finally {
     await rm(resultFile, { force: true })
+    await rm(home, { recursive: true, force: true })
   }
 }

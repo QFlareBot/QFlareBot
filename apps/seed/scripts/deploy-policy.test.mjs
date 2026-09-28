@@ -20,6 +20,7 @@ import {
   originOf,
   planDependencyInstall,
   planDeployFallback,
+  pluginCodeEnv,
   resolveScriptName,
   scrubbedEnv,
   tailLines,
@@ -189,6 +190,42 @@ describe('scrubbedEnv', () => {
     expect(scrubbedEnv({ XDG_SECRET: 's', ASDF_TOKEN: 't', COREPACK_NPM_TOKEN: 't', MISE_GITHUB_TOKEN: 't', XDG_CONFIG_HOME: '/c' })).toEqual({
       XDG_CONFIG_HOME: '/c',
     })
+  })
+})
+
+describe('pluginCodeEnv', () => {
+  it('HOME 换成一次性目录，指向 npm 缓存、pnpm store 的变量都不给；凭证照样去掉', () => {
+    const env = {
+      PATH: '/usr/bin',
+      HOME: '/opt/buildhome',
+      TMPDIR: '/tmp',
+      CI: 'true',
+      PNPM_HOME: '/opt/buildhome/.local/share/pnpm',
+      XDG_DATA_HOME: '/opt/buildhome/.local/share',
+      XDG_CACHE_HOME: '/opt/buildhome/.cache',
+      npm_config_cache: '/opt/buildhome/.npm',
+      NPM_CONFIG_STORE_DIR: '/opt/buildhome/.pnpm-store',
+      npm_config_registry: 'https://registry.npmmirror.com',
+      APPDATA: 'C:\\Users\\b\\AppData\\Roaming',
+      LOCALAPPDATA: 'C:\\Users\\b\\AppData\\Local',
+      USERPROFILE: 'C:\\Users\\b',
+      HOMEDRIVE: 'C:',
+      HOMEPATH: '\\Users\\b',
+      MANIFEST_TOKEN: 't',
+    }
+    expect(pluginCodeEnv('/tmp/qqbot-plugin-home-x', env)).toEqual({
+      PATH: '/usr/bin',
+      TMPDIR: '/tmp',
+      CI: 'true',
+      npm_config_registry: 'https://registry.npmmirror.com',
+      HOME: '/tmp/qqbot-plugin-home-x',
+      USERPROFILE: '/tmp/qqbot-plugin-home-x',
+    })
+  })
+
+  it('装依赖那一步不变：scrubbedEnv 照旧带着 HOME 与缓存位置，才命中构建缓存', () => {
+    const env = { PATH: '/usr/bin', HOME: '/opt/buildhome', PNPM_HOME: '/p', npm_config_cache: '/c' }
+    expect(scrubbedEnv(env)).toEqual(env)
   })
 })
 

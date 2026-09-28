@@ -100,20 +100,21 @@ pnpm --filter @qqbot/seed run deploy:check      # = wrangler deploy --dry-run，
 触发一次构建 → 构建机拉源码编译并部署**。设置步骤：
 
 1. 仓库推到 GitHub，在 Cloudflare Dashboard 的 Worker → Settings → Builds 里连接仓库（引导工作流会给出直达链接）。
-2. **构建命令、环境变量与排除路径不用手填。** 仓库一连上，这几项就会经 Builds API 自动写进 trigger：
+2. **构建命令、环境变量、排除路径与构建缓存不用手填。** 仓库一连上，这几项就会经 Builds API 自动写进 trigger：
 
    | 项 | 值 |
    | --- | --- |
    | Build command | `pnpm build && pnpm --filter @qqbot/seed run manifest:prepare` |
    | Deploy command | `pnpm --filter @qqbot/seed run manifest:deploy` |
    | Build watch paths → Exclude | `docs/*` `templates/*` `.github/*` `scripts/*` `design-system/*` `*.md` `LICENSE`：只改这些时不重建机器人。在 trigger 已有的排除路径上合并，你自己加的不会丢 |
+   | Build cache | 打开：缓存下载过的 npm / pnpm 包，装依赖快一些（Cloudflare 默认是关的） |
    | 环境变量 `MANIFEST_URL` | `https://<默认域名>/admin/build-manifest` |
    | 环境变量 `MANIFEST_TOKEN` | Worker 侧 `BUILD_TOKEN` 的同值（引导自动生成） |
 
    写入时机有两处：**网页向导**在你连完仓库、点「完成引导」时写；**无 UI 引导**跑的时候 trigger
    还不存在（仓库尚未连接），改由 Worker 在第一次触发构建、自发现到 trigger 时补写。
-   每项只写一次（KV 里记着写到了哪一版），之后你在后台的手动调整不会被覆盖回去。排除路径是后加的：
-   早先部署、已经写过前几项的 Worker，会在下一次从面板触发构建时只补一次排除路径，别的不动。
+   每项只写一次（KV 里记着写到了哪一版），之后你在后台的手动调整不会被覆盖回去。排除路径和构建缓存是后加的：
+   早先部署、已经写过前几项的 Worker，会在下一次从面板触发构建时只补还没写过的那几项，别的不动。
 
 3. 可选的构建环境变量：
 

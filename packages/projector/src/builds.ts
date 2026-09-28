@@ -59,6 +59,8 @@ export interface TriggerConfig {
   deploy_command?: string
   root_directory?: string
   path_excludes?: string[]
+  /** 构建缓存：缓存 npm / pnpm 下载的包，装依赖快一些（后台 Settings → Build → Build cache，默认关） */
+  build_caching_enabled?: boolean
 }
 
 /** 构建环境变量的值；`is_secret` 为真时后台不再回显 */

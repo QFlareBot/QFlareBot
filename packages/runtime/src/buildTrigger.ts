@@ -80,10 +80,11 @@ async function readCachedTargets(scope: RequestScope): Promise<BuildTargets | nu
 
 /**
  * trigger 配置写到了第几版，记在 KV 标记里：
- * 1 = 构建命令与清单环境变量；2 = 再加上 Build watch paths 的排除路径（BUILD_PATH_EXCLUDES）。
- * 老版本写的标记是写入时间（ISO 字符串），算作 1——已部署的机器人下次触发构建时只补排除路径，别的不动。
+ * 1 = 构建命令与清单环境变量；2 = 再加上 Build watch paths 的排除路径（BUILD_PATH_EXCLUDES）；
+ * 3 = 再打开构建缓存（build_caching_enabled）。
+ * 老版本写的标记是写入时间（ISO 字符串），算作 1。已部署的机器人下次触发构建时只补缺的那几版，别的不动。
  */
-const TRIGGER_CONFIG_VERSION = 2
+const TRIGGER_CONFIG_VERSION = 3
 
 function triggerConfigVersion(marker: string | null): number {
   if (!marker) return 0
@@ -96,15 +97,16 @@ function triggerConfigVersion(marker: string | null): number {
 }
 
 /**
- * 把构建命令、清单环境变量与排除路径写进 trigger。
+ * 把构建命令、清单环境变量、排除路径与构建缓存开关写进 trigger。
  *
  * 网页向导在用户连完仓库时就写好了；这条路径是给**无 UI 引导**和「后来重连过仓库」兜底的——
  * 那两种情况下引导跑完时 trigger 还不存在，写不了，用户就只能照 Summary 手抄四项。
  * 而这四项里最容易配错的恰好是 MANIFEST_TOKEN 与 Worker 侧 BUILD_TOKEN 的对齐，
  * 两个值本来就在同一个 env 里，没有理由让人肉搬运。
  *
- * 每一版只写一次（KV 打标），避免覆盖用户后来在后台的手动调整；排除路径在已有的上面合并，
- * 用户自己加的不丢。失败只记日志不阻断触发构建。
+ * 每一版只写一次（KV 打标），而且只发这台机器人还没写过的那几项：用户后来在后台的手动调整
+ * （删了某条排除路径、关了构建缓存）不会被改回去。排除路径在已有的上面合并，用户自己加的不丢。
+ * 失败只记日志不阻断触发构建。
  */
 async function ensureTriggerConfigured(
   api: CloudflareBuildsApi,
@@ -119,10 +121,12 @@ async function ensureTriggerConfigured(
   try {
     const done = triggerConfigVersion(await scope.env.KV.get(Keys.cfTriggerConfigured))
     if (done >= TRIGGER_CONFIG_VERSION) return
-    const current = (await api.listTriggers(targets.workerTag)).find((t) => t.uuid === targets.triggerUuid)
+    // 排除路径要在现有的上面合并，只有这一版没写过时才去读 trigger
+    const current = done < 2 ? (await api.listTriggers(targets.workerTag)).find((t) => t.uuid === targets.triggerUuid) : undefined
     await api.updateTrigger(targets.triggerUuid, {
       ...(done < 1 ? { build_command: BUILD_COMMAND, deploy_command: DEPLOY_COMMAND } : {}),
-      path_excludes: mergePathExcludes(current?.pathExcludes ?? []),
+      ...(done < 2 ? { path_excludes: mergePathExcludes(current?.pathExcludes ?? []) } : {}),
+      build_caching_enabled: true,
     })
     if (done < 1) {
       await api.putTriggerEnv(targets.triggerUuid, {
@@ -131,7 +135,12 @@ async function ensureTriggerConfigured(
       })
     }
     await scope.env.KV.put(Keys.cfTriggerConfigured, JSON.stringify({ version: TRIGGER_CONFIG_VERSION, at: new Date().toISOString() }))
-    deps.logger.info(done < 1 ? '已写入构建 trigger 配置（构建命令、清单环境变量与排除路径）' : '已给构建 trigger 补上排除路径')
+    const added = [
+      ...(done < 1 ? ['构建命令', '清单环境变量'] : []),
+      ...(done < 2 ? ['排除路径'] : []),
+      '构建缓存',
+    ]
+    deps.logger.info(`已给构建 trigger ${done < 1 ? '写入' : '补上'}${added.join('、')}`)
   } catch (err) {
     deps.logger.warn('写入构建 trigger 配置失败，需要到 Cloudflare 后台手动填写', {
       error: err instanceof Error ? err.message : String(err),

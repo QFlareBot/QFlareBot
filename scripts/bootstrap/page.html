@@ -114,7 +114,7 @@
       <li><b>Build command 与 Deploy command 照下面填</b>（表单默认的 <code>npx wrangler deploy</code> 在这个仓库里跑不通），其余保持默认。
         填错了也不要紧：向导检测到连接后会自动改正；</li>
       <li>连好后这里会自动变绿，不用回来点任何按钮。向导会顺手写好 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code>
-        和排除路径（只改文档、模板、工作流时不重建机器人），并补跑一次构建——
+        、排除路径（只改文档、模板、工作流时不重建机器人）并打开构建缓存，再补跑一次构建——
         连接那一刻 Cloudflare 自己跑的那次构建如果失败了，不用管。</li>
     </ol>
     <div class="cmd"><span class="k">Build command</span><code id="cmd-build"></code><button class="ghost" data-copy="cmd-build">复制</button></div>
@@ -339,7 +339,7 @@ function pollConnection() {
       else if (s.buildStarted) build = `<span class="spin"></span>已补跑一次构建：${BUILD_STATE[s.buildStatus] || '已提交'}${logs}。构建要几分钟，可以先做下一步。`
       else build = `⚠️ 补跑构建没触发成功（${esc(s.buildError || '未知原因')}），不影响后续：到面板装一个插件时会再触发${logs}。`
       el.className = 'msg ok'
-      el.innerHTML = `✅ 已检测到仓库连接（分支 <code>${esc(s.branch)}</code>），构建命令、排除路径与 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 已写入。<br>${build}`
+      el.innerHTML = `✅ 已检测到仓库连接（分支 <code>${esc(s.branch)}</code>），构建命令、排除路径、构建缓存与 <code>MANIFEST_URL</code> / <code>MANIFEST_TOKEN</code> 已写入。<br>${build}`
     }
     $('skip-connect-btn').classList.add('hidden')
     if ($('step-builds').classList.contains('hidden')) {
@@ -380,7 +380,7 @@ function renderFinishState(done) {
   el.classList.remove('hidden')
   const parts = []
   if (done?.triggerConfigured) {
-    parts.push('✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code> 与排除路径都已写进这个 Worker 的构建 trigger，Cloudflare 后台无需再配置。')
+    parts.push('✅ <b>构建配置已自动写入</b>：构建命令、部署命令、<code>MANIFEST_URL</code>、<code>MANIFEST_TOKEN</code>、排除路径与构建缓存都已写进这个 Worker 的构建 trigger，Cloudflare 后台无需再配置。')
   } else {
     parts.push(
       `⚠️ <b>构建配置未自动写入</b>（${esc(done?.triggerError || '仓库还没连接')}）：在补齐之前，装插件不会触发重建。` +
