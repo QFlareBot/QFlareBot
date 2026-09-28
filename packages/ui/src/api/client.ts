@@ -9,6 +9,7 @@ import type {
   LogsResult,
   ManagedPluginsResult,
   SavedBot,
+  ServiceInfo,
   Snapshot,
   Status,
   StorageReport,
@@ -94,6 +95,9 @@ export const api = {
   patchPlugin: (name: string, patch: { enabled?: boolean; config?: unknown; priority?: number; groups?: GroupScope | null }) =>
     request<{ ok: true; revision: number }>('PATCH', `/plugins/${encodeURIComponent(name)}`, patch),
   bridgeToken: (name: string) => request<{ ok: true; token: string }>('POST', `/plugins/${encodeURIComponent(name)}/bridge`),
+  /** 同名服务由哪个插件提供；null 回到默认 */
+  setServiceProvider: (service: string, provider: string | null) =>
+    request<{ ok: true; services: ServiceInfo[] }>('PUT', `/services/${encodeURIComponent(service)}`, { provider }),
   saveBot: (appId: string, secret: string) => request<{ ok: true; appId: string }>('PUT', '/bot', { appId, secret }),
   /** 扫码创建机器人：key 由面板保管，轮询时带回 */
   startBotBind: () => request<{ ok: true; taskId: string; key: string; qrUrl: string }>('POST', '/bot/bind'),

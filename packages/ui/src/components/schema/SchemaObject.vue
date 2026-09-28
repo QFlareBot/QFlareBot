@@ -1,0 +1,35 @@
+<script setup lang="ts">
+/** 对象：按 properties 的顺序逐项渲染，改哪一项就换掉哪一项（不可变更新），schema 里没声明的键原样保留 */
+import { computed, toRaw } from 'vue'
+import type { JsonSchema } from '../../api/types.js'
+import { asRecord, getOwn, joinId, joinPath, setIn } from '../../lib/schemaForm.js'
+import SchemaField from './SchemaField.vue'
+
+const props = defineProps<{ schema: JsonSchema; modelValue: unknown; path: string; id: string; errors?: Record<string, string> }>()
+const emit = defineEmits<{ 'update:modelValue': [value: Record<string, unknown>] }>()
+
+const fields = computed(() => Object.entries(props.schema.properties ?? {}))
+const required = computed(() => new Set(props.schema.required ?? []))
+const value = computed(() => asRecord(props.modelValue))
+
+function set(key: string, v: unknown) {
+  emit('update:modelValue', setIn(toRaw(value.value), [key], v) as Record<string, unknown>)
+}
+</script>
+
+<template>
+  <div class="flex flex-col gap-4">
+    <SchemaField
+      v-for="[key, s] in fields"
+      :key="key"
+      :schema="s"
+      :model-value="getOwn(value, key)"
+      :path="joinPath(path, key)"
+      :id="joinId(id, key)"
+      :label="s.title ?? key"
+      :required="required.has(key)"
+      :errors="errors"
+      @update:model-value="set(key, $event)"
+    />
+  </div>
+</template>

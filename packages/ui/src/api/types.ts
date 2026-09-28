@@ -58,7 +58,19 @@ export interface JsonSchema {
   default?: unknown
   minimum?: number
   maximum?: number
+  minLength?: number
+  maxLength?: number
   required?: string[]
+  /** 映射：值的 schema；true 表示值随意（面板按字符串编辑） */
+  additionalProperties?: boolean | JsonSchema
+  /** 每一项都带 const 时面板渲染成带标签的下拉 */
+  oneOf?: JsonSchema[]
+  anyOf?: JsonSchema[]
+  const?: unknown
+  /** textarea：多行文本框 */
+  format?: string
+  /** 密钥：运行时发给面板前换成占位，面板不回显 */
+  writeOnly?: boolean
   [key: string]: unknown
 }
 
@@ -74,7 +86,19 @@ export interface Status {
   snapshot: { revision: number; safeMode: boolean; logContent?: boolean }
   /** 来自 Workers Logs；没配构建 token 或缺日志权限时为 null。sampled：平台抽样后的估算值 */
   stats: { total: number; last24h: number; errors24h: number; sampled?: boolean } | null
+  /** 有人提供的服务；老运行时没有这个字段 */
+  services?: ServiceInfo[]
   plugins: PluginInfo[]
+}
+
+/** 一个服务的提供者：多个插件可以提供同名服务，同一时间只有 active 那个在提供 */
+export interface ServiceInfo {
+  name: string
+  /** 按注册顺序 */
+  providers: string[]
+  /** 面板上选的；没选为 null（用先注册、且启用着的那个） */
+  selected: string | null
+  active: string | null
 }
 
 /** 换下来的机器人（GET /bot/saved）；AppSecret 留在 Worker 里，不下发 */

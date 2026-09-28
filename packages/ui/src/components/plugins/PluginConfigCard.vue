@@ -5,6 +5,7 @@ import { api, ApiError } from '../../api/client.js'
 import type { PluginInfo } from '../../api/types.js'
 import { useStatus } from '../../composables/useStatus.js'
 import { useToast } from '../../composables/useToast.js'
+import { fieldLabel } from '../../lib/schemaForm.js'
 import SchemaForm from '../SchemaForm.vue'
 import QButton from '../ui/QButton.vue'
 import QCard from '../ui/QCard.vue'
@@ -18,9 +19,9 @@ const { push } = useToast()
 const config = ref<Record<string, unknown>>({})
 const configText = ref('')
 const configError = ref('')
-/** 服务端 schema 校验的逐字段错误，喂给 SchemaForm 显示在对应输入框下 */
+/** 服务端 schema 校验的逐字段错误（键是点分路径），喂给 SchemaForm 显示在对应输入框下 */
 const fieldErrors = ref<Record<string, string>>({})
-/** SchemaForm 里 JSON 文本框还解析不了的字段：有就不能保存，否则存进去的是改之前的旧值 */
+/** SchemaForm 里还不能保存的字段（JSON 解析不了、映射的键重复……）的点分路径：有就不能保存，否则存进去的是改之前的旧值 */
 const unparsedFields = ref<string[]>([])
 const saving = ref(false)
 
@@ -38,8 +39,8 @@ async function save() {
   let next: unknown = config.value
   const schema = props.plugin.configSchema
   if (schema && unparsedFields.value.length) {
-    const names = unparsedFields.value.map((k) => schema.properties?.[k]?.title ?? k)
-    push(`「${names.join('」「')}」不是合法的 JSON，改好再保存`, 'error')
+    const names = unparsedFields.value.map((p) => fieldLabel(p, schema))
+    push(`「${names.join('」「')}」还没填好，按字段下的提示改好再保存`, 'error')
     return
   }
   if (!schema) {

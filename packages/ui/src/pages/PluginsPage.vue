@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader.vue'
 import BuildHistoryCard from '../components/plugins/BuildHistoryCard.vue'
 import PendingChangesCard from '../components/plugins/PendingChangesCard.vue'
 import PluginRow from '../components/plugins/PluginRow.vue'
+import ServiceProvidersCard from '../components/plugins/ServiceProvidersCard.vue'
 import QButton from '../components/ui/QButton.vue'
 import QCard from '../components/ui/QCard.vue'
 import QCollapse from '../components/ui/QCollapse.vue'
@@ -74,6 +75,8 @@ async function toggle(p: PluginInfo, enabled: boolean) {
         <PluginRow v-for="p in plugins" :key="p.name" :plugin="p" :build="build" :updates="updates" @toggle="toggle(p, $event)" />
       </ul>
     </QCard>
+
+    <ServiceProvidersCard class="mt-4" />
 
     <div class="mt-4"><BuildHistoryCard :build="build" /></div>
   </div>
