@@ -201,9 +201,9 @@ describe('trigger 配置写入', () => {
 describe('构建命令常量', () => {
   // 引导脚本跑在 pnpm build 之前，import 不到构建产物，只能各存一份。
   // 这条断言是那份副本的唯一约束——少了它，改了命令之后无 UI 引导会继续教用户抄旧的。
-  it('scripts/bootstrap/lib.mjs 里的副本与本包定义一致', async () => {
+  it('scripts/bootstrap/lib/builds.mjs 里的副本与本包定义一致', async () => {
     const { readFile } = await import('node:fs/promises')
-    const url = new URL('../../../scripts/bootstrap/lib.mjs', import.meta.url)
+    const url = new URL('../../../scripts/bootstrap/lib/builds.mjs', import.meta.url)
     const source = await readFile(url, 'utf8')
     expect(source).toContain(`export const BUILD_COMMAND = '${BUILD_COMMAND}'`)
     expect(source).toContain(`export const DEPLOY_COMMAND = '${DEPLOY_COMMAND}'`)

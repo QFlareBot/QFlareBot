@@ -40,13 +40,13 @@
 
 打开网址时如果显示无法访问，稍等一会儿再刷新：临时隧道的地址刚生成时经常还没生效，一般过一会儿就能打开。15 分钟内没有人打开的话，工作流会自动结束，重新运行即可。
 
-5. 跟着向导走：创建预填好权限的 Cloudflare API token、设置面板登录密钥 `ADMIN_TOKEN`，然后部署，最后连接仓库。QQ 机器人不在这里填，第 3 步再建。
+5. 跟着向导走，一屏只做一件事：创建预填好权限的 Cloudflare API token、设置面板登录密钥 `ADMIN_TOKEN`、部署、连接仓库，最后创建构建 token。Token 粘贴进去就会自动验证；中途刷新页面会接着上次那一步；部署失败可以直接重试，也可以回去改设置、换 token。QQ 机器人不在这里填，第 3 步再建。
 
 向导的完成页会给出一个 `https://qqbot.<你的子域>.workers.dev` 的面板地址，可以先用它登录面板看看；但**不要把它当成回调地址**，下一步要换成自己的域名。
 
 这个地址和你的账户信息只显示在向导页面上。公开仓库的 Actions 日志和运行页 Summary 谁都能看，所以那里不写地址、账户 ID 和资源 ID，日志里出现的（包括部署时打印的 Version ID、报错里带的构建 ID）会被打成 `***` 或 `…`。之后想再找面板地址，到 Cloudflare 后台 Worker 的 **Settings → Domains & Routes** 里看。
 
-`ADMIN_TOKEN` 只有你知道，引导不会在任何地方输出它，记好。Token 权限清单、无 UI 模式、手动部署与自部署原理见仓库里的 [apps/seed/README.md](https://github.com/QFlareBot/QFlareBot/blob/main/apps/seed/README.md)。
+`ADMIN_TOKEN` 只有你知道，引导不会在任何地方输出它，记好；忘了或者输错了，到 Cloudflare 后台 Worker 的 **Settings → Variables and Secrets** 里改掉它就行。Token 权限清单、无 UI 模式、手动部署与自部署原理见仓库里的 [apps/seed/README.md](https://github.com/QFlareBot/QFlareBot/blob/main/apps/seed/README.md)。
 
 ## 2. 绑定自定义域名
 

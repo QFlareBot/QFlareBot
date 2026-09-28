@@ -19,6 +19,7 @@ export default defineConfig({
       'plugins/*/src/**/*.test.ts',
       'apps/*/scripts/**/*.test.mjs',
       'scripts/**/*.test.mjs',
+      'scripts/bootstrap/ui/src/**/*.test.ts',
     ],
     environment: 'node',
   },

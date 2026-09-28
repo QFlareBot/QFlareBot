@@ -10,6 +10,8 @@
  *            下载源码 / 装依赖的网络问题重试后仍不行的，报成这次构建的整体错误，不记到插件头上
  *   deploy   有 CLOUDFLARE_API_TOKEN 时走 Versions API：上传 → 预览地址健康检查（带 ?plugins=1，
  *            有插件加载失败时逐个报回面板）→ 切流量；无凭证时退回 `wrangler deploy`（本地/CI 未注入凭证的场景）。
+ *            引导首次部署（INITIAL_BOOTSTRAP）直接 wrangler deploy 建脚本；重跑引导（BOOTSTRAP_REDEPLOY）
+ *            走 Versions API，切完流量再同步一次 Cron 与 workers.dev。
  *
  * 用法：
  *   node scripts/build-deploy.mjs prepare
@@ -513,6 +515,18 @@ async function deployPhase() {
       throw wrapped
     }
     throw err
+  }
+
+  // 重跑引导（BOOTSTRAP_REDEPLOY）：Versions API 只传代码与绑定、不碰脚本级设置，新版本改了
+  // Cron 或 workers.dev 的话要单独同步。wrangler triggers deploy 与 wrangler deploy 同一段逻辑：
+  // 配置里没声明 routes，线上的自定义域名不动。平时的构建不走这里，Cron 从首次部署起就没变过
+  if (process.env.BOOTSTRAP_REDEPLOY === 'true') {
+    console.log('同步 Cron 与 workers.dev 设置（wrangler triggers deploy）…')
+    execFileSync('pnpm', ['exec', 'wrangler', 'triggers', 'deploy', '--config', 'wrangler.generated.jsonc'], {
+      cwd: appDir,
+      stdio: 'inherit',
+      env: process.env,
+    })
   }
 }
 

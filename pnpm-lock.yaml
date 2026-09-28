@@ -155,6 +155,31 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
+  scripts/bootstrap/ui:
+    dependencies:
+      lucide-vue-next:
+        specifier: ^0.544.0
+        version: 0.544.0(vue@3.5.43(typescript@5.9.3))
+      vue:
+        specifier: ^3.5.21
+        version: 3.5.43(typescript@5.9.3)
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.1.13
+        version: 4.3.3(vite@7.3.6(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0))
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.1
+        version: 6.0.9(vite@7.3.6(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0))(vue@3.5.43(typescript@5.9.3))
+      tailwindcss:
+        specifier: ^4.1.13
+        version: 4.3.3
+      vite:
+        specifier: ^7.1.7
+        version: 7.3.6(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)
+      vue-tsc:
+        specifier: ^3.0.7
+        version: 3.3.11(typescript@5.9.3)
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':

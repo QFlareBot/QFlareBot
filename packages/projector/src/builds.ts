@@ -27,7 +27,7 @@ export interface CloudflareBuildsApiOptions {
  *
  * Worker（连上仓库后自动写 trigger）与引导脚本（无 UI 模式打进 Summary 让人照抄）都要用它，
  * 但两者分属不同的构建世界——Worker 打成 bundle，引导是裸 Node 脚本，没法共享一个模块。
- * 所以 `scripts/bootstrap/lib.mjs` 里有一份同源副本，由 builds.test.ts 断言两边一致。
+ * 所以 `scripts/bootstrap/lib/builds.mjs` 里有一份同源副本，由 builds.test.ts 断言两边一致。
  */
 export const BUILD_COMMAND = 'pnpm build && pnpm --filter @qqbot/seed run manifest:prepare'
 export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
@@ -38,7 +38,7 @@ export const DEPLOY_COMMAND = 'pnpm --filter @qqbot/seed run manifest:deploy'
  * Worker 只由工作区（packages/ plugins/ apps/）和根目录的 package.json、lockfile 构建出来；
  * 文档站、插件模板、工作流、引导脚本、设计稿与各处 Markdown 都不进 bundle。
  * 不排除的话，只改文档也会占一次构建时长，还让人白等。一次推送里只要有一个文件不在这里，照样构建。
- * 与 BUILD_COMMAND 一样，`scripts/bootstrap/lib.mjs` 里有一份副本。
+ * 与 BUILD_COMMAND 一样，`scripts/bootstrap/lib/builds.mjs` 里有一份副本。
  */
 export const BUILD_PATH_EXCLUDES = ['docs/*', 'templates/*', '.github/*', 'scripts/*', 'design-system/*', '*.md', 'LICENSE']
 
@@ -193,7 +193,7 @@ export class CloudflareBuildsApi {
    *
    * 连接时勾了「非生产分支构建」，Cloudflare 会另建一个预览 trigger（branch_includes 只有 "*"），
    * 不能取列表第一个：往预览 trigger 写部署命令、从它触发构建，都会打到错的那一路。
-   * `scripts/bootstrap/lib.mjs` 的 pickProductionTrigger 是同一条规则。
+   * `scripts/bootstrap/lib/builds.mjs` 的 pickProductionTrigger 是同一条规则。
    */
   async getTriggerUuid(workerTag: string): Promise<string | null> {
     const production = (await this.listTriggers(workerTag)).find((t) => !t.branchIncludes.length || productionBranchOf(t) !== null)

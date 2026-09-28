@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#e9eeea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0f0d" media="(prefers-color-scheme: dark)" />
+    <meta name="robots" content="noindex" />
+    <title>QFlareBot 部署向导</title>
+    <link rel="icon" href="../../../packages/ui/public/favicon.svg" type="image/svg+xml" />
+    <script>
+      // 首帧前应用已保存的主题，避免闪烁（与面板同一个键）
+      try {
+        const t = localStorage.getItem('qqbot.theme')
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

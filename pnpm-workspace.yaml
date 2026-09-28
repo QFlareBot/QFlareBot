@@ -2,3 +2,5 @@ packages:
   - packages/*
   - plugins/*
   - apps/*
+  # 首次部署的网页向导：只在引导工作流里构建，不进 Worker（scripts/* 在构建排除路径里）
+  - scripts/bootstrap/ui

@@ -1,6 +1,6 @@
 # QFlareBot 设计规范
 
-面板（`@qqbot/ui`）与插件页面共用这一套。机器可读版本是 `packages/ui-bridge/src/tokens.css`：页面只用那里的 `--qb-*` 变量，不写死颜色。
+面板（`@qqbot/ui`）、首次部署的网页向导（`scripts/bootstrap/ui`，直接复用面板的组件）与插件页面共用这一套。机器可读版本是 `packages/ui-bridge/src/tokens.css`：页面只用那里的 `--qb-*` 变量，不写死颜色。
 
 **风格：柔光。** 带一点绿的中性底色，上面浮着白色卡片和半透明侧栏；靠柔和阴影而不是边框分层，圆角偏大，按钮是胶囊形。
 

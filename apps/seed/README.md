@@ -18,9 +18,9 @@
      实时日志里（Summary 要等这一步结束才显示，步骤见[快速部署](https://qflarebot.github.io/deploy)），
      跟着网页走——网页会给出**权限预填的** token 创建链接，粘贴 token 即时校验
      （缺哪个权限当场点名），然后建资源、看进度、连接仓库、创建构建 token。
-   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 与 `ADMIN_TOKEN` 时）：直接跑完，后续步骤写进
-     run 页 Summary。`ADMIN_TOKEN` 必须自己定（它就是面板登录密钥，只有你知道明文）；缺任一个
-     secret 会直接失败并在日志里给出配置指引。
+   - **无 UI 引导**（配了 secret `CLOUDFLARE_API_TOKEN` 时）：直接跑完，后续步骤写进
+     run 页 Summary。首次部署还要配 secret `ADMIN_TOKEN`，必须自己定（它就是面板登录密钥，只有你知道明文），
+     缺了会在建资源之前失败；重跑时不配就沿用 Worker 上已有的。
 3. 工作流结束后照 Summary 里的清单收尾：绑定自定义域名、在面板「设置」里创建或绑定 QQ 机器人、QQ 开放平台填回调地址、连接仓库（网页向导里已做完）。
 
 **日志与 Summary 不带隐私信息。** 公开仓库的 Actions 日志和 Summary 谁都能看：账户 ID、workers.dev 子域、
@@ -55,14 +55,16 @@ Token 权限清单（预填链接已带；手动创建照此勾选）：
 - 验证 token 与权限；单账户自动推导账户 ID（多账户要求配 secret `CLOUDFLARE_ACCOUNT_ID`，或填 `account_id` 输入）
 - **幂等创建/复用**同名 KV / D1 / R2（名字可在 workflow 输入里改；R2 未激活时自动降级为
   不绑定，只在后台激活 R2 后重跑即可）
-- 读取 D1 里已安装的插件，与内置清单一起构建 + `wrangler deploy`——重跑引导不会把面板里装的插件
-  从线上抹掉
+- 读取 D1 里已安装的插件，与内置清单一起构建——重跑引导不会把面板里装的插件从线上抹掉。
+  Worker 还不存在时用 `wrangler deploy` 建脚本；已经存在（重跑）时走和自部署构建同一条 Versions API 路径：
+  预览地址健康检查、secret 保全校验都过了才切流量，再用 `wrangler triggers deploy` 同步 Cron 与 workers.dev
+  （Versions API 不碰脚本级设置）。没有 D1 / R2 的部署传 `CF_D1_ID=none` / `CF_R2_NAME=none`，过得了绑定护栏
 - 资源 id、Worker 名**不进 Git**：经 `wrangler secret bulk` 写入 Worker Secrets，
   并通过 `GET /admin/build-config` 构建端点动态下发给构建机（K/V、D1 必须有 id：自部署走的
   Versions API 不认名字，缺 id 报 10021）
 - 写入 Worker 密钥：`ADMIN_TOKEN`（**必须自己设置**，至少 12 个字符：无 UI 模式取自你的 GitHub
-  secret，网页向导模式在表单里填。引导不代为生成，也不在任何地方回显——公开仓库的日志与 Summary
-  谁都能看，生成出来的密码没有安全的途径交到你手上）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
+  secret，网页向导模式在表单里填；重跑时可以沿用 Worker 上已有的、不改密码。引导不代为生成，也不在任何地方回显——
+  公开仓库的日志与 Summary 谁都能看，生成出来的密码没有安全的途径交到你手上）、`CF_ACCOUNT_ID`、`CF_WORKER_NAME`、`CF_KV_ID`、`CF_D1_ID`、
   `CF_R2_NAME`、`CF_DEFAULT_DOMAIN`，配了 `CLOUDFLARE_BUILDS_TOKEN`
   secret 时再写 `CF_BUILDS_TOKEN`
 - **不碰 QQ 凭证**：机器人在部署之后到面板「设置」里建——手机 QQ 扫码确认即新建一个，AppID/AppSecret

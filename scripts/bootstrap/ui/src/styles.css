@@ -1,0 +1,7 @@
+/* 面板的样式整套拿来：设计 token、Tailwind 主题映射、基础样式与动效（design-system/qflarebot/MASTER.md） */
+@import '../../../../packages/ui/src/styles.css';
+@import './motion.css';
+
+/* 面板组件在另一个包里，Tailwind 自动扫描不到 */
+@source '../../../../packages/ui/src/components';
+@source './';
