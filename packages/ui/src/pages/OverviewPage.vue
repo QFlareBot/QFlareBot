@@ -14,7 +14,12 @@ import { useConfirm } from '../composables/useConfirm.js'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
 
-const { status, plugins, refresh, updatedAt, loading } = useStatus({ pollMs: 5000 })
+/**
+ * 每拉一次都是一次 Worker 请求加一次 D1 查询，开着不关的话 5 秒一次一天就是上万次（免费版每天 10 万次请求）；
+ * 30 秒一次，切回页面时另外马上刷新
+ */
+const STATUS_POLL_MS = 30_000
+const { status, plugins, refresh, updatedAt, loading } = useStatus({ pollMs: STATUS_POLL_MS })
 const { push } = useToast()
 const confirm = useConfirm()
 

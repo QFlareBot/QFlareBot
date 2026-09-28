@@ -192,7 +192,7 @@ let statsCache: { key: string; at: number; value: DispatchStats | null; pending?
 /**
  * 24 小时事件数与出错数；查不到（没 token、缺权限、接口出错）或还没查回来时返回 null。
  *
- * 面板每 5 秒拉一次 /admin/status，而一次查询要好几秒，绝不能让 status 等它：
+ * 面板概览页定时拉 /admin/status，而一次查询要好几秒，绝不能让 status 等它：
  * 结果（包括查不到）缓存 STATS_TTL_MS，过期或还没有时都只在后台刷新，先返回手上的值
  */
 export async function dispatchStats(
