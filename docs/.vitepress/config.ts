@@ -14,6 +14,8 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
     ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' }],
+    // Google Search Console 的站点所有权验证，删掉会让验证失效
+    ['meta', { name: 'google-site-verification', content: '5a2Jpckz-AfHhOUzyHE7JJgY74R-qBboSaKjFsur5kQ' }],
   ],
   themeConfig: {
     logo: { light: '/logo.svg', dark: '/logo-dark.svg', alt: 'QFlareBot' },
