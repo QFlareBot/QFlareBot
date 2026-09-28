@@ -6,8 +6,11 @@ import type { Awaitable, PluginContext } from './context.js'
  * 当前契约版本：给插件新增能力（ctx 字段、SDK 导出）时递增。
  * 清单里的 apiVersion 是插件**最低**要求的版本，运行时接受不高于自己的：老插件在新框架上照常能装，
  * 用了新能力的插件装到老框架上，安装时就被拦下（而不是跑到那一行才报 "is not a function"）。
+ *
+ * - 1：初版契约
+ * - 2：`ctx.db.batch()`
  */
-export const API_VERSION = 1 as const
+export const API_VERSION = 2 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
 export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'

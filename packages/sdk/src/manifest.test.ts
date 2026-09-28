@@ -30,7 +30,7 @@ describe('extractManifest', () => {
   it('去掉函数只留数据，并补齐 version', () => {
     const m = extractManifest(plugin, { version: '1.2.3' })
     expect(m.version).toBe('1.2.3')
-    expect(m.apiVersion).toBe(1)
+    expect(m.apiVersion).toBe(API_VERSION)
     expect(m.commands).toEqual([{ name: 'hi', aliases: ['hello'], description: '打招呼' }])
     expect(m.regex).toEqual([{ pattern: '^ping$', flags: 'i' }])
     expect(m.events).toEqual([{ event: ['qq.group.robot_added'] }])
@@ -68,9 +68,15 @@ describe('validateManifest', () => {
     expect(validateManifest(m).filter((e) => e.includes('命令名重复'))).toEqual(['命令名重复：Pixiv  RANDOM'])
   })
 
+  it('写了更低的 apiVersion 就照写进清单：没用到新能力的插件，老版本机器人也能装', () => {
+    expect(extractManifest({ ...plugin, apiVersion: 1 }, { version: '1.0.0' }).apiVersion).toBe(1)
+  })
+
   it('apiVersion 是最低要求：不高于当前契约都能装，高了提示升级机器人', () => {
     const m = extractManifest(plugin, { version: '1.0.0' })
     expect(validateManifest({ ...m, apiVersion: API_VERSION })).toEqual([])
+    // 升过契约版本以后，写着 1 的老插件照常能装
+    expect(validateManifest({ ...m, apiVersion: 1 })).toEqual([])
     expect(validateManifest({ ...m, apiVersion: API_VERSION + 1 })).toEqual([expect.stringContaining('请先升级机器人')])
     expect(validateManifest({ ...m, apiVersion: 0 })).toEqual([expect.stringContaining('apiVersion 非法')])
     expect(validateManifest({ ...m, apiVersion: 1.5 })).toEqual([expect.stringContaining('apiVersion 非法')])

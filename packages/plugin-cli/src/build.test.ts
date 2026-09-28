@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { API_VERSION } from '@qqbot/sdk'
 import { buildPlugin, bundledPackages } from './build.js'
 import { expectedPluginName, extractPluginManifest, ManifestValidationError } from './manifest.js'
 
@@ -90,7 +91,7 @@ describe('buildPlugin', () => {
     expect(manifest).toMatchObject({
       name: 'demo',
       version: '1.2.3',
-      apiVersion: 1,
+      apiVersion: API_VERSION,
       description: '测试插件',
       defaultConfig: { greeting: '你好' },
       commands: [{ name: 'hello', description: '打招呼', aliases: ['hi'] }, { name: 'sock' }],

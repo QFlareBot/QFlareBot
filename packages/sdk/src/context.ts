@@ -85,6 +85,42 @@ export interface ScopedDB {
   run(sql: string, ...params: unknown[]): Promise<{ changes: number }>
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T[]>
   first<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T | null>
+  /**
+   * 见 {@link PluginDB.batch}。在这里是可选的：自己写的测试替身声明成 `ScopedDB` 时不必实现，
+   * 用到 batch 的插件把参数写成 `PluginDB` 即可
+   */
+  batch?<T = Record<string, unknown>>(statements: readonly DBStatement[]): Promise<Array<DBBatchResult<T>>>
+}
+
+/** `ctx.db.batch()` 里的一条语句，表名同样写 `{表名}` */
+export interface DBStatement {
+  sql: string
+  params?: unknown[]
+}
+
+/** 每条语句一个结果，顺序与传入的一致；写语句的 results 是空数组 */
+export interface DBBatchResult<T = Record<string, unknown>> {
+  changes: number
+  results: T[]
+}
+
+/** `ctx.db` 的类型：`ScopedDB` 加上一定有的 `batch`（apiVersion 2 起） */
+export interface PluginDB extends ScopedDB {
+  /**
+   * 一批语句一次发给 D1：只有一次网络往返，整批是一个事务，任何一条失败整批回滚。
+   * 一条命令要读写好几次时用它，比逐条 `await` 快，也不会只写进去一半：
+   *
+   * ```ts
+   * await ctx.db.batch([
+   *   { sql: 'UPDATE {wallets} SET coins = coins - ? WHERE id = ?', params: [price, buyer] },
+   *   { sql: 'UPDATE {wallets} SET coins = coins + ? WHERE id = ?', params: [price, seller] },
+   * ])
+   * ```
+   *
+   * 每条仍算一次查询（免费版每次调用最多 50 条）。不支持 `exec` 那样一条里写多个语句；空数组直接返回 `[]`。
+   * 用到它的插件要求 apiVersion 2，老版本的机器人会在安装时拒装
+   */
+  batch<T = Record<string, unknown>>(statements: readonly DBStatement[]): Promise<Array<DBBatchResult<T>>>
 }
 
 export interface UploadedMedia {
@@ -262,7 +298,7 @@ export interface PluginContext<C = unknown> {
   readonly config: C
   readonly logger: Logger
   readonly kv: ScopedKV
-  readonly db: ScopedDB
+  readonly db: PluginDB
   /** 大文件存储；未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
   readonly api: BotApi

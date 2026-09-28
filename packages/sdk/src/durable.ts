@@ -10,7 +10,7 @@
  * 再交给平台基类。裸 env 到不了插件手里，而 `this.ctx`（DurableObjectState）与 RPC
  * 方法调用都原样可用。
  */
-import type { Logger, ScopedDB, ScopedKV, ScopedR2 } from './context.js'
+import type { Logger, PluginDB, ScopedKV, ScopedR2 } from './context.js'
 
 /**
  * 作用域工厂挂在类上的键。
@@ -34,7 +34,7 @@ export interface DurableContext {
   readonly plugin: { readonly name: string }
   readonly logger: Logger
   readonly kv: ScopedKV
-  readonly db: ScopedDB
+  readonly db: PluginDB
   /** 未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
 }

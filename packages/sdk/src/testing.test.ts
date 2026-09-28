@@ -2,7 +2,7 @@
  * 测试替身要和线上一致：线上会拒绝的写法，本地测试里也得拒绝，否则测试全绿、装上机器人才报错。
  */
 import { describe, expect, it } from 'vitest'
-import type { ScopedDB } from './context.js'
+import type { DBStatement, ScopedDB } from './context.js'
 import { definePlugin } from './plugin.js'
 import { createMockContext, createMockSession, runCommand } from './testing.js'
 
@@ -88,6 +88,49 @@ describe('mock ctx.db 走线上的表名检查', () => {
     await expect(ctx.db.exec('CREATE TABLE {notes} (x)')).rejects.toThrow(/mock 环境未提供 db/)
     await expect(ctx.db.all('SELECT * FROM {notes}')).rejects.toThrow(/mock 环境未提供 db/)
     await expect(ctx.db.first('SELECT * FROM {notes}')).rejects.toThrow(/mock 环境未提供 db/)
+    await expect(ctx.db.batch([{ sql: 'SELECT * FROM {notes}' }])).rejects.toThrow(/mock 环境未提供 db/)
+  })
+})
+
+describe('mock ctx.db.batch', () => {
+  it('整批先过表名检查，有一条越界整批都不交给替身', async () => {
+    const { db } = recordingDB()
+    const batches: DBStatement[][] = []
+    const ctx = createMockContext(plugin, {
+      db: { ...db, batch: async (s) => (batches.push([...s]), []) },
+    })
+    await expect(
+      ctx.db.batch([{ sql: 'UPDATE {notes} SET v = 1' }, { sql: 'DELETE FROM rt_installs' }]),
+    ).rejects.toThrow(/不属于本插件的表名 rt_installs/)
+    expect(batches).toEqual([])
+  })
+
+  it('合规的原样交给替身的 batch，返回值照旧；空数组直接返回', async () => {
+    const { db } = recordingDB()
+    const batches: DBStatement[][] = []
+    const ctx = createMockContext(plugin, {
+      db: {
+        ...db,
+        batch: async <T>(s: readonly DBStatement[]) => {
+          batches.push([...s])
+          return s.map(() => ({ changes: 1, results: [] as T[] }))
+        },
+      },
+    })
+    const statements = [{ sql: 'UPDATE {notes} SET v = ? WHERE id = ?', params: [1, 2] }, { sql: 'SELECT * FROM {notes}' }]
+    expect(await ctx.db.batch(statements)).toEqual([
+      { changes: 1, results: [] },
+      { changes: 1, results: [] },
+    ])
+    expect(await ctx.db.batch([])).toEqual([])
+    expect(batches).toEqual([statements])
+  })
+
+  it('替身没实现 batch（老的 ScopedDB 替身）：报出来，而不是逐条假装执行', async () => {
+    const { db, seen } = recordingDB()
+    const ctx = createMockContext(plugin, { db })
+    await expect(ctx.db.batch([{ sql: 'UPDATE {notes} SET v = 1' }])).rejects.toThrow(/没有实现 batch/)
+    expect(seen).toEqual([])
   })
 })
 

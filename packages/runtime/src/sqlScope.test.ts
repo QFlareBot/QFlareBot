@@ -331,6 +331,55 @@ describe('ctx.db.exec', () => {
     )
   })
 
+  function batchingD1() {
+    const batches: Array<Array<{ sql: string; params: unknown[] }>> = []
+    const d1 = {
+      prepare(sql: string) {
+        const stmt = { sql, params: [] as unknown[], bind: (...p: unknown[]) => ({ ...stmt, params: p }) }
+        return stmt
+      },
+      async batch(statements: Array<{ sql: string; params: unknown[] }>) {
+        batches.push(statements.map(({ sql, params }) => ({ sql, params })))
+        return statements.map((s) =>
+          s.sql.startsWith('SELECT') ? { results: [{ id: 1 }], meta: { changes: 0 } } : { results: [], meta: { changes: 2 } },
+        )
+      },
+    } as unknown as D1Database
+    return { d1, batches }
+  }
+
+  it('batch：展开表前缀，整批一次交给 D1 的 batch，每条回 changes 与 results', async () => {
+    const { d1, batches } = batchingD1()
+    const results = await createScopedDB(d1, 'hello').batch([
+      { sql: 'UPDATE {notes} SET v = ? WHERE id = ?', params: [1, 'a'] },
+      { sql: 'SELECT id FROM {notes}' },
+    ])
+    expect(batches).toEqual([
+      [
+        { sql: 'UPDATE p_hello_notes SET v = ? WHERE id = ?', params: [1, 'a'] },
+        { sql: 'SELECT id FROM p_hello_notes', params: [] },
+      ],
+    ])
+    expect(results).toEqual([
+      { changes: 2, results: [] },
+      { changes: 0, results: [{ id: 1 }] },
+    ])
+  })
+
+  it('batch：有一条越界整批都不发；空数组不调用 D1', async () => {
+    const { d1, batches } = batchingD1()
+    const db = createScopedDB(d1, 'hello')
+    await expect(db.batch([{ sql: 'UPDATE {notes} SET v = 1' }, { sql: 'DELETE FROM rt_installs' }])).rejects.toThrow(
+      /不属于本插件的表名 rt_installs/,
+    )
+    expect(await db.batch([])).toEqual([])
+    expect(batches).toEqual([])
+  })
+
+  it('没绑 D1：batch 和其他方法一样抛出可读错误', async () => {
+    await expect(createScopedDB(undefined, 'hello').batch([{ sql: 'SELECT 1' }])).rejects.toThrow(/未绑定 D1/)
+  })
+
   it('只有注释或空白：不调用 D1（D1 对空 SQL 会报错）', async () => {
     const { d1, seen } = recordingD1()
     const db = createScopedDB(d1, 'hello')

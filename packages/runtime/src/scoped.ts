@@ -6,7 +6,7 @@
  *
  * 前缀不只是防撞名：框架凭它才知道某个插件建过哪些键 / 表 / 对象，卸载时才清得掉（见 purge.ts）。
  */
-import type { ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
+import type { DBStatement, PluginDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
 import { flattenForExec, scopeSql, tablePrefix } from './sqlScope.js'
 
 /** 插件数据的键前缀。卸载时按它枚举并清理，见 purge.ts */
@@ -99,13 +99,13 @@ export function createScopedR2(bucket: R2Bucket | undefined, name: string): Scop
   }
 }
 
-export function createScopedDB(db: D1Database | undefined, name: string): ScopedDB {
+export function createScopedDB(db: D1Database | undefined, name: string): PluginDB {
   const prefix = tablePrefix(name)
   if (!db) {
     const missing = async () => {
       throw new Error('未绑定 D1（wrangler.jsonc 的 d1_databases），插件无法使用 ctx.db')
     }
-    return { table: (n) => prefix + n, exec: missing, run: missing, all: missing, first: missing }
+    return { table: (n) => prefix + n, exec: missing, run: missing, all: missing, first: missing, batch: missing }
   }
   // 展开 {表名} 占位并拦下指向别处的表；见 sqlScope.ts
   const scope = (sql: string): string => scopeSql(sql, prefix)
@@ -126,6 +126,13 @@ export function createScopedDB(db: D1Database | undefined, name: string): Scoped
     },
     async first<T>(sql: string, ...params: unknown[]) {
       return (await db.prepare(scope(sql)).bind(...params).first<T & Record<string, unknown>>()) as T | null
+    },
+    async batch<T>(statements: readonly DBStatement[]) {
+      // 先把整批的表名都检查完再发：D1 的 batch 是事务，但越界的 SQL 根本不该发出去
+      const prepared = statements.map((s) => db.prepare(scope(s.sql)).bind(...(s.params ?? [])))
+      if (!prepared.length) return []
+      const results = await db.batch<T & Record<string, unknown>>(prepared)
+      return results.map((r) => ({ changes: r.meta?.changes ?? 0, results: (r.results ?? []) as T[] }))
     },
   }
 }

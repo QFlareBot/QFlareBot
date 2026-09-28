@@ -5,7 +5,7 @@
  * 线上会拒绝的写法，这里也拒绝：`ctx.db` 的 SQL 走同一套表名检查，`session.reply` 有同样的被动回复上限。
  * 否则本地测试全绿、装上机器人才报错，替身就失去了意义。
  */
-import type { BotApi, GroupApi, Logger, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from './context.js'
+import type { BotApi, DBStatement, GroupApi, Logger, PluginContext, PluginDB, ScopedDB, ScopedKV, ScopedR2, StoredObject } from './context.js'
 import type { ScopedDurableObjects } from './durable.js'
 import type { EventName } from './events.js'
 import type {
@@ -401,7 +401,7 @@ export function createMockContext<C = unknown>(
   // 没注入替身时检查完再报「未提供 db」，越界的 SQL 先看到的是越界那条错
   const prefix = tablePrefix(plugin.name)
   const inner = options.db
-  const db: ScopedDB = {
+  const db: PluginDB = {
     table: (n) => prefix + n,
     async exec(sql) {
       flattenForExec(scopeSql(sql, prefix))
@@ -418,6 +418,13 @@ export function createMockContext<C = unknown>(
     async first<T>(sql: string, ...params: unknown[]) {
       scopeSql(sql, prefix)
       return inner ? inner.first<T>(sql, ...params) : unavailable()
+    },
+    async batch<T>(statements: readonly DBStatement[]) {
+      for (const s of statements) scopeSql(s.sql, prefix)
+      if (!inner) return unavailable()
+      // 逐条模拟做不到线上的「整批回滚」，也分不清哪条该回 changes、哪条该回 results，不如让替身自己实现
+      if (!inner.batch) throw new Error('注入的 db 替身没有实现 batch：用 node:sqlite 的话，在事务里逐条执行、每条返回 { changes, results }')
+      return statements.length ? inner.batch<T>(statements) : []
     },
   }
 
