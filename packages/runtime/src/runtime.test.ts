@@ -168,6 +168,31 @@ describe('webhook', () => {
     expect(qq.sent).toHaveLength(1)
   })
 
+  it('先回 ACK 再去重：D1 去重卡着也不耽误回应，去重完才分发', async () => {
+    const { echo, calls } = makePlugins()
+    const qq = createQQFetch()
+    const runtime = createRuntime({ plugins: [echo], fetchImpl: qq.fetchImpl })
+    const env = createEnv()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const prepare = env.DB.prepare.bind(env.DB)
+    env.DB.prepare = ((sql: string) => {
+      const stmt = prepare(sql)
+      if (!sql.startsWith('INSERT INTO rt_seen_ring')) return stmt
+      const run = stmt.run.bind(stmt)
+      return Object.assign(stmt, { bind: (...p: unknown[]) => (stmt.bind(...p), stmt), run: async () => (await gate, run()) })
+    }) as typeof env.DB.prepare
+
+    const execCtx = createExecutionContext()
+    const res = await runtime.fetch!(await signedRequest(`${BASE}/webhook`, groupMessagePayload('/echo 慢', 'slow-d1')), env, execCtx)
+    expect(await res.json()).toEqual({ op: 12 })
+    expect(calls).toEqual([])
+
+    release()
+    await execCtx.flush()
+    expect(calls).toEqual(['echo:慢'])
+  })
+
   it('未配置机器人时返回 503', async () => {
     const runtime = createRuntime({ plugins: [] })
     const env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })

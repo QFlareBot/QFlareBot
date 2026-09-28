@@ -126,59 +126,70 @@ export async function handleWebhook(
       return error('时间戳过期', 401)
     }
     const id = payload.id ?? `${payload.t}:${(payload.d as { id?: string } | undefined)?.id ?? rawBody.length}`
-    if (!(await claimEvent(scope.env, id, options.dedupeTtlSec))) {
-      logger.info('重复事件已忽略', { id })
-      return json(ACK)
-    }
 
-    // 被平台掐断时下面 .then 里的事件摘要一行都不会写，只能靠这条告警知道是哪个事件卡住了。
-    // 定时器不交给 waitUntil，分发结束就清掉，不会反过来把请求撑到 25 秒
-    const slow = setTimeout(
-      () => logger.warn('事件处理已超过 25 秒，30 秒时会被平台中断', { id, event: toEventName(payload.t ?? 'UNKNOWN') }),
-      DISPATCH_WARN_MS,
-    )
+    // 去重也放进后台：不管是不是重复，回给平台的都是同一个 ACK，没必要让它等一次 D1 往返
+    // （新 isolate 上还要先建表，是两次）。平台收到得越快，因超时而重投的就越少
     scope.execCtx.waitUntil(
-      scope.dispatchPayload(payload).then(
-        async ({ session, report, outbox, failed }) => {
-          // 面板的「最近事件」和 24 小时统计按 kind 从 Workers Logs 查（logs.ts），改字段要两边一起改。
-          // 正文默认不进日志（设置里开了 logContent 才带）；面板开着实时调试时另写进 D1
-          const summary = dispatchMessage(session.event, session.scene, session.targetId, session.userId, report, outbox, failed)
-          logger.info(summary, {
-            kind: DISPATCH_KIND,
-            id,
-            event: session.event,
-            scene: session.scene,
-            userId: session.userId,
-            targetId: session.targetId,
-            ...(scope.snapshot.logContent && session.content ? { content: session.content.slice(0, CONTENT_LIMIT) } : {}),
-            matched: report.matched,
-            errors: report.errors.length ? report.errors : undefined,
-            outbox,
-            failed,
-            ok: report.errors.length === 0 && failed === 0,
-          })
-          await recordEvent(
-            scope.env,
-            {
-              id,
-              event: session.event,
-              scene: session.scene,
-              userId: session.userId,
-              targetId: session.targetId,
-              content: session.content,
-              report,
-              outbox,
-              failed,
-            },
-            logger,
-          )
-        },
-        (err) => logger.error('事件分发异常', { id, ...errorInfo(err) }),
-      ).finally(() => clearTimeout(slow)),
+      claimEvent(scope.env, id, options.dedupeTtlSec)
+        .then((first) => {
+          if (first) return dispatchInBackground(scope, payload, id, logger)
+          logger.info('重复事件已忽略', { id })
+        })
+        .catch((err: unknown) => logger.error('事件分发异常', { id, ...errorInfo(err) })),
     )
     return json(ACK)
   }
 
   logger.info('收到未处理的 op', { op: payload.op })
   return json(ACK)
+}
+
+/** 分发一个已去重的事件，写事件摘要；整个在 waitUntil 里跑，平台在回应之后最多再给 30 秒 */
+function dispatchInBackground(scope: RequestScope, payload: WebhookPayload, id: string, logger: Logger): Promise<void> {
+  // 被平台掐断时下面 .then 里的事件摘要一行都不会写，只能靠这条告警知道是哪个事件卡住了。
+  // 定时器分发结束就清掉，不会反过来把请求撑到 25 秒
+  const slow = setTimeout(
+    () => logger.warn('事件处理已超过 25 秒，30 秒时会被平台中断', { id, event: toEventName(payload.t ?? 'UNKNOWN') }),
+    DISPATCH_WARN_MS,
+  )
+  return scope
+    .dispatchPayload(payload)
+    .then(
+      async ({ session, report, outbox, failed }) => {
+        // 面板的「最近事件」和 24 小时统计按 kind 从 Workers Logs 查（logs.ts），改字段要两边一起改。
+        // 正文默认不进日志（设置里开了 logContent 才带）；面板开着实时调试时另写进 D1
+        const summary = dispatchMessage(session.event, session.scene, session.targetId, session.userId, report, outbox, failed)
+        logger.info(summary, {
+          kind: DISPATCH_KIND,
+          id,
+          event: session.event,
+          scene: session.scene,
+          userId: session.userId,
+          targetId: session.targetId,
+          ...(scope.snapshot.logContent && session.content ? { content: session.content.slice(0, CONTENT_LIMIT) } : {}),
+          matched: report.matched,
+          errors: report.errors.length ? report.errors : undefined,
+          outbox,
+          failed,
+          ok: report.errors.length === 0 && failed === 0,
+        })
+        await recordEvent(
+          scope.env,
+          {
+            id,
+            event: session.event,
+            scene: session.scene,
+            userId: session.userId,
+            targetId: session.targetId,
+            content: session.content,
+            report,
+            outbox,
+            failed,
+          },
+          logger,
+        )
+      },
+      (err) => logger.error('事件分发异常', { id, ...errorInfo(err) }),
+    )
+    .finally(() => clearTimeout(slow))
 }

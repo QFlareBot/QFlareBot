@@ -42,3 +42,32 @@ describe('token 缓存写失败', () => {
     await expect(provider.invalidate()).resolves.toBeUndefined()
   })
 })
+
+describe('并发换 token', () => {
+  const empty = (): TokenCache => ({ get: async () => null, set: async () => {} })
+
+  it('同一 AppID 的多个客户端（运行时每个请求新建一个）同时来取，只换一次', async () => {
+    const fetchImpl = vi.fn(async () => tokenResponse())
+    const a = createTokenProvider({ appId: 'shared', secret: 's', cache: empty(), fetchImpl })
+    const b = createTokenProvider({ appId: 'shared', secret: 's', cache: empty(), fetchImpl })
+    expect(await Promise.all([a.get(), b.get(), a.get()])).toEqual(['tok', 'tok', 'tok'])
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('换完就不再共享：下一次过期照常重新换', async () => {
+    const fetchImpl = vi.fn(async () => tokenResponse())
+    const a = createTokenProvider({ appId: 'again', secret: 's', cache: empty(), fetchImpl })
+    await a.get()
+    await a.get()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('不同 AppID 或 secret 各换各的', async () => {
+    const fetchImpl = vi.fn(async () => tokenResponse())
+    const a = createTokenProvider({ appId: 'x', secret: 's1', cache: empty(), fetchImpl })
+    const b = createTokenProvider({ appId: 'y', secret: 's1', cache: empty(), fetchImpl })
+    const c = createTokenProvider({ appId: 'x', secret: 's2', cache: empty(), fetchImpl })
+    await Promise.all([a.get(), b.get(), c.get()])
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+  })
+})

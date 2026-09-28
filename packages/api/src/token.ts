@@ -40,13 +40,18 @@ export function memoryTokenCache(): TokenCache {
   }
 }
 
+/**
+ * 正在进行的换 token，整个 isolate 共享，按 AppID（连同 secret、地址）分开：同一 isolate 内并发请求只发一次网络调用。
+ * 运行时每个请求都新建客户端，挂在实例上的话管不到别的请求，token 过期那一刻同时进来的几个请求会各自去换、各自写一次缓存
+ */
+const inflight = new Map<string, Promise<string>>()
+
 export function createTokenProvider(options: TokenProviderOptions): TokenProvider {
   const cache = options.cache ?? memoryTokenCache()
   const fetchImpl = options.fetchImpl ?? fetch
   const tokenUrl = options.tokenUrl ?? 'https://api.bot.qq.com/app/getAppAccessToken'
   const skew = options.skewSeconds ?? 60
-  // 同一 isolate 内并发请求只发一次网络调用
-  let inflight: Promise<string> | null = null
+  const key = `${tokenUrl}\n${options.appId}\n${options.secret}`
 
   async function refresh(): Promise<string> {
     const res = await fetchImpl(tokenUrl, {
@@ -72,12 +77,12 @@ export function createTokenProvider(options: TokenProviderOptions): TokenProvide
     async get() {
       const cached = await cache.get()
       if (cached && cached.expiresAt - skew > Date.now() / 1000) return cached.token
-      if (!inflight) {
-        inflight = refresh().finally(() => {
-          inflight = null
-        })
+      let task = inflight.get(key)
+      if (!task) {
+        task = refresh().finally(() => inflight.delete(key))
+        inflight.set(key, task)
       }
-      return inflight
+      return task
     },
     async invalidate() {
       try {

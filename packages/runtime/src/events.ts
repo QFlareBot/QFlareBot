@@ -59,8 +59,9 @@ let schemaReady: Promise<void> | null = null
 function ensureSchema(env: RuntimeEnv): Promise<void> | null {
   const db = env.DB
   if (!db) return null
+  // D1 的 exec 按行拆语句：三条一行一条，一次发过去，新 isolate 上只多一次往返而不是三次
   schemaReady ??= (async () => {
-    for (const sql of SCHEMA) await db.exec(sql)
+    await db.exec(SCHEMA.join('\n'))
   })().catch((err) => {
     schemaReady = null
     throw err

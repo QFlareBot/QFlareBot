@@ -62,8 +62,9 @@ async function migratePluginColumns(db: D1Database): Promise<void> {
 let schemaReady: Promise<void> | null = null
 
 function ensureSchema(db: D1Database): Promise<void> {
+  // D1 的 exec 按行拆语句：每条压成一行、三条一次发过去，新 isolate 上建表只要一次往返
   schemaReady ??= (async () => {
-    for (const stmt of SCHEMA) await db.exec(stmt.replace(/\n\s*/g, ' '))
+    await db.exec(SCHEMA.map((stmt) => stmt.replace(/\n\s*/g, ' ')).join('\n'))
     await migratePluginColumns(db)
   })().catch((err) => {
     schemaReady = null
