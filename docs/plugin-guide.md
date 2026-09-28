@@ -91,6 +91,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   抽清单的子进程只带白名单里的环境变量（PATH、HOME、代理、npm 源这类），入口顶层读不到构建机上的任何凭证。上线前还有一道：新版本先在预览地址上把每个插件都加载一遍（`/healthz?plugins=1`），入口一加载就抛错的插件会让这次部署不切流量、线上保持旧版，面板「未上线的改动」里会写明是哪个插件加载失败。
 - **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
+- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
 - **额度是全机器人共享的，省着用**：KV、D1、CPU、请求数的每日额度是框架和所有插件合用一份，一个插件用超了，整台机器人一起停摆（免费版 KV 一天只能写 1,000 次，D1 写 10 万行）。**不要每收到一条消息就写一次 KV 或 D1**，频繁变的数据别放 KV。怎么选存储见[第 6 节](#_6-存储状态)，额度与省写入的写法见[第 9 节](#_9-平台限额-免费版的硬预算)。
 
@@ -202,9 +203,23 @@ commands: {
 
 ## 5. 配置
 
-- **声明**：`defaultConfig` 出厂默认 + `configSchema`（JSON Schema）。面板按 schema 渲染表单，保存时校验（覆盖 string / number / boolean / 枚举 / 字符串数组与 `required`；复杂对象退化为 JSON 文本框）。
+- **声明**：`defaultConfig` 出厂默认 + `configSchema`（JSON Schema）。面板按 schema 渲染表单，保存时按同一套规则校验，错误标在对应的输入框下。认得的写法都是 JSON Schema 的标准关键字：
+
+  | 写法 | 面板上 |
+  | --- | --- |
+  | `type: 'string'` / `'number'` / `'integer'` / `'boolean'`，`minLength` / `maxLength` / `minimum` / `maximum` | 输入框、开关 |
+  | `enum: [...]` | 下拉，选项就是值本身 |
+  | `oneOf: [{ const: 'fast', title: '快' }, …]` | 带标签的下拉，存的是 `const` |
+  | `format: 'textarea'`（字符串） | 多行文本框 |
+  | `writeOnly: true`（字符串） | 密钥：面板不回显，只显示「已设置」，可以更换或清除；`/admin/status` 与快照接口里也只给占位符 |
+  | `type: 'array', items: { type: 'string' }` | 逐条输入的列表 |
+  | `type: 'object', properties: {…}`（可带 `required`） | 一组字段，可以嵌套 |
+  | `type: 'array', items: { type: 'object', properties: {…} }` | 卡片列表，可增删、调整顺序 |
+  | `type: 'object', additionalProperties: {…}` | 键名不固定的键值对 |
+
+  认不出的类型退回 JSON 文本框。API 密钥这类值一定标 `writeOnly: true`：不标的话任何人打开面板都能看到明文。
 - **存放**：面板保存写 KV 快照，与部署解耦——改配置不触发构建，即时生效（其他节点最长约 1 分钟）。
-- **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。按顶层字段合并：保存过的配置盖在 `defaultConfig` 上，快照里没有的字段回落默认值——所以升级后新增的配置项，保存过配置的用户也拿得到默认值。
+- **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。保存过的配置盖在 `defaultConfig` 上，快照里没有的字段回落默认值——所以升级后新增的配置项，保存过配置的用户也拿得到默认值。声明了 `properties` 的嵌套对象同样逐项回落；键名不固定的对象（`additionalProperties`）和数组整个替换，用户删掉的项不会被默认值加回来。
 
 配置放"人工可改的设置"；插件的运行数据用下面的存储。
 
@@ -277,6 +292,14 @@ const rows = await ctx.db.all<Note>('SELECT * FROM {notes} WHERE user_id = ? ORD
 不要直接查它的表——查不到（前缀拦着），而且就算能查也不该查：直连是隐形依赖，对方改表结构或被卸载，你会静默坏掉，框架也看不见这层关系。
 
 正确做法是让数据的持有方导出 service：提供方声明 `services: { 名: (ctx) => 对象 }`，使用方声明 `depends: { 名: '*' }` 后 `ctx.service<类型>('名')`。这样依赖写在清单里，安装时会校验，面板上看得见。depends 未满足会在安装时被拒绝。
+
+同样的办法也用来共享能力：LLM、出图这类要配置密钥、地址的，做成一个插件对外提供服务，配置只在它那里填一次，其他插件调它的服务就行，不用各自再填一遍（内置的 [t2i](./builtin-plugins.md) 就是这么做的）。几条规则：
+
+- **只能取自己声明过的**。没在 `depends` 里声明的服务，`ctx.service()` 直接抛错——哪怕同一个请求里别的插件已经取过。
+- **可选依赖**：值写 `'optional'`（`depends: { llm: 'optional' }`），没有提供者、提供者被停用都照常安装、照常运行，取不到时 `ctx.service()` 抛错，自己 `try/catch` 后按没有处理。不要为了可选依赖去用 SDK 里新加的函数：老版本的机器人没有它，构建会失败；写成 `'optional'` 的话，老版本的机器人把它当必需依赖（缺了拒装、装了照常能用）。
+- **服务工厂每个请求调用一次**，拿到的是提供方自己的 `ctx`（自己的配置和存储）。返回的对象里别存跨请求的状态，要存放 `ctx.kv` / `ctx.db`；也做不了「别的插件来登记一下」这种接口，这次请求登记的，下次请求就没了。
+- **同名服务可以共存**：两个插件都提供 `llm`，同一时间只有一个在提供。默认是先装、且启用着的那个；面板的「插件」页会出现「同名服务」，在那里选由谁提供。选了之后它被禁用，依赖它的插件会报错，不会悄悄换成另一个。
+- **服务名就是接口约定**。叫 `llm` 的服务应该长得一样，否则换一个提供者，用它的插件就坏了。`depends` 里的版本范围目前不检查，接口要改就换个服务名（`llm2`），别悄悄改形状。
 
 ### Durable Object：装之前得先改机器人仓库
 
@@ -446,12 +469,12 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 
 | 字段/方法 | 说明 |
 | --- | --- |
-| `ctx.config` | 面板保存的配置（缺的顶层字段回落 defaultConfig） |
+| `ctx.config` | 面板保存的配置（缺的字段回落 defaultConfig，见第 5 节） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
 | `ctx.durable` | 自己声明的 Durable Object：`get(类名, 实例名)` / `namespace(类名)`，见第 6 节 |
 | `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |
 | `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |
-| `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明） |
+| `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明；可选依赖取不到时抛错），见[要读别的插件的数据](#要读别的插件的数据) |
 | `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |
 | `ctx.plugin` / `ctx.botId` | 自己的名字与版本 / 机器人 AppID |
 
