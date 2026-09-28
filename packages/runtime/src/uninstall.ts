@@ -136,13 +136,23 @@ export async function uninstallManifestPlugin(
   })
 }
 
-/** 连同配置、优先级、启用状态一起从快照里拿掉（卸载时选了清数据才走到这里） */
+/**
+ * 连同配置、优先级、启用状态、面板上选它提供的服务一起从快照里拿掉（卸载时选了清数据才走到这里）。
+ * 选择不清也不会出错（选的插件不再提供就回落默认），只是重装回来时会悄悄重新生效
+ */
 async function dropPluginState(env: RuntimeEnv, name: string): Promise<void> {
   const snapshot = await readSnapshot(env, true)
-  if (!(name in snapshot.plugins)) return
+  const chosen = Object.entries(snapshot.serviceProviders ?? {}).filter(([, provider]) => provider === name)
+  if (!(name in snapshot.plugins) && chosen.length === 0) return
   const plugins = { ...snapshot.plugins }
   delete plugins[name]
-  await writeSnapshot(env, { ...snapshot, plugins })
+  const next = { ...snapshot, plugins }
+  if (chosen.length > 0) {
+    const serviceProviders = Object.fromEntries(Object.entries(snapshot.serviceProviders ?? {}).filter(([, p]) => p !== name))
+    if (Object.keys(serviceProviders).length > 0) next.serviceProviders = serviceProviders
+    else delete next.serviceProviders
+  }
+  await writeSnapshot(env, next)
 }
 
 /**

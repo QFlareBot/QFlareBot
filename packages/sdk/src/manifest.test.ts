@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { definePlugin } from './plugin.js'
+import { API_VERSION, definePlugin } from './plugin.js'
 import { extractManifest, validateManifest } from './manifest.js'
 import { toEventName, isMessageEvent } from './events.js'
 import { runCommand } from './testing.js'
@@ -66,6 +66,14 @@ describe('validateManifest', () => {
     const m = extractManifest(plugin, { version: '1.0.0' })
     m.commands.push({ name: 'pixiv random' }, { name: 'Pixiv  RANDOM' }, { name: 'pixiv illust' })
     expect(validateManifest(m).filter((e) => e.includes('命令名重复'))).toEqual(['命令名重复：Pixiv  RANDOM'])
+  })
+
+  it('apiVersion 是最低要求：不高于当前契约都能装，高了提示升级机器人', () => {
+    const m = extractManifest(plugin, { version: '1.0.0' })
+    expect(validateManifest({ ...m, apiVersion: API_VERSION })).toEqual([])
+    expect(validateManifest({ ...m, apiVersion: API_VERSION + 1 })).toEqual([expect.stringContaining('请先升级机器人')])
+    expect(validateManifest({ ...m, apiVersion: 0 })).toEqual([expect.stringContaining('apiVersion 非法')])
+    expect(validateManifest({ ...m, apiVersion: 1.5 })).toEqual([expect.stringContaining('apiVersion 非法')])
   })
 })
 

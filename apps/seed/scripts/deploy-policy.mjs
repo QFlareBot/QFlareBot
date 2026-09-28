@@ -287,8 +287,8 @@ function isEmptyDefault(value) {
  *
  * - 两边都有的字段必须一致（真改了命令、权限、DO 类都拦得住）；
  * - 只有一边有的字段，另一边的值是空默认值就算一致（旧清单缺 `durableObjects`，抽出来是 `[]`）；
- * - `apiVersion` 不一致只告警：安装时 Worker 已经按声明清单检查过 apiVersion（validateManifest），
- *   这里再拦只会让升了 API_VERSION 的框架把所有插件一起拦下。
+ * - `apiVersion` 不拦：声明清单里的是插件最低要求的版本，安装时 Worker 已经检查过（validateManifest）。
+ *   声明的比抽出来的低是常态（插件是用老 SDK 构建的），不必提；只有声明的更高才告警（机器人被降级过）。
  *
  * 嵌套字段仍逐字比对：里面的 `false` 不一定是默认值（命令的 `block` 默认是 true）。
  *
@@ -303,7 +303,9 @@ export function compareDeclaredManifest(declared, extracted) {
     const b = extracted?.[key]
     if (stableStringify(a) === stableStringify(b)) continue
     if (key === 'apiVersion') {
-      warnings.push(`声明清单的 apiVersion 是 ${a ?? '（没写）'}，按当前框架抽出来是 ${b ?? '（没写）'}——只告警，安装时已按声明清单检查过`)
+      if (!(typeof a === 'number' && typeof b === 'number' && a < b)) {
+        warnings.push(`声明清单的 apiVersion 是 ${a ?? '（没写）'}，按当前框架抽出来是 ${b ?? '（没写）'}——只告警，安装时已按声明清单检查过`)
+      }
       continue
     }
     if (a === undefined && isEmptyDefault(b)) continue

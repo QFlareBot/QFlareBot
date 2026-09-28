@@ -14,6 +14,7 @@ import {
 import type { ContextFactory } from './context.js'
 import { errorInfo } from './logger.js'
 import type { PluginRegistry, RegisteredPlugin } from './registry.js'
+import { providerFor } from './services.js'
 import type { Snapshot } from './types.js'
 
 export interface DispatchDeps {
@@ -251,7 +252,7 @@ function providersOf(plugins: RegisteredPlugin[], deps: DispatchDeps): Registere
   while (queue.length) {
     const plugin = queue.pop()!
     for (const service of Object.keys(plugin.manifest.depends ?? {})) {
-      const name = deps.registry.providerOf(service)
+      const name = providerFor(deps.registry, deps.snapshot, service)
       if (!name || seen.has(name)) continue
       seen.add(name)
       const provider = deps.registry.get(name)

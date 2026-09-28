@@ -18,6 +18,7 @@ import {
 } from './manifestStore.js'
 import { knownPluginNames } from './purge.js'
 import type { PluginRegistry } from './registry.js'
+import { optionalDepends, requiredDepends } from './services.js'
 import { prefixesCollide, tablePrefix } from './sqlScope.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
@@ -71,19 +72,25 @@ export function knownManifests(records: readonly ManifestPluginRecord[], registr
   return map
 }
 
+/** 除 name 之外的已知插件提供的服务 */
+function providedElsewhere(name: string, manifests: ReadonlyMap<string, Manifest>): Set<string> {
+  const services = new Set<string>()
+  for (const [other, m] of manifests) if (other !== name) for (const s of m.services ?? []) services.add(s)
+  return services
+}
+
 /**
- * 卸载 name 之后会断掉哪些插件：它们 depends 的服务只有 name 提供。
+ * 卸载 name 之后会断掉哪些插件：它们**必需**依赖的服务只有 name 提供（可选依赖没了照常跑）。
  * depends 的键是服务名（ctx.service 按服务名解析），不是插件名。
  */
 export function dependentsOf(name: string, manifests: ReadonlyMap<string, Manifest>): string[] {
   const provided = manifests.get(name)?.services ?? []
   if (provided.length === 0) return []
-  const elsewhere = new Set<string>()
-  for (const [other, m] of manifests) if (other !== name) for (const s of m.services ?? []) elsewhere.add(s)
+  const elsewhere = providedElsewhere(name, manifests)
   const exclusive = new Set(provided.filter((s) => !elsewhere.has(s)))
   if (exclusive.size === 0) return []
   return [...manifests]
-    .filter(([other, m]) => other !== name && Object.keys(m.depends ?? {}).some((d) => exclusive.has(d)))
+    .filter(([other, m]) => other !== name && requiredDepends(m).some((d) => exclusive.has(d)))
     .map(([other]) => other)
     .sort()
 }
@@ -217,9 +224,9 @@ export function blockingProblem(inspected: Inspected, deps: AdminDeps): Failure 
 
   // depends 的键是服务名（ctx.service 按服务名解析）。提供者既算线上这份部署里的，也算 D1 里已经装了、
   // 还在等构建的——否则先装提供者、紧接着装使用者会被误拒。键与某个插件同名也放行（以前就这么认）。
-  const services = new Set<string>()
-  for (const [name, m] of known) if (name !== declared.name) for (const s of m.services ?? []) services.add(s)
-  const missingDeps = Object.keys(declared.depends ?? {}).filter(
+  // 可选依赖不拦：没有提供者也照常能装，缺什么在 installWarnings 里提一句
+  const services = providedElsewhere(declared.name, known)
+  const missingDeps = requiredDepends(declared).filter(
     (d) => !allNames.has(d) && !deps.registry.providerOf(d) && !services.has(d),
   )
   if (missingDeps.length > 0) {
@@ -280,6 +287,19 @@ export function installWarnings(inspected: Inspected, registry: PluginRegistry):
   for (const [other, m] of known) {
     if (other !== name && (m.conflicts ?? []).includes(name)) warnings.push(`已装的 ${other} 声明与 ${name} 冲突`)
   }
+
+  // 服务重名：能共存，但同一时间只有一个在提供。以前后装的被悄悄忽略，只在日志里提一句
+  for (const service of declared.services ?? []) {
+    const others = [...known].filter(([other, m]) => other !== name && (m.services ?? []).includes(service)).map(([other]) => other)
+    if (others.length > 0) {
+      warnings.push(`${others.join('、')} 也提供服务 ${service}：同一时间只有一个在提供，默认是先装的那个，可以在「插件」页切换`)
+    }
+  }
+
+  // 可选依赖没人提供：照样能装，只是那部分功能用不了
+  const provided = providedElsewhere(name, known)
+  const absent = optionalDepends(declared).filter((d) => !known.has(d) && !provided.has(d) && !registry.providerOf(d))
+  if (absent.length > 0) warnings.push(`可选依赖 ${absent.join('、')} 目前没有插件提供，相关功能暂时用不了，装上提供者后自动可用`)
 
   warnings.push(...tablePrefixWarnings(name, inspected.knownNames, new Set([...records.map((r) => r.name), ...registry.all().map((p) => p.manifest.name)])))
   return warnings

@@ -268,7 +268,10 @@ export interface PluginContext<C = unknown> {
   readonly api: BotApi
   /** 本插件声明的 Durable Object；未声明该类名或绑定缺失时抛错 */
   readonly durable: ScopedDurableObjects
-  /** 取其他插件提供的服务；未提供时抛错 */
+  /**
+   * 取其他插件提供的服务，必须在 depends 里声明过。没声明、提供者缺失或停用时抛错；
+   * 可选依赖（depends 值为 `'optional'`）取不到也是抛错，try/catch 后按没有处理
+   */
   service<T = unknown>(name: string): T
   /** 让后台任务在响应返回后继续执行 */
   waitUntil(promise: Promise<unknown>): void

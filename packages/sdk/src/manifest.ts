@@ -122,7 +122,9 @@ export function validateManifest(m: Manifest): string[] {
   const errors: string[] = []
   if (!NAME_PATTERN.test(m.name)) errors.push(`name 非法：${m.name}（小写字母、数字、- 或 _）`)
   if (!/^\d+\.\d+\.\d+/.test(m.version)) errors.push(`version 不是合法 semver：${m.version}`)
-  if (m.apiVersion !== API_VERSION) errors.push(`apiVersion ${m.apiVersion} 与当前契约 ${API_VERSION} 不一致`)
+  // 清单里写的是最低要求：不高于当前契约就能装（见 API_VERSION）
+  if (!Number.isInteger(m.apiVersion) || m.apiVersion < 1) errors.push(`apiVersion 非法：${m.apiVersion}（应为正整数）`)
+  else if (m.apiVersion > API_VERSION) errors.push(`插件要求契约版本 ${m.apiVersion}，当前框架只支持到 ${API_VERSION}：请先升级机器人`)
 
   const seen = new Set<string>()
   for (const cmd of m.commands) {

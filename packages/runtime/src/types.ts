@@ -112,6 +112,11 @@ export interface Snapshot {
    * appId 标明资料属于哪个机器人（换号后不能把上一个的名字安到新号头上）；老快照没有，按属于当前机器人处理。
    */
   bot?: { appId?: string; name?: string; avatar?: string }
+  /**
+   * 同名服务由谁提供：服务名 → 插件名，面板上选的。没选、或选的插件已经不提供这个服务了，
+   * 就用先注册、且启用着的那个（见 services.ts）
+   */
+  serviceProviders?: Record<string, string>
 }
 
 export interface PluginState {

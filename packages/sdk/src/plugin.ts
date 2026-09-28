@@ -2,7 +2,11 @@ import type { EventName } from './events.js'
 import type { Interaction, InteractionCode, OutgoingMessage, Scene, Session } from './session.js'
 import type { Awaitable, PluginContext } from './context.js'
 
-/** 当前契约版本；契约破坏性变更时递增，旧版本由独立的 compat 包适配 */
+/**
+ * 当前契约版本：给插件新增能力（ctx 字段、SDK 导出）时递增。
+ * 清单里的 apiVersion 是插件**最低**要求的版本，运行时接受不高于自己的：老插件在新框架上照常能装，
+ * 用了新能力的插件装到老框架上，安装时就被拦下（而不是跑到那一行才报 "is not a function"）。
+ */
 export const API_VERSION = 1 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
@@ -196,17 +200,25 @@ export interface PluginDefinition<C = unknown> {
   name: string
   /** 构建时由 package.json 补齐 */
   version?: string
-  apiVersion?: typeof API_VERSION
+  /**
+   * 最低要求的契约版本，不写即构建时 SDK 的 API_VERSION。
+   * 用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装时，写成更低的版本
+   */
+  apiVersion?: number
   displayName?: string
   description?: string
   permissions?: Permission[]
   /** JSON Schema，面板据此渲染配置表单 */
   configSchema?: JsonSchema
   defaultConfig?: C
-  /** 依赖的服务或插件及其版本范围 */
+  /**
+   * 依赖的服务：键是服务名，值是版本范围（目前不检查，写 `'*'`）。
+   * 值写 `'optional'` 即可选依赖：没装、停用都照常安装运行，`ctx.service()` 取不到时抛错，插件自己 try/catch。
+   * 老版本的机器人把可选依赖当必需依赖（缺了拒装、装了照常能用）
+   */
   depends?: Record<string, string>
   conflicts?: string[]
-  /** 兼容的运行时版本范围 */
+  /** @deprecated 从未检查过；需要新框架的能力时看 apiVersion */
   coreRange?: string
 
   /**
@@ -223,7 +235,11 @@ export interface PluginDefinition<C = unknown> {
   ui?: PluginUiSpec
   middleware?: Middleware<C>
   hooks?: Hooks<C>
-  /** 向其他插件提供服务；key 为服务名 */
+  /**
+   * 向其他插件提供服务；key 为服务名。工厂**每个请求**调用一次，拿到的是本插件自己的 ctx：
+   * 返回的对象里别存跨请求的状态（放 kv / db），也做不了「别的插件来登记」式的接口——这次请求登记的，下次就没了。
+   * 多个插件可以提供同名服务，面板上选由谁提供（没选时用先注册、且启用着的那个）
+   */
   services?: Record<string, (ctx: PluginContext<C>) => unknown>
   /** 自带的 Durable Object 类；投影时加前缀重导出并注册 */
   durableObjects?: Record<string, unknown>

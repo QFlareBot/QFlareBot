@@ -17,6 +17,7 @@ import {
 } from './adminManifest.js'
 import { purgeOrphan, storageReport } from './adminStorage.js'
 import { validateConfig, withConfigDefaults } from './configSchema.js'
+import { maskSecrets, restoreSecrets } from './configSecrets.js'
 import { clearEvents, listEvents, setLiveDebug } from './events.js'
 import { error, json, matchPath, readJson } from './http.js'
 import { dispatchStats, listDispatchLogs, LogsUnavailable } from './logs.js'
@@ -24,6 +25,7 @@ import { listManifestPluginRecords, type ManifestPluginRecord } from './manifest
 import { parseSavedItems, readSavedPanel, writeSavedPanel } from './qqPanelStore.js'
 import type { PluginRegistry } from './registry.js'
 import type { RequestScope } from './scope.js'
+import { serviceOverview } from './services.js'
 import type { Sender } from './session.js'
 import {
   botFromSecrets,
@@ -242,15 +244,47 @@ function applySettingsPatch(current: Snapshot, patch: Record<string, unknown>): 
   return next as unknown as Snapshot
 }
 
+/** 面板看到的插件配置：与处理器里的 ctx.config 同一个合并规则（升级后新增的配置项回落默认值） */
+function mergedConfig(registry: PluginRegistry, snapshot: Snapshot, name: string): unknown {
+  const manifest = registry.get(name)?.manifest
+  if (!manifest) return snapshot.plugins[name]?.config
+  return withConfigDefaults(snapshot.plugins[name]?.config, manifest.defaultConfig, manifest.configSchema) ?? manifest.defaultConfig
+}
+
+/** 整份快照里的 writeOnly 配置换成占位符（GET /admin/snapshot）；插件不在线上（没有 schema）的原样 */
+function maskSnapshot(registry: PluginRegistry, snapshot: Snapshot): Snapshot {
+  const plugins = Object.fromEntries(
+    Object.entries(snapshot.plugins).map(([name, state]) => {
+      const schema = registry.get(name)?.manifest.configSchema
+      return [name, schema && state?.config !== undefined ? { ...state, config: maskSecrets(schema, state.config) } : state]
+    }),
+  )
+  return { ...snapshot, plugins }
+}
+
+/** PUT /admin/snapshot 交回来的快照：占位符按当前快照换回真值，整份覆盖也不会把密钥写成占位符 */
+function restoreSnapshot(registry: PluginRegistry, incoming: Snapshot, current: Snapshot): Snapshot {
+  const plugins = Object.fromEntries(
+    Object.entries(incoming.plugins).map(([name, state]) => {
+      const schema = registry.get(name)?.manifest.configSchema
+      if (!schema || !state || state.config === undefined) return [name, state]
+      return [name, { ...state, config: restoreSecrets(schema, state.config, mergedConfig(registry, current, name)) }]
+    }),
+  )
+  return { ...incoming, plugins }
+}
+
 /**
  * 管理 API（需 `ADMIN_TOKEN`）。除 /login 外都要求 Bearer 管理密钥或会话令牌。
  * POST /admin/login                 用管理密钥换 7 天会话令牌
- * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、24 小时事件统计（来自 Workers Logs）
- * GET  /admin/snapshot              读取快照
- * PUT  /admin/snapshot              整体覆盖快照
+ * GET  /admin/status                运行状态、插件列表（含配置 schema / ui）、服务与提供者、24 小时事件统计（来自 Workers Logs）；
+ *                                   配置里的 writeOnly 字段换成占位符，保存时原样交回即保留原值
+ * GET  /admin/snapshot              读取快照（writeOnly 配置同样换成占位符）
+ * PUT  /admin/snapshot              整体覆盖快照（占位符按当前快照换回真值）
  * PATCH /admin/snapshot             只改顶层设置字段（safeMode / logContent / commandPrefixes / admins / permissionDeniedReply，
  *                                   null 表示清掉），在最新快照上合并；可带 expectedRevision，对不上返回 409
  * PATCH /admin/plugins/:name        修改单个插件的 enabled / config / priority / groups（groups: null 恢复所有群）
+ * PUT  /admin/services/:name        { provider } 同名服务由哪个插件提供；null 回到默认（先注册、且启用着的那个）
  * POST /admin/plugins/:name/bridge  为插件页面签发 1 小时桥接令牌
  * PUT  /admin/bot                   保存 AppID/AppSecret（先向 QQ 换 token 验证）；换了 AppID 时旧的存进已保存列表
  * POST /admin/bot/bind              扫码创建机器人：建绑定任务，返回 { taskId, key, qrUrl }
@@ -346,6 +380,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
         logContent: scope.snapshot.logContent ?? false,
       },
       stats,
+      /** 所有有人提供的服务：提供者（按注册顺序）、面板上选了谁、现在由谁提供 */
+      services: serviceOverview(deps.registry, scope.snapshot),
       plugins: deps.registry.all().map((p) => {
         const state = scope.snapshot.plugins[p.manifest.name]
         return {
@@ -356,8 +392,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
           enabled: state?.enabled ?? true,
           priority: state?.priority ?? 0,
           groups: state?.groups ?? null,
-          // 与处理器里的 ctx.config 同一个规则：升级后新增的配置项回落默认值
-          config: withConfigDefaults(state?.config, p.manifest.defaultConfig) ?? p.manifest.defaultConfig ?? null,
+          // writeOnly 的值（密钥）不下发，换成占位符
+          config: maskSecrets(p.manifest.configSchema, mergedConfig(deps.registry, scope.snapshot, p.manifest.name)) ?? null,
           configSchema: p.manifest.configSchema ?? null,
           permissions: p.manifest.permissions,
           error: p.error?.message ?? null,
@@ -443,13 +479,13 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
   }
 
   if (sub === '/snapshot') {
-    if (method === 'GET') return json({ ok: true, snapshot: await readSnapshot(scope.env, true) })
+    if (method === 'GET') return json({ ok: true, snapshot: maskSnapshot(deps.registry, await readSnapshot(scope.env, true)) })
     if (method === 'PUT') {
       const body = await readJson<Snapshot>(request)
-      if (!body || typeof body.plugins !== 'object') return error('快照格式错误', 400)
+      if (!body || typeof body.plugins !== 'object' || body.plugins === null) return error('快照格式错误', 400)
       const current = await readSnapshot(scope.env, true)
-      const next = await writeSnapshot(scope.env, { ...body, revision: current.revision })
-      return json({ ok: true, snapshot: next })
+      const next = await writeSnapshot(scope.env, { ...restoreSnapshot(deps.registry, body, current), revision: current.revision })
+      return json({ ok: true, snapshot: maskSnapshot(deps.registry, next) })
     }
     if (method === 'PATCH') {
       const body = await readJson<Record<string, unknown>>(request)
@@ -463,7 +499,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       const merged = applySettingsPatch(current, patch)
       if (typeof merged === 'string') return error(merged, 400)
       const next = await writeSnapshot(scope.env, merged)
-      return json({ ok: true, snapshot: next })
+      return json({ ok: true, snapshot: maskSnapshot(deps.registry, next) })
     }
   }
 
@@ -474,14 +510,15 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     if (!plugin) return error(`插件不存在：${name}`, 404)
     const patch = await readJson<Partial<Omit<PluginState, 'groups'>> & { groups?: unknown }>(request)
     if (!patch) return error('请求体格式错误', 400)
-    // 存之前按 configSchema 校验：否则类型写错要等插件运行时才炸
+    const current = await readSnapshot(scope.env, true)
     if ('config' in patch) {
+      // 面板拿到的密钥是占位符，没改就原样交回来：先换回真值，再按 configSchema 校验——否则类型写错要等插件运行时才炸
+      patch.config = restoreSecrets(plugin.manifest.configSchema, patch.config, mergedConfig(deps.registry, current, name))
       const fields = validateConfig(plugin.manifest.configSchema, patch.config)
       if (fields.length > 0) return json({ ok: false, error: '配置不符合 schema', fields }, 400)
     }
     const groups = 'groups' in patch ? normalizeGroups(patch.groups) : null
     if (groups === undefined) return error('groups 格式错误：应为 null 或 { mode: "allow" | "deny", ids: string[] }', 400)
-    const current = await readSnapshot(scope.env, true)
     const state: PluginState = { enabled: true, ...current.plugins[name] }
     if (typeof patch.enabled === 'boolean') state.enabled = patch.enabled
     if ('config' in patch) state.config = patch.config
@@ -491,7 +528,30 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
       else delete state.groups
     }
     const next = await writeSnapshot(scope.env, { ...current, plugins: { ...current.plugins, [name]: state } })
-    return json({ ok: true, plugin: name, state, revision: next.revision })
+    const view = state.config === undefined ? state : { ...state, config: maskSecrets(plugin.manifest.configSchema, state.config) }
+    return json({ ok: true, plugin: name, state: view, revision: next.revision })
+  }
+
+  const serviceMatch = matchPath('/services/:name', sub)
+  if (serviceMatch && method === 'PUT') {
+    const service = serviceMatch.name!
+    const providers = deps.registry.providersOf(service)
+    if (providers.length === 0) return error(`没有插件提供服务 ${service}`, 404)
+    const body = await readJson<{ provider?: unknown }>(request)
+    const provider = body?.provider
+    if (provider !== null && (typeof provider !== 'string' || !providers.includes(provider))) {
+      return error(`provider 应为 null 或提供 ${service} 的插件之一：${providers.join('、')}`, 400)
+    }
+    const current = await readSnapshot(scope.env, true)
+    const chosen: Record<string, string> = { ...current.serviceProviders }
+    if (provider === null) delete chosen[service]
+    else chosen[service] = provider
+    const next: Snapshot = { ...current }
+    if (Object.keys(chosen).length > 0) next.serviceProviders = chosen
+    else delete next.serviceProviders
+    const written = await writeSnapshot(scope.env, next)
+    deps.logger.info('切换服务提供者', { service, provider })
+    return json({ ok: true, services: serviceOverview(deps.registry, written) })
   }
 
   if (sub === '/bot' && method === 'PUT') {

@@ -30,8 +30,8 @@ function isDefinition(value: unknown): value is PluginDefinition<unknown> {
 /** 插件注册表：清单立即可用，代码按需加载，单个插件的求值错误不影响其他插件 */
 export class PluginRegistry {
   private readonly plugins = new Map<string, RegisteredPlugin>()
-  /** 服务名 → 提供者插件名 */
-  private readonly serviceProviders = new Map<string, string>()
+  /** 服务名 → 提供者插件名，按注册顺序；同名服务可以有多个提供者，由谁提供见 services.ts */
+  private readonly serviceProviders = new Map<string, string[]>()
   private readonly logger = createLogger('registry')
 
   constructor(entries: PluginEntry[]) {
@@ -60,11 +60,9 @@ export class PluginRegistry {
     }
     this.plugins.set(manifest.name, plugin)
     for (const service of manifest.services) {
-      if (this.serviceProviders.has(service)) {
-        this.logger.warn('服务名冲突，保留先注册者', { service, ignored: manifest.name })
-        continue
-      }
-      this.serviceProviders.set(service, manifest.name)
+      const providers = this.serviceProviders.get(service)
+      if (providers) providers.push(manifest.name)
+      else this.serviceProviders.set(service, [manifest.name])
     }
   }
 
@@ -91,7 +89,18 @@ export class PluginRegistry {
     return [...this.plugins.values()]
   }
 
+  /** 先注册的那个提供者；只问「有没有人提供」时用，真要调用走 services.ts 的 providerFor（看面板的选择） */
   providerOf(service: string): string | undefined {
-    return this.serviceProviders.get(service)
+    return this.serviceProviders.get(service)?.[0]
+  }
+
+  /** 全部提供者，按注册顺序 */
+  providersOf(service: string): readonly string[] {
+    return this.serviceProviders.get(service) ?? []
+  }
+
+  /** 所有有人提供的服务名 */
+  serviceNames(): string[] {
+    return [...this.serviceProviders.keys()]
   }
 }

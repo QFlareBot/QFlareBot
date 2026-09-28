@@ -98,6 +98,9 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       'raw.githubusercontent.com/me/qqbot-plugin-scored/d1e2f3a4b6/manifest.json': declaredManifest({ name: 'my_plugin' }),
       // 提供 greet 服务：needy 依赖它
       'raw.githubusercontent.com/me/qqbot-plugin-greeter/a0b1c2d3e4/manifest.json': declaredManifest({ name: 'greeter', services: ['greet'] }),
+      // 另一个提供 greet 的；可选依赖 greet 的
+      'raw.githubusercontent.com/me/qqbot-plugin-greeter2/a0b1c2d3e5/manifest.json': declaredManifest({ name: 'greeter2', services: ['greet'] }),
+      'raw.githubusercontent.com/me/qqbot-plugin-curious/c3d4e5f6a8/manifest.json': declaredManifest({ name: 'curious', depends: { greet: 'optional' } }),
       // 同名、别家仓库
       'raw.githubusercontent.com/other/qqbot-plugin-hello/a1b2c3d4e5/manifest.json': declaredManifest(),
       'raw.githubusercontent.com/me/qqbot-plugin-chatty/c0d1e2f3a4/manifest.json': declaredManifest({
@@ -1134,6 +1137,29 @@ describe('只提醒、不拦的情况（以前能装的现在照样能装）', (
     const { call } = setup({}, [deployed('chatty', { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a3' })])
     const { data } = await install(call, { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a4' })
     expect(data.warnings).toEqual([expect.stringContaining('新版本新增权限：kv')])
+  })
+
+  it('可选依赖没人提供：照装，提醒相关功能暂时用不了', async () => {
+    const { call } = setup()
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-curious@c3d4e5f6a8' })
+    expect(res.status).toBe(200)
+    expect(data.warnings).toEqual([expect.stringContaining('可选依赖 greet 目前没有插件提供')])
+  })
+
+  it('可选依赖有人提供（包括只在 D1 里、还没上线的）：不提醒', async () => {
+    const { call } = setup()
+    await install(call, { source: 'git:me/qqbot-plugin-greeter@a0b1c2d3e4', build: false })
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-curious@c3d4e5f6a8', build: false })
+    expect(res.status).toBe(200)
+    // 没有警告时响应里不带 warnings
+    expect(data.warnings).toBeUndefined()
+  })
+
+  it('服务重名：照装（以前后装的被悄悄忽略），提醒同一时间只有一个在提供', async () => {
+    const { call } = setup({}, [deployed('greeter', { manifest: { services: ['greet'] } })])
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-greeter2@a0b1c2d3e5' })
+    expect(res.status).toBe(200)
+    expect(data.warnings).toEqual([expect.stringContaining('greeter 也提供服务 greet')])
   })
 })
 

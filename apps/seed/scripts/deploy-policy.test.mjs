@@ -248,8 +248,9 @@ describe('compareDeclaredManifest', () => {
     expect(compareDeclaredManifest(declared, extracted())).toMatchObject({ ok: false, fields: ['displayName'] })
   })
 
-  it('apiVersion 不一致只告警不失败——安装时 Worker 已按声明清单检查过', () => {
-    const result = compareDeclaredManifest(extracted({ apiVersion: 1 }), extracted({ apiVersion: 2 }))
+  it('apiVersion 不拦：声明的更低是常态（最低要求），不提；更高才告警', () => {
+    expect(compareDeclaredManifest(extracted({ apiVersion: 1 }), extracted({ apiVersion: 2 }))).toEqual({ ok: true, fields: [], warnings: [] })
+    const result = compareDeclaredManifest(extracted({ apiVersion: 2 }), extracted({ apiVersion: 1 }))
     expect(result.ok).toBe(true)
     expect(result.warnings).toEqual([expect.stringContaining('apiVersion')])
   })
