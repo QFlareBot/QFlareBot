@@ -91,7 +91,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   抽清单的子进程只带白名单里的环境变量（PATH、HOME、代理、npm 源这类），入口顶层读不到构建机上的任何凭证。上线前还有一道：新版本先在预览地址上把每个插件都加载一遍（`/healthz?plugins=1`），入口一加载就抛错的插件会让这次部署不切流量、线上保持旧版，面板「未上线的改动」里会写明是哪个插件加载失败。
 - **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
-- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()`（机器人 0.4.0 起）。
+- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()` 和 `ctx.publicUrl`（机器人 0.4.0 起；`ctx.publicUrl` 可能没有值，读的时候有退路就不必写 2）。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
 - **额度是全机器人共享的，省着用**：KV、D1、CPU、请求数的每日额度是框架和所有插件合用一份，一个插件用超了，整台机器人一起停摆（免费版 KV 一天只能写 1,000 次，D1 写 10 万行）。**不要每收到一条消息就写一次 KV 或 D1**，频繁变的数据别放 KV。怎么选存储见[第 6 节](#_6-存储状态)，额度与省写入的写法见[第 9 节](#_9-平台限额-免费版的硬预算)。
 
@@ -396,6 +396,15 @@ routes: [
 ],
 ```
 
+要把自己路由的完整地址交出去（最常见的是让 QQ 来拉图片），用 `ctx.publicUrl` 拼，不要让用户在插件配置里再填一遍机器人地址：
+
+```ts
+const base = ctx.publicUrl ?? ctx.config.public_base_url // 拿不到时退回插件自己的配置
+if (base) return { image: { url: `${base}/p/${ctx.plugin.name}/img/${id}` } }
+```
+
+`ctx.publicUrl` 是 `https://域名`，不带结尾斜杠。设置页「机器人公开地址」填了就是填的；没填时是这次请求进来的域名——事件里就是 QQ 推送用的回调地址，正是 QQ 访问得到的那个，机器人绑了几个域名也不影响。拿不到时是 `undefined`：定时任务里没填设置（没有请求）、本地 `wrangler dev`（http 的不算）、0.4 以前的机器人。所以读的时候一定要有退路，这样也不必为它提高 `apiVersion`。
+
 `path` 支持 `:param` 与末尾 `/*` 通配（值在 `params['*']`）。插件被停用时它的路由全部返回 404，面板开了安全模式时返回 503。路由被访问时和事件、定时任务一样，会先跑 `onInstall` / `onBoot`（每个 isolate 第一次用到这个插件时）——新装的插件第一个请求是打开页面也不要紧，`onInstall` 里建的表在路由处理器里可以直接用。
 
 常见的三种用法：
@@ -490,5 +499,6 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | `ctx.service(name)` | 取其他插件提供的服务（需在 depends 声明；可选依赖取不到时抛错），见[要读别的插件的数据](#要读别的插件的数据) |
 | `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |
 | `ctx.plugin` / `ctx.botId` | 自己的名字与版本 / 机器人 AppID |
+| `ctx.publicUrl` | 机器人的公开地址 `https://域名`，拼自己路由的完整地址用；可能没有，见第 8 节 |
 
 有疑问先看三份代码：[`templates/plugin/src/index.ts`](https://github.com/QFlareBot/QFlareBot/blob/main/templates/plugin/src/index.ts)（起步示例，含按键）、[`plugins/t2i`](https://github.com/QFlareBot/QFlareBot/tree/main/plugins/t2i)（对外提供服务 + 插件页面）、[`@qqbot/sdk`](https://github.com/QFlareBot/QFlareBot/tree/main/packages/sdk/src) 的类型注释（字段级真相）。内置插件做什么见[内置插件](./builtin-plugins.md)。
