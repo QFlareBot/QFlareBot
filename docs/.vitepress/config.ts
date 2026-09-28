@@ -6,9 +6,10 @@ const repo = 'https://github.com/QFlareBot/QFlareBot'
 export default defineConfig({
   lang: 'zh-CN',
   title: 'QFlareBot',
-  description: '运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架',
+  description: '运行在 Cloudflare Workers 上的 QQ 官方机器人插件框架：零服务器、Fork 即部署、面板装插件',
   cleanUrls: true,
   lastUpdated: true,
+  sitemap: { hostname: 'https://qflarebot.github.io' },
   // 图标由 design-system/qflarebot/brand/export.mjs 导出到 docs/public
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],

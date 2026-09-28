@@ -1,3 +1,7 @@
+---
+description: 在本地搭环境，开发、测试 QFlareBot 框架本身。
+---
+
 # 参与开发
 
 需要 Node ≥ 22 与 pnpm 10。

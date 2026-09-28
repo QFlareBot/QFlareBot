@@ -1,5 +1,6 @@
 ---
 aside: false
+description: QFlareBot 插件目录里已登记的插件，勾选后一键装到自己的机器人。
 ---
 
 <script setup>

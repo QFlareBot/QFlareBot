@@ -1,3 +1,7 @@
+---
+description: QFlareBot 管理面板各页面的作用，以及插件怎样提供自己的 Web 页面。
+---
+
 # 管理面板与插件页面
 
 ## 面板（`@qqbot/ui`）

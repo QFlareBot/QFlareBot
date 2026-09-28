@@ -1,3 +1,7 @@
+---
+description: QFlareBot 自带的 sid（查身份）与 t2i（HTML 转图片）两个插件的命令和用法。
+---
+
 # 内置插件
 
 仓库自带两个插件，写在 `apps/seed/qqbot.manifest.json` 里，部署后默认开启：`sid` 查身份，`t2i` 给别的插件提供 HTML 转图片服务。更多插件去[插件市场](./market.md)装。

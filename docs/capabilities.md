@@ -1,3 +1,7 @@
+---
+description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用，哪些有类型化封装、哪些要直调。
+---
+
 # 平台能力 → 插件契约 对照表
 
 对照 [QQ 机器人 API v2](https://bot.q.qq.com/wiki/develop/api-v2/)（2026-09-16 版）梳理。"暴露方式"指插件在 `session` / `ctx.api` 上如何使用；标"raw"的表示暂无类型化封装，用 `ctx.api.raw(method, path, body)` 直调。
