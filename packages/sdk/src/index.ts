@@ -12,6 +12,7 @@ export type {
   Scene,
   Attachment,
   Mention,
+  QuotedMessage,
   ImageSource,
   MediaSource,
   MediaType,
@@ -123,6 +124,8 @@ export {
 
 export { commandKey, extractManifest, validateManifest, type Manifest } from './manifest.js'
 export { qqAvatar, qqAt, type AvatarSize } from './identity.js'
+export { meetsPermission } from './permission.js'
+export { mentionedUsers, type MentionedUser } from './mentions.js'
 export {
   normalizePlugin,
   type NormalizedPlugin,

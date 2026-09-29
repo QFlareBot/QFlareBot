@@ -64,6 +64,22 @@ describe('从插件命令生成面板条目', () => {
     expect(body.panel.items[1]).toMatchObject({ type: 'command', only_admin: true })
     expect(body.panel.items[0]).not.toHaveProperty('only_admin')
   })
+
+  it('插件写了 panelOnlyAdmin 就听它的，没写才看 permission', () => {
+    const items = draftItems([
+      {
+        name: 'p',
+        enabled: true,
+        commands: [
+          { name: 'kick', panelOnlyAdmin: true },
+          { name: 'ban', permission: 'bot_admin', panelOnlyAdmin: false },
+          { name: 'mute', permission: 'group_admin' },
+          { name: 'hi' },
+        ],
+      },
+    ])
+    expect(items.map((i) => i.onlyAdmin)).toEqual([true, false, true, false])
+  })
 })
 
 describe('并入上次发送的记录', () => {

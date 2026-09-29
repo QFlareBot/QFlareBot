@@ -1,4 +1,5 @@
 import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
+import { botAdminsOf } from './botAdmins.js'
 import { withConfigDefaults } from './configSchema.js'
 import { createLogger } from './logger.js'
 import { createScopedDurable } from './durable.js'
@@ -42,6 +43,7 @@ export class ContextFactory {
       plugin: { name, version },
       botId: this.options.botId,
       ...(this.options.publicUrl ? { publicUrl: this.options.publicUrl } : {}),
+      botAdmins: botAdminsOf(snapshot),
       config: withConfigDefaults(snapshot.plugins[name]?.config, defaultConfig, configSchema) ?? defaultConfig ?? {},
       logger: createLogger(`plugin:${name}`),
       kv: createScopedKV(env.KV, name),

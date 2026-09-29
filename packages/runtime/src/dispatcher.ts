@@ -1,12 +1,12 @@
 import {
   deliverReply,
   isMessageEvent,
+  meetsPermission,
   normalizePlugin,
   type InteractionCode,
   type Logger,
   type Manifest,
   type NormalizedPlugin,
-  type PermissionTier,
   type PluginDefinition,
   type SendResult,
   type Session,
@@ -167,11 +167,6 @@ interface DeniedMatch {
   words?: number
 }
 
-/** 门槛层级：1 超级管理员（Bot 管理员名单）＞ 2 群主/群管理员（入站 member_role）＞ 3 普通成员 */
-function tierOf(permission: PermissionTier | undefined): 1 | 2 | 3 {
-  return permission === 'bot_admin' ? 1 : permission === 'group_admin' ? 2 : 3
-}
-
 /** deliverReply 的入参类型（SDK 未导出 HandlerResult，从函数签名取） */
 type ReplyPayload = Parameters<typeof deliverReply>[1]
 
@@ -179,7 +174,6 @@ type ReplyPayload = Parameters<typeof deliverReply>[1]
 interface CollectContext {
   session: Session
   deps: DispatchDeps
-  userTier: 1 | 2 | 3
   command: ParsedCommand | null
   candidates: Candidate[]
   denied: DeniedMatch[]
@@ -282,14 +276,7 @@ function collectCandidates(
     }
   }
 
-  // 单聊没有群角色，层级塌缩成两档：Bot 管理员 / 普通成员
-  const userTier = deps.snapshot.admins?.includes(session.userId)
-    ? 1
-    : session.memberRole === 'owner' || session.memberRole === 'admin'
-      ? 2
-      : 3
-
-  const shared: CollectContext = { session, deps, userTier, command, candidates, denied, send }
+  const shared: CollectContext = { session, deps, command, candidates, denied, send }
   for (const { registered, def } of plugins) {
     try {
       collectForPlugin(shared, registered, def)
@@ -314,7 +301,7 @@ function collectForPlugin(
   registered: RegisteredPlugin,
   def: PluginDefinition<unknown>,
 ): void {
-  const { session, deps, userTier, command, candidates, denied, send } = shared
+  const { session, deps, command, candidates, denied, send } = shared
   const name = def.name
   const n = normalizedOf(def)
 
@@ -326,7 +313,8 @@ function collectForPlugin(
       const words = Math.max(...[cmd.name, ...(cmd.aliases ?? [])].map((c) => matchedWords(command, c)))
       if (!words) continue
       if (!sceneAllowed(cmd.scenes, session)) continue
-      if (userTier > tierOf(cmd.permission)) {
+      // 和插件在处理器里调的 meetsPermission 是同一个判断；Bot 管理员身份由运行时建会话时按快照名单填好
+      if (!meetsPermission(session, cmd.permission)) {
         denied.push({ plugin: name, kind: 'command', name: cmd.name, words })
         continue
       }
@@ -360,7 +348,7 @@ function collectForPlugin(
       if (!sceneAllowed(rule.scenes, session)) continue
       const match = session.content.match(compileRegex(rule.pattern, rule.flags))
       if (!match) continue
-      if (userTier > tierOf(rule.permission)) {
+      if (!meetsPermission(session, rule.permission)) {
         denied.push({ plugin: name, kind: 'regex', name: rule.pattern })
         continue
       }

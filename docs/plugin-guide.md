@@ -95,7 +95,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   抽清单的子进程只带白名单里的环境变量（PATH、HOME、代理、npm 源这类），入口顶层读不到构建机上的任何凭证。上线前还有一道：新版本先在预览地址上把每个插件都加载一遍（`/healthz?plugins=1`），入口一加载就抛错的插件会让这次部署不切流量、线上保持旧版，面板「未上线的改动」里会写明是哪个插件加载失败。
 - **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
-- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()` 和 `ctx.publicUrl`（机器人 0.4.0 起；`ctx.publicUrl` 可能没有值，读的时候有退路就不必写 2）。
+- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()` 和 `ctx.publicUrl`（机器人 0.4.0 起；`ctx.publicUrl` 可能没有值，读的时候有退路就不必写 2）；3 加了 `ctx.botAdmins`、`meetsPermission()`、`mentionedUsers()`、`session.isBotAdmin` 和 `session.quote`（机器人 0.5.0 起；两个 session 字段在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们就不必写 3）。SDK 里的函数也算新能力：机器人构建插件时 `@qqbot/sdk` 用的是**机器人自己那一份**，不是插件装的，老机器人上没有这个函数，构建就会失败。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
 - **额度是全机器人共享的，省着用**：KV、D1、CPU、请求数的每日额度是框架和所有插件合用一份，一个插件用超了，整台机器人一起停摆（免费版 KV 一天只能写 1,000 次，D1 写 10 万行）。**不要每收到一条消息就写一次 KV 或 D1**，频繁变的数据别放 KV。怎么选存储见[第 6 节](#_6-存储状态)，额度与省写入的写法见[第 9 节](#_9-平台限额-免费版的硬预算)。
 
@@ -129,7 +129,7 @@ commands: {
 
 名字越长越优先（跨插件也一样），所以 `/pixiv random 大图` 只会进 `'pixiv random'`；对不上的落回 `pixiv`，`args` 照常给，和不写子命令时一样。子命令权限不够时不会退回父命令。别名不会自动组合：`pixiv` 有别名 `p站`，要 `/p站 random` 也能用，得在子命令的 `aliases` 里写 `'p站 random'`。
 
-**想让命令进 QQ 指令面板**（群友点机器人弹出的可点列表，面板「设置 → QQ 指令面板」一键发送），名字和 `description` 要短：QQ 按显示宽度算，汉字算 2、英文数字算 1，名称 ≤14（约 7 个汉字）、描述 ≤30（约 15 个汉字）。名称得和命令对得上、不能截断，命令名长就给一个短 `aliases`，面板会自动换用放得下的别名；描述超了会被截断。`qqbot-plugin build` / `validate` 发现放不进去或会被截断时会打警告，不拦构建。
+**想让命令进 QQ 指令面板**（群友点机器人弹出的可点列表，面板「设置 → QQ 指令面板」一键发送），名字和 `description` 要短：QQ 按显示宽度算，汉字算 2、英文数字算 1，名称 ≤14（约 7 个汉字）、描述 ≤30（约 15 个汉字）。名称得和命令对得上、不能截断，命令名长就给一个短 `aliases`，面板会自动换用放得下的别名；描述超了会被截断。`qqbot-plugin build` / `validate` 发现放不进去或会被截断时会打警告，不拦构建。声明了 `permission`（`bot_admin` / `group_admin`）的命令在面板里自动标成「仅管理员可点击」；权限在处理器里自己判断的命令，想同样只给管理员点，就写 `panelOnlyAdmin: true`（反过来 `false` 可以让有门槛的命令人人可点）。它只影响面板，不拦任何人。
 
 正则只用来「判断命中 + 取捕获组」，所以运行时编译前会**剥掉 `g` 和 `y`**：带 `g` 时 `String.match` 只返回整段匹配、`match[1]` 会是 `undefined`；`y` 和 `g` 还会把 `lastIndex` 留在正则实例上，让重复匹配的结果漂移。写 `/^echo (.+)$/` 就够了，不用加这两个标志。
 
@@ -153,9 +153,30 @@ commands: {
 | `group_admin` | Bot 管理员、群主、群管理员（群角色来自入站消息） |
 | `bot_admin` | Bot 管理员（面板"设置 → 权限"里维护的 openid 名单） |
 
-**达标制**：上层自动通过下层门槛。单聊没有群角色，层级塌缩成"Bot 管理员 / 普通成员"两档——`group_admin` 命令在单聊只有 Bot 管理员能用。按钮回调**暂不鉴权**（回调事件不带群角色）。
+**达标制**：上层自动通过下层门槛。单聊没有群角色，层级塌缩成"Bot 管理员 / 普通成员"两档——`group_admin` 命令在单聊只有 Bot 管理员能用。按钮回调不按层级拦截（回调事件不带群角色），要鉴权在处理器里自己判断，见下文。
 
-权限不足默认**静默跳过**（当作没匹配到，不遮蔽其他插件）；面板可设置统一回复文案，仅在没有任何插件命中时回复。需要更细的判断时在 handler 里读 `session.memberRole`（群聊时为 `'owner' | 'admin' | 'member'`，单聊/频道为 undefined）。
+权限不足默认**静默跳过**（当作没匹配到，不遮蔽其他插件）；面板可设置统一回复文案，仅在没有任何插件命中时回复。
+
+门槛拦不住的场合——按钮回调、中间件、同一条命令给管理员多开几个选项——在处理器里自己判断：
+
+```ts
+import { meetsPermission } from '@qqbot/sdk'
+
+buttons: {
+  reset: ({ session }) => {
+    // 和命令的 permission 同一个判断：Bot 管理员过得去，按钮回调里没有群角色，群主也不行
+    if (!meetsPermission(session, 'group_admin')) return 4 // 4 = 无权限
+    // …
+  },
+},
+```
+
+- `session.isBotAdmin`：发起人是不是 Bot 管理员，所有场景都有，按钮回调也有。
+- `session.memberRole`：群角色，群聊时为 `'owner' | 'admin' | 'member'`，单聊、频道、按钮回调为 undefined。
+- `meetsPermission(session, 层级)`：把上面两个合起来，和命令门槛完全一致。
+- `ctx.botAdmins`：Bot 管理员的 openid 名单，只读。给没有会话的地方用（定时任务、`onInstall`），或者判断的不是发起人（比如被 @ 的人：`ctx.botAdmins.includes(mention.id)`）。要发只有管理员点得动的按钮，把它填进按钮的 `permission: { type: 0, specify_user_ids: [...ctx.botAdmins] }`，QQ 客户端那边就挡住了其他人。
+
+`meetsPermission` 和 `ctx.botAdmins` 要求 `apiVersion` 3；只读 `session.isBotAdmin` 不用，老机器人上读到 undefined，当不是管理员处理。`meetsPermission` 虽然在老机器人上也只是把人当成非管理员，但它是 SDK 里的函数，老机器人构建时找不到它（见第 2 节 `apiVersion`），所以照样要写 3。
 
 配置 Bot 管理员名单前，先在会话里发内置插件的 `/sid` 查询自己的 openid——openid 按机器人隔离，别处复制来的无效。
 
@@ -175,8 +196,9 @@ commands: {
 
 `session` 只读字段（完整类型见 `@qqbot/sdk`）：
 
-- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`
-- **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
+- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`）
+- **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
+- **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 
 ## 4. 回复消息
@@ -504,5 +526,6 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | `ctx.waitUntil(p)` | 后台任务在响应返回后继续执行 |
 | `ctx.plugin` / `ctx.botId` | 自己的名字与版本 / 机器人 AppID |
 | `ctx.publicUrl` | 机器人的公开地址 `https://域名`，拼自己路由的完整地址用；可能没有，见第 8 节 |
+| `ctx.botAdmins` | Bot 管理员的 openid 名单（只读）；判断当前发起人用 `session.isBotAdmin`，见第 3 节权限 |
 
 有疑问先看三份代码：[`templates/plugin/src/index.ts`](https://github.com/QFlareBot/QFlareBot/blob/main/templates/plugin/src/index.ts)（起步示例，含按键）、[`plugins/t2i`](https://github.com/QFlareBot/QFlareBot/tree/main/plugins/t2i)（对外提供服务 + 插件页面）、[`@qqbot/sdk`](https://github.com/QFlareBot/QFlareBot/tree/main/packages/sdk/src) 的类型注释（字段级真相）。内置插件做什么见[内置插件](./builtin-plugins.md)。

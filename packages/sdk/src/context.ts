@@ -308,6 +308,13 @@ export interface PluginContext<C = unknown> {
    * 所以读的时候照样要有退路（比如插件自己的配置项），这样也不必为它提高 apiVersion
    */
   readonly publicUrl?: string
+  /**
+   * Bot 管理员的 openid 名单（面板「设置 → 权限」），只读。判断当前发起人用 `session.isBotAdmin`；
+   * 名单给没有会话的地方（定时任务、onInstall）和判断别人（被 @ 的人）用，
+   * 也可以填进按钮的 `permission: { type: 0, specify_user_ids }`，让只有管理员点得动。
+   * openid 按机器人隔离。用到它的插件要求 apiVersion 3
+   */
+  readonly botAdmins: readonly string[]
   readonly config: C
   readonly logger: Logger
   readonly kv: ScopedKV

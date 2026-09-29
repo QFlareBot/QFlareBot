@@ -31,14 +31,7 @@ export interface RawMessageEvent {
   group_id?: string
   channel_id?: string
   guild_id?: string
-  attachments?: Array<{
-    url?: string
-    content_type?: string
-    filename?: string
-    width?: number
-    height?: number
-    size?: number
-  }>
+  attachments?: RawAttachment[]
   /**
    * `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人）。
    * 被 @ 者的 id / 名字：线上群全量消息带 `id` / `username`（今日老婆的强娶记录能对上，AstrBot 也读这两个）；
@@ -54,10 +47,23 @@ export interface RawMessageEvent {
     is_you?: boolean
     scope?: string
   }>
-  /** ext 形如 ["msg_idx=REFIDX_...", "auth_token=..."] */
+  /** ext 形如 ["msg_idx=REFIDX_...", "auth_token=..."]；引用了别的消息时还有 "ref_msg_idx=REFIDX_..." */
   message_scene?: { source?: string; ext?: string[] }
+  /** 103 是引用消息：被引用的那条放在 msg_elements[0] */
   message_type?: number
+  /** 被引用消息的 id */
+  message_reference?: { message_id?: string }
+  msg_elements?: Array<{ id?: string; message_id?: string; content?: string; attachments?: RawAttachment[] }>
   [key: string]: unknown
+}
+
+export interface RawAttachment {
+  url?: string
+  content_type?: string
+  filename?: string
+  width?: number
+  height?: number
+  size?: number
 }
 
 /** INTERACTION_CREATE 的 `d` */
@@ -126,12 +132,22 @@ export const FileType = {
   file: 4,
 } as const
 
-/** 从 message_scene.ext 里取 msg_idx（可被引用的 ref index） */
-export function extractRefIndex(d: RawMessageEvent | undefined): string | undefined {
+/** message_scene.ext 里 `key=` 开头那一项的值 */
+function sceneExt(d: RawMessageEvent | undefined, key: string): string | undefined {
   const ext = d?.message_scene?.ext
   if (!Array.isArray(ext)) return undefined
   for (const item of ext) {
-    if (typeof item === 'string' && item.startsWith('msg_idx=')) return item.slice('msg_idx='.length)
+    if (typeof item === 'string' && item.startsWith(`${key}=`)) return item.slice(key.length + 1)
   }
   return undefined
+}
+
+/** 从 message_scene.ext 里取 msg_idx（可被引用的 ref index） */
+export function extractRefIndex(d: RawMessageEvent | undefined): string | undefined {
+  return sceneExt(d, 'msg_idx')
+}
+
+/** 这条消息引用的那条消息的 ref index（message_scene.ext 里的 ref_msg_idx），没引用时没有 */
+export function extractQuotedRefIndex(d: RawMessageEvent | undefined): string | undefined {
+  return sceneExt(d, 'ref_msg_idx')
 }

@@ -10,7 +10,6 @@ import {
   isMessageEvent,
   qqAvatar,
   toEventName,
-  type Attachment,
   type Interaction,
   type InteractionCode,
   type InteractionType,
@@ -24,6 +23,8 @@ import {
   type StreamChunkOptions,
   type StreamWriter,
 } from '@qqbot/sdk'
+import { toAttachments } from './attachments.js'
+import { buildQuote } from './quote.js'
 
 /** 出站抽象：真实环境是 QQBotClient，测试与 dry-run 用记录器 */
 export interface Sender {
@@ -39,6 +40,8 @@ export interface SessionOptions {
   /** 机器人资料，来自快照（面板保存凭证时从 /users/@me 拉取）；未配置为空串 */
   botName?: string
   botAvatar?: string
+  /** Bot 管理员名单（见 botAdmins.ts），决定 session.isBotAdmin；不传当没有 */
+  botAdmins?: readonly string[]
   sender: Sender
   maxPassiveReplies: number
 }
@@ -101,21 +104,6 @@ function identify(rawType: string, d: RawMessageEvent & RawInteractionEvent & Ra
  */
 function cleanContent(content: string | undefined): string {
   return (content ?? '').replace(/<@!?[0-9A-Fa-f]+>/g, '').trim()
-}
-
-function toAttachments(d: RawMessageEvent): Attachment[] {
-  return (d.attachments ?? [])
-    .filter((a) => typeof a.url === 'string')
-    .map((a) => {
-      const url = a.url!.startsWith('http') ? a.url! : `https://${a.url}`
-      const item: Attachment = { url }
-      if (a.content_type) item.contentType = a.content_type
-      if (a.filename) item.filename = a.filename
-      if (a.width) item.width = a.width
-      if (a.height) item.height = a.height
-      if (a.size) item.size = a.size
-      return item
-    })
 }
 
 function buildInteraction(d: RawInteractionEvent, sender: Sender): Interaction {
@@ -220,13 +208,15 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     userName,
     avatarUrl: qqAvatar(options.botId, userId),
     memberRole,
+    isBotAdmin: userId !== '' && (options.botAdmins?.includes(userId) ?? false),
     messageId,
     refIndex: extractRefIndex(d),
+    quote: buildQuote(d),
     canReply: passive() !== null,
     content: cleanContent(d.content),
     mentions,
     atMe,
-    attachments: toAttachments(d),
+    attachments: toAttachments(d.attachments),
     interaction: rawType === 'INTERACTION_CREATE' ? buildInteraction(d, sender) : undefined,
 
     async reply(message) {

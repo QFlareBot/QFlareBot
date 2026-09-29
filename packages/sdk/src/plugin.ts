@@ -9,8 +9,13 @@ import type { Awaitable, PluginContext } from './context.js'
  *
  * - 1：初版契约
  * - 2：`ctx.db.batch()`；`ctx.publicUrl`（可能没有值，读的时候照样要有退路，所以只用它的插件不必写 2）
+ * - 3：`ctx.botAdmins`、`meetsPermission()`、`mentionedUsers()`；`session.isBotAdmin`、`session.quote`
+ *   （这两个在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们的插件不必写 3）
+ *
+ * SDK 导出的函数也算：构建插件时 `@qqbot/sdk` 一律解析成**机器人仓库里**那一份（见 apps/seed/scripts/build-plugin.mjs），
+ * 老机器人上没有这个导出，构建就失败。命令上的 `panelOnlyAdmin` 这类纯数据字段不算：老 SDK 抽清单时原样带过去、老面板忽略它
  */
-export const API_VERSION = 2 as const
+export const API_VERSION = 3 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
 export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'
@@ -20,7 +25,7 @@ export type JsonSchema = Record<string, unknown>
 /**
  * 命令/正则的权限层级，**达标制**：上层自动通过下层的门槛。
  * 1 超级管理员 = Bot 管理员（运行时快照的名单）＞ 2 群主与群管理员（入站 member_role）＞ 3 普通成员。
- * 按钮回调暂不鉴权。
+ * 按钮回调不按层级拦（回调不带群角色），需要时在处理器里用 `session.isBotAdmin` 或 `meetsPermission()` 自己判断。
  */
 export type PermissionTier = 'bot_admin' | 'group_admin' | 'member'
 
@@ -117,6 +122,12 @@ export interface CommandSpec extends MatchOptions {
   bare?: boolean
   /** 门槛层级，不声明即 `'member'`（人人可用） */
   permission?: PermissionTier
+  /**
+   * 只影响面板同步 QQ 指令面板时这条带不带 `only_admin`（仅群主、群管理员可点），不拦任何人。
+   * 不写就看 `permission`：声明了 `bot_admin` / `group_admin` 的带上。权限在处理器里自己判断的命令，想在面板里也只给管理员，
+   * 就写 true；反过来写 false 可以让有门槛的命令在面板里人人可见。老机器人会忽略它，不必提高 apiVersion
+   */
+  panelOnlyAdmin?: boolean
 }
 
 export type Command<C = unknown> = CommandHandler<C> | (CommandSpec & { handler: CommandHandler<C> })

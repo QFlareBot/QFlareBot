@@ -30,7 +30,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <QCard title="权限" description="命令可以声明 bot_admin / group_admin / member 三档，高的一档自动满足低的；按钮回调暂不鉴权">
+  <QCard title="权限" description="命令可以声明 bot_admin / group_admin / member 三档，高的一档自动满足低的；按钮回调没有门槛，由插件自己判断">
     <p v-if="loadError" class="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger">读取权限设置失败：{{ loadError }}。刷新页面重试。</p>
     <QSkeleton v-else-if="!loaded" :rows="2" label="正在读取权限设置" />
     <form v-else class="flex flex-col gap-5" @submit.prevent="save({ admins, permissionDeniedReply: denyReply.trim() || undefined })">

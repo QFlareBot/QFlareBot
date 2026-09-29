@@ -14,6 +14,7 @@ import type {
   InteractionCode,
   Mention,
   OutgoingMessage,
+  QuotedMessage,
   Scene,
   SendOptions,
   SendResult,
@@ -39,6 +40,8 @@ export interface MockSessionOptions {
   userId?: string
   userName?: string
   memberRole?: 'owner' | 'admin' | 'member'
+  /** 默认 false。和 ctx 的 `botAdmins` 不联动：测管理员分支就在这里设 true */
+  isBotAdmin?: boolean
   messageId?: string | null
   refIndex?: string
   botId?: string
@@ -48,6 +51,8 @@ export interface MockSessionOptions {
   atMe?: boolean
   raw?: unknown
   attachments?: Attachment[]
+  /** 这条消息引用的消息；给了就有 `session.quote`，没给的字段取默认值（messageId 为 `mock-quoted-msg`） */
+  quote?: Partial<QuotedMessage>
   interaction?: Partial<Pick<Interaction, 'id' | 'type' | 'buttonId' | 'buttonData' | 'featureId' | 'messageId' | 'feedback'>>
   /**
    * 被动回复上限，默认 5（和线上一样）。超出的 `reply` 像线上一样返回 `ok: false`，不记进 `replies`。
@@ -131,8 +136,15 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     userName: options.userName ?? '测试用户',
     avatarUrl: qqAvatar(options.botId ?? 'test-bot', options.userId ?? 'mock-user'),
     memberRole: options.memberRole,
+    isBotAdmin: options.isBotAdmin ?? false,
     messageId,
     refIndex: options.refIndex,
+    quote: options.quote && {
+      messageId: options.quote.messageId ?? 'mock-quoted-msg',
+      content: options.quote.content ?? '',
+      attachments: options.quote.attachments ?? [],
+      refIndex: options.quote.refIndex,
+    },
     canReply: true,
     content: options.content ?? '',
     // 默认事件是 at_message（已被 @），atMe 跟着默认走
@@ -312,7 +324,7 @@ export function createRecordingApi(): BotApi & { readonly calls: RecordedCall[] 
       return []
     },
     async reviewJoinRequest(g, m, decision, id) {
-      record('POST', `/v2/groups/approval_join_request/${m}`, { ...decision, join_request_id: id })
+      record('POST', `/v2/groups/${g}/approval_join_request/${m}`, { ...decision, join_request_id: id })
     },
     async joinStrategies(cursor = '') {
       record('GET', `/v2/groups/join_approval_strategy${cursor ? `?cursor=${cursor}` : ''}`)
@@ -387,6 +399,8 @@ export interface MockContextOptions<C> {
   botId?: string
   /** `ctx.publicUrl`，默认没有（和定时任务里、没填设置时一样） */
   publicUrl?: string
+  /** `ctx.botAdmins`，默认空名单 */
+  botAdmins?: string[]
   /** Durable Object 替身：键为类名。不注入时取用会抛错，提示怎么注入 */
   durable?: Record<string, DurableObjectStub>
 }
@@ -452,6 +466,7 @@ export function createMockContext<C = unknown>(
     plugin: { name: plugin.name, version: plugin.version ?? '0.0.0' },
     botId: options.botId ?? 'test-bot',
     ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+    botAdmins: Object.freeze([...(options.botAdmins ?? [])]),
     config: (options.config ?? plugin.defaultConfig ?? {}) as C,
     logger: createSilentLogger(),
     kv: createMemoryKV(),

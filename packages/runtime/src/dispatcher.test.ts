@@ -90,13 +90,10 @@ describe('dispatch 的容错', () => {
   })
 
   it('分发链本身抛错时仍要 ack 按钮，否则客户端一直转圈', async () => {
-    const plugin = definePlugin({ name: 'echoer', commands: { hi: () => '你好' } })
-    // 畸形快照（KV 里的内容没有形状保证）：admins 不是数组，收集候选时在进入插件循环之前就会抛
-    const { deps } = makeDeps([plugin], {
-      revision: 1,
-      plugins: {},
-      admins: {} as unknown as string[],
-    })
+    const plugin = definePlugin({ name: 'echoer', commands: { hi: { permission: 'bot_admin', handler: () => '你好' } } })
+    const { deps } = makeDeps([plugin])
+    // 按插件兜住的范围之外抛错：权限不足时记调试日志，让日志出口抛
+    deps.logger = { ...deps.logger, debug: () => { throw new Error('日志坏了') } }
     const session = createMockSession({
       content: '/hi',
       event: 'qq.group.at_message',
@@ -205,12 +202,14 @@ describe('中间件的 next()', () => {
         await next()
       },
     })
-    const { deps } = makeDeps([rethrow], { revision: 1, plugins: {}, admins: {} as unknown as string[] })
+    const guarded = definePlugin({ name: 'guarded', commands: { hi: { permission: 'bot_admin', handler: () => '你好' } } })
+    const { deps } = makeDeps([rethrow, guarded])
+    deps.logger = { ...deps.logger, debug: () => { throw new Error('日志坏了') } }
     const session = createMockSession({ content: '/hi' })
 
     const report = await dispatch(session, deps)
 
-    // 畸形快照让候选收集抛错；错误经 await next() 冒到中间件，按以前的规矩记在中间件头上
+    // 权限不足记日志时抛错；错误经 await next() 冒到中间件，按以前的规矩记在中间件头上
     expect(report.errors.map((e) => e.plugin)).toEqual(['rethrow'])
   })
 })

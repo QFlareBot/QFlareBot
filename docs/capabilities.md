@@ -17,6 +17,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 | 富媒体：视频 / 语音 / 文件 | `{ media: { type: 'video' \| 'voice' \| 'file', url, filename } }` | 图 png/jpg、视频 mp4、语音 silk；软限 20–30MB |
 | 分片上传大文件（upload_prepare / part_finish） | raw | 文件 >200MB 才需要 |
 | 引用回复 `message_reference` | `{ quote: true }` 引用当前消息；`{ quote: refIndex }` 引用指定 | `session.refIndex` / `SendResult.refIndex` |
+| 收到引用消息（`message_type` 103） | `session.quote` | 被引用消息的 id（`message_reference.message_id`，没有再取 `msg_elements[0]` 的）、原文与附件（`msg_elements[0]`）、ref index（`message_scene.ext` 的 `ref_msg_idx`）。规则照 AstrBot 的 QQ 官方适配器，未单独线上实测 |
 | 被动回复 `msg_id` + `msg_seq` | `session.reply()` | `msg_seq` 集中分配，默认上限 5 |
 | **被动回复 `event_id`** | `session.reply()` | 对 `GROUP_ADD_ROBOT`、`INTERACTION_CREATE`、`*_MSG_RECEIVE`、`FRIEND_ADD` 自动改用 event_id，不消耗主动额度；`session.canReply` 可判断 |
 | 主动消息 | `session.send(msg, target?)` / `ctx.api.sendMessage()` | 群聊需群主打开机器人的「主动消息」权限；单聊有频控 |
@@ -34,7 +35,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 
 | 平台事件 | 事件名 | Session 字段 |
 | --- | --- | --- |
-| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、attachments、refIndex、mentions、atMe、memberRole |
+| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、attachments、refIndex、quote、mentions、atMe、memberRole |
 | C2C_MESSAGE_CREATE | `qq.c2c.message` | 同上 |
 | AT_MESSAGE_CREATE / MESSAGE_CREATE / DIRECT_MESSAGE_CREATE | `qq.guild.*` | |
 | GROUP_ADD_ROBOT / GROUP_DEL_ROBOT | `qq.group.robot_added` / `robot_removed` | canReply（event_id） |
@@ -74,7 +75,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 
 | 能力 | QQ 端点 | 管理 API | 面板入口 |
 | --- | --- | --- | --- |
-| **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：列出已启用插件的命令，勾选、改名称与描述（实时显示宽度），声明了 `permission` 的命令自动带 `only_admin: true`；能查看、删除已有面板；特殊配置可展开直接编辑请求体 |
+| **指令面板**（用户点机器人看到的可点指令列表；scope=c2c/group/channel/dm；单面板 ≤20 项、机器人 ≤20 个面板；创建 10 QPM） | `GET/POST /v2/panels`、`DELETE /v2/panels/{panel_id}` | `GET/POST /admin/qq/panels`、`DELETE /admin/qq/panels/:panelId` | 设置 → QQ 指令面板：列出已启用插件的命令，勾选、改名称与描述（实时显示宽度），声明了 `permission` 的命令自动带 `only_admin: true`，命令写了 `panelOnlyAdmin` 就按它来；能查看、删除已有面板；特殊配置可展开直接编辑请求体 |
 | **分享/邀请链接**（点击直达机器人会话；请求体可为空，响应 `{ retcode, msg, data: { url } }`） | `/v2/generate_url_link` | `POST /admin/qq/url-link` | 设置 → 分享链接：一键生成，显示链接、复制按钮与二维码 |
 | **自定义菜单**（仅单聊，全局一份；`menu.items` ≤10：switch/send_message/link/menu，子菜单 ≤5，PUT 5 QPM） | `GET/PUT /v2/menu` | `GET` / `PUT /admin/qq/menu` | 设置 → 自定义菜单（查看回填 + JSON 编辑保存） |
 | 频道 API 权限申请 | — | 暂 raw | — |
@@ -90,5 +91,5 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 - `file_data`（base64 直传）在原型中实测可用，但当前文档只列 `url` 与分片上传；大文件请用 `url`。
 - `api.bot.qq.com` 为文档统一域名（2026-08-10 起），已确认与 `api.sgroup.qq.com` 同网关；如需回退可传 `baseUrl`。
 - 群管理接口按文档字段实现，未在有管理员权限的群里实测。
-- 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此按钮回调暂不鉴权。
+- 群消息 `author.member_role` 已透传到 `session.memberRole`，但按键回调（INTERACTION_CREATE）不带群角色——`group_admin` 门槛的按钮回调验不了，因此框架不给按钮回调设门槛。回调里有 `session.isBotAdmin`（按 Bot 管理员名单比对），插件要鉴权在处理器里用它或 `meetsPermission()` 自己判断。
 - 入群自动审批策略已于 2026-09 实测完整闭环（创建关闭态策略 → 列表 → 白名单 → 删除，线上状态已还原）；自定义菜单的 PUT 已接入（schema 与 GET 同源），未单独线上回写验证。

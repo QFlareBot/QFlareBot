@@ -1,5 +1,6 @@
 import { QQBotClient } from '@qqbot/api'
 import type { Logger, Session } from '@qqbot/sdk'
+import { botAdminsOf } from './botAdmins.js'
 import { ContextFactory } from './context.js'
 import { dispatch, type DispatchReport } from './dispatcher.js'
 import { ensureReady } from './lifecycle.js'
@@ -79,6 +80,7 @@ export class RequestScope {
       botId: this.botId,
       botName: profile?.name ?? '',
       botAvatar: profile?.avatar ?? '',
+      botAdmins: botAdminsOf(this.snapshot),
       sender: counting,
       maxPassiveReplies: this.options.maxPassiveReplies,
     })

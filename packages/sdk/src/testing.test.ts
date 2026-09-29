@@ -178,3 +178,24 @@ describe('mock session.reply 有线上的被动回复上限', () => {
     expect(more.replies).toHaveLength(7)
   })
 })
+
+describe('mock session 的新字段与群接口路径', () => {
+  it('quote 给了才有，没给的字段取默认值', () => {
+    expect(createMockSession().quote).toBeUndefined()
+    expect(createMockSession({ quote: { content: '原文' } }).quote).toEqual({
+      messageId: 'mock-quoted-msg',
+      content: '原文',
+      attachments: [],
+      refIndex: undefined,
+    })
+    expect(createMockSession({ isBotAdmin: true }).isBotAdmin).toBe(true)
+    expect(createMockSession().isBotAdmin).toBe(false)
+  })
+
+  it('审批入群申请记录的路径带群 id，和线上一致', async () => {
+    const ctx = createMockContext(plugin)
+    await ctx.api.group.reviewJoinRequest('G1', 'M1', { approve: true }, 'JR1')
+    const { calls } = ctx.api as typeof ctx.api & { calls: Array<{ method: string; path: string }> }
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', path: '/v2/groups/G1/approval_join_request/M1' })
+  })
+})

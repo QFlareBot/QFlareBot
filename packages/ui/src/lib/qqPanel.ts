@@ -61,12 +61,22 @@ interface CommandLike {
   description?: string
   aliases?: string[]
   permission?: string
+  panelOnlyAdmin?: boolean
 }
 interface PluginLike {
   name: string
   displayName?: string
   enabled: boolean
   commands: CommandLike[]
+}
+
+/**
+ * 面板里这条是否「仅管理员可点击」（平台的 only_admin）：插件用 panelOnlyAdmin 指定了就听它的
+ * （权限在处理器里自己判断的命令靠它），没指定就看声明的权限
+ */
+function onlyAdminOf(c: CommandLike): boolean {
+  if (typeof c.panelOnlyAdmin === 'boolean') return c.panelOnlyAdmin
+  return c.permission === 'bot_admin' || c.permission === 'group_admin'
 }
 
 /**
@@ -87,8 +97,7 @@ export function draftItems(plugins: PluginLike[]): PanelDraftItem[] {
           key: `${p.name}/${c.name}`,
           name: name ?? c.name,
           desc: truncateWidth(c.description?.trim() || `${p.displayName || p.name} 的指令`, DESC_MAX),
-          // 声明了权限的命令映射为平台原生的「仅管理员可点击」
-          onlyAdmin: c.permission === 'bot_admin' || c.permission === 'group_admin',
+          onlyAdmin: onlyAdminOf(c),
           selected,
           plugin: p.displayName || p.name,
           tooWide,

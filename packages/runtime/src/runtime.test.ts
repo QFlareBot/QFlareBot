@@ -915,6 +915,34 @@ describe('三层权限', () => {
     ).toBe('已禁言 李四')
   })
 
+  it('session.isBotAdmin 和 ctx.botAdmins 来自同一份名单，按钮回调里也有', async () => {
+    const seen: Array<{ isBotAdmin: boolean; botAdmins?: readonly string[]; frozen?: boolean }> = []
+    const probe = definePlugin({
+      name: 'probe',
+      version: '1.0.0',
+      commands: {
+        who: ({ session, ctx }) =>
+          void seen.push({ isBotAdmin: session.isBotAdmin, botAdmins: ctx.botAdmins, frozen: Object.isFrozen(ctx.botAdmins) }),
+      },
+      buttons: { op: ({ session }) => void seen.push({ isBotAdmin: session.isBotAdmin }) },
+    })
+    const runtime = createRuntime({ plugins: [probe] })
+
+    // 快照形状不对（KV 里没有保证）：当没设，不能让分发整个抛
+    await testEvent(runtime, withSnapshot({ admins: {} }), { content: '/who' })
+    expect(seen.pop()).toEqual({ isBotAdmin: false, botAdmins: [], frozen: true })
+
+    const env = withSnapshot({ admins: ['test-user', 42, ''] })
+    await testEvent(runtime, env, { content: '/who' })
+    // 冻结的副本：插件改不动 isolate 里缓存着的快照
+    expect(seen.pop()).toEqual({ isBotAdmin: true, botAdmins: ['test-user'], frozen: true })
+    await testEvent(runtime, env, { content: '/who', userId: 'someone' })
+    expect(seen.pop()).toMatchObject({ isBotAdmin: false, botAdmins: ['test-user'] })
+    // 按钮回调不带群角色，Bot 管理员身份照样有
+    await testEvent(runtime, env, { buttonId: 'op', scene: 'group', targetId: 'G1' })
+    expect(seen.pop()).toEqual({ isBotAdmin: true })
+  })
+
   it('统一回复仅在没有其他候选命中时触发，不遮蔽其他插件', async () => {
     const env = withSnapshot({ permissionDeniedReply: '权限不足' })
 
@@ -952,6 +980,17 @@ describe('三层权限', () => {
       opts,
     )
     expect(c2c.memberRole).toBeUndefined()
+  })
+
+  it('session.isBotAdmin 按名单比对 userId；没传名单、拿不到 userId 都不是', () => {
+    const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
+    const opts = { botId: 'b', sender, maxPassiveReplies: 5 }
+    const payload = (d: Record<string, unknown>) => ({ op: 0, id: 'x', t: 'GROUP_AT_MESSAGE_CREATE', d: { id: 'm', content: 'hi', group_openid: 'G1', ...d } })
+
+    expect(buildSession(payload({ author: { member_openid: 'U1' } }), { ...opts, botAdmins: ['U1'] }).isBotAdmin).toBe(true)
+    expect(buildSession(payload({ author: { member_openid: 'U2' } }), { ...opts, botAdmins: ['U1'] }).isBotAdmin).toBe(false)
+    expect(buildSession(payload({ author: { member_openid: 'U1' } }), opts).isBotAdmin).toBe(false)
+    expect(buildSession(payload({ author: {} }), { ...opts, botAdmins: [''] }).isBotAdmin).toBe(false)
   })
 })
 

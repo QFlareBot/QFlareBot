@@ -21,6 +21,20 @@ export interface Mention {
   bot: boolean
 }
 
+/**
+ * 这条消息引用（回复）的那条消息，读自推送里的 `message_reference`、`msg_elements[0]`（`message_type` 为 103 时）
+ * 与 `message_scene.ext` 的 `ref_msg_idx`。平台给多少就是多少，哪样没给就是空值。
+ */
+export interface QuotedMessage {
+  /** 被引用消息的 id，撤回它就用这个：`session.recall(quote.messageId)`；平台没给时是空串 */
+  readonly messageId: string
+  /** 被引用消息的原文，不去 `<@…>`、不去空白；平台没给时是空串 */
+  readonly content: string
+  readonly attachments: readonly Attachment[]
+  /** 被引用消息的 ref index，想引用那条消息回复就发 `{ quote: refIndex }`；平台没给时没有 */
+  readonly refIndex: string | undefined
+}
+
 export type MediaType = 'image' | 'video' | 'voice' | 'file'
 
 /**
@@ -169,10 +183,21 @@ export interface Session {
    * author.member_role；单聊与频道没有此概念，未知值归一化为 undefined。
    */
   readonly memberRole: 'owner' | 'admin' | 'member' | undefined
+  /**
+   * 发起人是不是 Bot 管理员（面板「设置 → 权限」里的名单），和命令 `permission: 'bot_admin'` 同一个判断。
+   * 所有场景都有，按钮回调也有（回调不带群角色，要鉴权就靠它）。连同群角色一起判断用 `meetsPermission()`。
+   * 0.5 以前的机器人没有这个字段，读到 undefined，等于不是——只读它的插件不必提高 apiVersion
+   */
+  readonly isBotAdmin: boolean
   /** 被动回复所需的消息 id，非消息事件为 undefined */
   readonly messageId: string | undefined
   /** 当前消息可被引用的 ref index（message_scene.ext 中的 msg_idx） */
   readonly refIndex: string | undefined
+  /**
+   * 这条消息引用的那条消息，没引用时是 undefined。和发消息时的 `{ quote }` 方向相反：那个是「我引用谁」，
+   * 这个是「对方引用了谁」。0.5 以前的机器人没有这个字段，读到 undefined 和没引用一样，所以只读它不必提高 apiVersion
+   */
+  readonly quote: QuotedMessage | undefined
   /** 本事件是否允许被动回复（消息 id 或受支持的 event_id 任一即可） */
   readonly canReply: boolean
   /** 去掉 @ 与首尾空白后的正文 */

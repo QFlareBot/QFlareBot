@@ -7,6 +7,8 @@ export interface CommandSpec {
   aliases?: string[]
   /** 权限层级（bot_admin / group_admin / member），同步指令面板时映射为 only_admin */
   permission?: string
+  /** 插件指定的指令面板 only_admin，写了就不看 permission */
+  panelOnlyAdmin?: boolean
 }
 
 /** 插件在哪些群生效：allow 只在列出的群，deny 除了列出的群；只管群，单聊与频道不受影响 */
