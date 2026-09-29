@@ -109,9 +109,11 @@ describe('管理 API 的往返', () => {
 
   it('status 只给占位符；原样存回去密钥不变，改了别的字段也不丢', async () => {
     const { call, stored } = setup()
-    const status = (await (await call('/admin/status')).json()) as { plugins: Array<{ config: { api_key: string; model: string } }> }
+    const status = (await (await call('/admin/status')).json()) as { plugins: Array<{ config: { api_key: string; model: string }; defaultConfig: unknown }> }
     const config = status.plugins[0]!.config
     expect(isSecretPlaceholder(config.api_key)).toBe(true)
+    // 出厂默认一并下发，给面板做「恢复默认」
+    expect(status.plugins[0]!.defaultConfig).toEqual({ api_key: '', model: 'm' })
 
     const res = await call('/admin/plugins/llm', { method: 'PATCH', body: JSON.stringify({ config: { ...config, model: 'n' } }) })
     expect(res.status).toBe(200)

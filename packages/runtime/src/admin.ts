@@ -396,6 +396,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
           groups: state?.groups ?? null,
           // writeOnly 的值（密钥）不下发，换成占位符
           config: maskSecrets(p.manifest.configSchema, mergedConfig(deps.registry, scope.snapshot, p.manifest.name)) ?? null,
+          // 面板拿它给字段做「恢复默认」；默认值里要是写了密钥，同样只给占位
+          defaultConfig: maskSecrets(p.manifest.configSchema, p.manifest.defaultConfig) ?? null,
           configSchema: p.manifest.configSchema ?? null,
           permissions: p.manifest.permissions,
           error: p.error?.message ?? null,

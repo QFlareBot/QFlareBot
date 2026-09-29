@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 插件市场：读插件目录的 index.json，搜索、按标签筛；勾选几个一起装，只构建一次 */
-import { PackageSearch } from 'lucide-vue-next'
+import { PackageSearch, X } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../../api/client.js'
@@ -123,7 +123,19 @@ onMounted(async () => {
       </template>
 
       <div class="flex flex-col gap-2.5 border-b border-border px-4 py-3">
-        <QInput v-model="query" type="search" placeholder="搜索名称、描述、作者、命令" aria-label="搜索插件" />
+        <!-- 浏览器自带的清除叉号藏掉了（styles.css），这里画一个；Esc 也能清空 -->
+        <div class="relative">
+          <QInput v-model="query" type="search" class="pr-9" placeholder="搜索名称、描述、作者、命令" aria-label="搜索插件" @keydown.esc="query = ''" />
+          <button
+            v-if="query"
+            type="button"
+            class="absolute top-0 right-0 flex size-8 cursor-pointer items-center justify-center rounded-full text-fg-subtle transition-colors duration-(--qb-duration) hover:text-fg"
+            aria-label="清空搜索"
+            @click="query = ''"
+          >
+            <X class="size-3.5" aria-hidden="true" />
+          </button>
+        </div>
         <div v-if="tags.length" class="flex flex-wrap gap-1.5" role="group" aria-label="按标签筛选">
           <button
             v-for="t in [null, ...tags]"

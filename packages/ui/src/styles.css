@@ -142,6 +142,35 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+  /*
+   * 浏览器往输入框里塞的小部件一律藏掉，需要的都自己画了：Edge 密码框的小眼睛（密钥字段有自己的显示按钮）、
+   * Safari 的钥匙 / 联系人填充图标、搜索框的叉号、数字框的上下箭头
+   */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
+  input::-webkit-credentials-auto-fill-button,
+  input::-webkit-contacts-auto-fill-button,
+  input::-webkit-strong-password-auto-fill-button {
+    visibility: hidden;
+    position: absolute;
+    right: 0;
+    width: 0;
+    pointer-events: none;
+  }
+  input[type='search']::-webkit-search-cancel-button,
+  input[type='search']::-webkit-search-decoration,
+  input::-webkit-inner-spin-button,
+  input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 @layer components {
@@ -166,21 +195,38 @@
   .qb-control::placeholder {
     color: var(--qb-fg-subtle);
   }
-  .qb-control:focus {
+  /* focus-within：数字框这种外框里套着输入框和按钮的，里面任何一个拿到焦点都亮起外框 */
+  .qb-control:focus,
+  .qb-control:focus-within {
     outline: none;
     border-color: var(--qb-accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--qb-accent) 22%, transparent);
   }
   .qb-control--invalid,
-  .qb-control--invalid:focus {
+  .qb-control--invalid:focus,
+  .qb-control--invalid:focus-within {
     border-color: var(--qb-danger);
   }
-  .qb-control--invalid:focus {
+  .qb-control--invalid:focus,
+  .qb-control--invalid:focus-within {
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--qb-danger) 20%, transparent);
   }
   .qb-control:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* 输入框、下拉浮层里的滚动条：细一点、颜色跟主题走 */
+  .qb-control,
+  .qb-menu {
+    scrollbar-width: thin;
+    scrollbar-color: var(--qb-border-strong) transparent;
+  }
+  .qb-menu {
+    transform-origin: top;
+  }
+  .qb-menu[data-placement='top'] {
+    transform-origin: bottom;
   }
 
   /* 表格：紧凑、可扫读 */

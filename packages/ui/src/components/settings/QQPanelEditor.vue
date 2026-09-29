@@ -3,7 +3,7 @@
  * QQ 指令面板：群友点机器人的指令入口时弹出的可点列表。
  * 命令按插件分组、默认折叠；发送成功后把勾选和修改存进 D1，下次打开接着用，插件有增减时提醒重新发送。
  */
-import { Trash2 } from 'lucide-vue-next'
+import { ChevronRight, Trash2 } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { api } from '../../api/client.js'
 import type { PluginInfo } from '../../api/types.js'
@@ -175,8 +175,10 @@ async function removePanel(p: PanelSummary) {
 
 /** 高级：直接编辑请求体。展开时按当前勾选生成一份 */
 const rawBody = ref('')
-function onRawToggle(e: Event) {
-  if ((e.target as HTMLDetailsElement).open) rawBody.value = JSON.stringify(panelBody(scope.value, items.value), null, 2)
+const rawOpen = ref(false)
+function toggleRaw() {
+  rawOpen.value = !rawOpen.value
+  if (rawOpen.value) rawBody.value = JSON.stringify(panelBody(scope.value, items.value), null, 2)
 }
 function sendRaw() {
   let body: unknown
@@ -239,13 +241,24 @@ function sendRaw() {
         </div>
       </QCollapse>
 
-      <details class="text-sm" @toggle="onRawToggle">
-        <summary class="cursor-pointer text-xs text-fg-muted hover:text-fg">高级：直接编辑请求体（按定点群、用户生效等特殊配置时用）</summary>
-        <div class="mt-3 flex flex-col gap-2">
-          <QTextarea id="panel-raw" v-model="rawBody" mono :rows="10" aria-label="请求体 JSON" />
-          <div><QButton :loading="busy" :disabled="!rawBody.trim()" @click="sendRaw">按这份请求体发送</QButton></div>
-        </div>
-      </details>
+      <div class="text-sm">
+        <button
+          type="button"
+          class="inline-flex cursor-pointer items-center gap-1 text-left text-xs text-fg-muted transition-colors duration-(--qb-duration) hover:text-fg"
+          :aria-expanded="rawOpen"
+          aria-controls="panel-raw-box"
+          @click="toggleRaw"
+        >
+          <ChevronRight class="size-3.5 shrink-0 transition-transform duration-(--qb-duration)" :class="rawOpen && 'rotate-90'" aria-hidden="true" />
+          高级：直接编辑请求体（按定点群、用户生效等特殊配置时用）
+        </button>
+        <QCollapse id="panel-raw-box" :open="rawOpen">
+          <div class="flex flex-col gap-2 pt-3">
+            <QTextarea id="panel-raw" v-model="rawBody" mono :rows="10" aria-label="请求体 JSON" />
+            <div><QButton :loading="busy" :disabled="!rawBody.trim()" @click="sendRaw">按这份请求体发送</QButton></div>
+          </div>
+        </QCollapse>
+      </div>
     </div>
   </QCard>
 </template>

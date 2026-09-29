@@ -134,6 +134,37 @@ describe('validateConfig：嵌套结构，错误路径用点连', () => {
   })
 })
 
+describe('validateConfig：多选与 x-showIf', () => {
+  const s = {
+    type: 'object',
+    required: ['apiKey'],
+    properties: {
+      kinds: { type: 'array', items: { type: 'string', enum: ['text', 'image'] } },
+      levels: { type: 'array', items: { oneOf: [{ const: 1, title: '低' }, { const: 2, title: '高' }] } },
+      mode: { enum: ['builtin', 'custom'] },
+      apiKey: { type: 'string', 'x-showIf': { mode: 'custom' } },
+      endpoint: { type: 'string', minLength: 1, 'x-showIf': { mode: ['custom'] } },
+    },
+  }
+
+  it('多选的每一项都得在选项里', () => {
+    expect(validateConfig(s, { mode: 'builtin', kinds: ['text', 'image'], levels: [2] })).toEqual([])
+    expect(validateConfig(s, { mode: 'builtin', kinds: ['text', 'video'] })).toEqual([{ path: 'kinds', message: '只能从 "text" / "image" 中选' }])
+    expect(validateConfig(s, { mode: 'builtin', levels: [3] })).toEqual([{ path: 'levels', message: '只能从 1 / 2 中选' }])
+  })
+
+  it('藏起来的字段不校验，required 也跳过', () => {
+    expect(validateConfig(s, { mode: 'builtin', endpoint: '' })).toEqual([])
+  })
+
+  it('条件满足、字段显示出来时照常校验', () => {
+    expect(validateConfig(s, { mode: 'custom', endpoint: '' })).toEqual([
+      { path: 'apiKey', message: '必填' },
+      { path: 'endpoint', message: '至少 1 个字符' },
+    ])
+  })
+})
+
 describe('withConfigDefaults', () => {
   const shaped = {
     type: 'object',

@@ -17,8 +17,11 @@ import QSkeleton from '../components/ui/QSkeleton.vue'
 import QSwitch from '../components/ui/QSwitch.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useToast } from '../composables/useToast.js'
+import { provideUnsavedGuard } from '../composables/useUnsavedGuard.js'
 
 const route = useRoute()
+// 配置、运行规则没保存就离开时提醒一次
+provideUnsavedGuard()
 const { pluginByName, refresh, status, patchLocal } = useStatus()
 const { push } = useToast()
 const plugin = computed(() => pluginByName(String(route.params.name)))

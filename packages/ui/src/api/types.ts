@@ -27,6 +27,8 @@ export interface PluginInfo {
   /** null 即所有群都生效 */
   groups: GroupScope | null
   config: unknown
+  /** 插件的 defaultConfig（密钥换成占位）；老运行时没有这个字段 */
+  defaultConfig?: unknown
   configSchema: JsonSchema | null
   permissions: string[]
   error: string | null

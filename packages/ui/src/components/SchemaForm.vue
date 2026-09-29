@@ -12,7 +12,15 @@ import type { JsonSchema } from '../api/types.js'
 import { provideInvalid } from './schema/invalid.js'
 import SchemaObject from './schema/SchemaObject.vue'
 
-const props = defineProps<{ schema: JsonSchema; modelValue: Record<string, unknown>; errors?: Record<string, string> }>()
+const props = defineProps<{
+  schema: JsonSchema
+  modelValue: Record<string, unknown>
+  errors?: Record<string, string>
+  /** 已保存的配置：改过的字段标出来 */
+  saved?: unknown
+  /** 插件的 defaultConfig：和它不一样的字段给「恢复默认」；没有时只看 schema 里的 default */
+  defaults?: unknown
+}>()
 const emit = defineEmits<{
   'update:modelValue': [value: Record<string, unknown>]
   /** 还不能保存的字段路径；非空时不该保存 */
@@ -37,6 +45,9 @@ onBeforeUnmount(() => emit('invalid', []))
     path=""
     id="cfg"
     :errors="errors"
+    track
+    :saved="saved"
+    :defaults="defaults"
     @update:model-value="emit('update:modelValue', $event)"
   />
   <p v-else class="text-sm text-fg-muted">该插件没有声明配置项。</p>

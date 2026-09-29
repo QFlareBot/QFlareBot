@@ -37,6 +37,14 @@ export function constChoices(s: JsonSchema): { values: unknown[]; labels: string
   return { values: list.map((o) => o.const), labels: list.map((o) => o.title ?? String(o.const)) }
 }
 
+/** 多选：数组的 items 是 enum 或全是 const 的 oneOf，返回可选的值与标签，否则 null */
+export function multiChoices(s: JsonSchema): { values: unknown[]; labels: string[] } | null {
+  if (s.type !== 'array' || !s.items) return null
+  const items = s.items
+  if (Array.isArray(items.enum) && items.enum.length) return { values: items.enum, labels: enumOptions(items.enum).map((o) => o.label) }
+  return constChoices(items)
+}
+
 export type FieldKind =
   | 'const'
   | 'enum'
@@ -45,6 +53,7 @@ export type FieldKind =
   | 'string'
   | 'number'
   | 'boolean'
+  | 'multi'
   | 'string[]'
   | 'object'
   | 'object[]'
@@ -61,6 +70,7 @@ export function fieldKind(s: JsonSchema): FieldKind {
   if (s.type === 'number' || s.type === 'integer') return 'number'
   if (s.type === 'boolean') return 'boolean'
   if (s.type === 'array') {
+    if (multiChoices(s)) return 'multi'
     if (s.items?.type === 'string') return 'string[]'
     if (isObjectSchema(s.items) && Object.keys(s.items?.properties ?? {}).length) return 'object[]'
     return 'json'
@@ -74,7 +84,7 @@ export function fieldKind(s: JsonSchema): FieldKind {
 }
 
 /** 这几种自己就是一组输入，外面套分组而不是单个 label */
-export const isGroupKind = (k: FieldKind) => k === 'object' || k === 'object[]' || k === 'map'
+export const isGroupKind = (k: FieldKind) => k === 'object' || k === 'object[]' || k === 'map' || k === 'multi'
 
 /**
  * 映射里「值」的 schema。additionalProperties: true 时按字符串编辑；
@@ -195,6 +205,7 @@ export function blankValue(s: JsonSchema): unknown {
     case 'object':
     case 'map':
       return {}
+    case 'multi':
     case 'string[]':
     case 'object[]':
       return []

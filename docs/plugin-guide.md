@@ -239,11 +239,26 @@ buttons: {
   | `format: 'textarea'`（字符串） | 多行文本框 |
   | `writeOnly: true`（字符串） | 密钥：面板不回显，只显示「已设置」，可以更换或清除；`/admin/status` 与快照接口里也只给占位符 |
   | `type: 'array', items: { type: 'string' }` | 逐条输入的列表 |
+  | `type: 'array', items: { enum: [...] }`（或 items 写带 `const` 的 `oneOf`） | 多选：一排可按下的标签，保存时每一项都得在选项里 |
   | `type: 'object', properties: {…}`（可带 `required`） | 一组字段，可以嵌套 |
   | `type: 'array', items: { type: 'object', properties: {…} }` | 卡片列表，可增删、调整顺序 |
   | `type: 'object', additionalProperties: {…}` | 键名不固定的键值对 |
 
   认不出的类型退回 JSON 文本框。API 密钥这类值一定标 `writeOnly: true`：不标的话任何人打开面板都能看到明文。
+
+  另有两处面板用得上的写法：
+
+  - **说明里可以放链接**：`description` 支持行内 Markdown——`[链接](https://…)`（只认 http/https，新窗口打开）、`` `代码` ``、`**粗体**`。适合写「去哪申请 API Key」。
+  - **按条件显示**：`'x-showIf': { 同级字段: 期望值 }`，每一条都满足才显示这个字段；期望值写成数组表示「等于其中任意一个」。藏起来的字段值照样保留，但保存时不校验（`required` 也跳过），免得拦着用户改一个看不见的字段。只能引用同一层的字段。
+
+    ```ts
+    properties: {
+      mode: { oneOf: [{ const: 'builtin', title: '内置' }, { const: 'custom', title: '自定义接口' }], default: 'builtin' },
+      endpoint: { type: 'string', title: '接口地址', 'x-showIf': { mode: 'custom' } },
+    }
+    ```
+
+  面板会把改过还没保存的字段标出来，和出厂默认不一样的字段给「恢复默认」：默认值取 `defaultConfig` 里对应的值，没有就取字段 schema 的 `default`。
 - **存放**：面板保存写 KV 快照，与部署解耦——改配置不触发构建，即时生效（其他节点最长约 1 分钟）。
 - **读取**：处理器里 `ctx.config`，类型由 `definePlugin<Config>` 串联。保存过的配置盖在 `defaultConfig` 上，快照里没有的字段回落默认值——所以升级后新增的配置项，保存过配置的用户也拿得到默认值。声明了 `properties` 的嵌套对象同样逐项回落；键名不固定的对象（`additionalProperties`）和数组整个替换，用户删掉的项不会被默认值加回来。
 

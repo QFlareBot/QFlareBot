@@ -2,12 +2,14 @@
 /**
  * 单个值的输入控件：下拉（enum / 全是 const 的 oneOf）、文本、多行文本、数字、开关、字符串列表。
  * 外壳（标签、错误）在 SchemaFrame，这里只管把值读出来、写回去。
+ * 数字框里还不合格的内容（不是数字、超出范围）不写回，通过 problem 交给 SchemaField 报错、拦住保存。
  */
 import { computed } from 'vue'
 import type { JsonSchema } from '../../api/types.js'
 import { constChoices, enumIndex, enumOptions, enumValueAt, type FieldKind } from '../../lib/schemaForm.js'
 import QInput from '../ui/QInput.vue'
 import QListInput from '../ui/QListInput.vue'
+import QNumberInput from '../ui/QNumberInput.vue'
 import QSelect from '../ui/QSelect.vue'
 import QSwitch from '../ui/QSwitch.vue'
 import QTextarea from '../ui/QTextarea.vue'
@@ -21,7 +23,7 @@ const props = defineProps<{
   describedBy?: string
   invalid?: boolean
 }>()
-const emit = defineEmits<{ 'update:modelValue': [value: unknown] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: unknown]; problem: [message: string] }>()
 
 // enum 与 const 下拉是一回事：按下标选、写回原值，只是标签来源不同
 const choices = computed(() => {
@@ -70,19 +72,20 @@ function list(v: unknown): string[] {
     :maxlength="schema.maxLength"
     @update:model-value="emit('update:modelValue', $event)"
   />
-  <QInput
+  <QNumberInput
     v-else-if="kind === 'number'"
     :id="id"
-    type="number"
-    inputmode="decimal"
-    :model-value="str(modelValue)"
-    :placeholder="str(schema.default)"
+    class="sm:max-w-48"
+    :model-value="typeof modelValue === 'number' ? modelValue : undefined"
+    :fallback="typeof schema.default === 'number' ? schema.default : undefined"
+    :label="label"
     :described-by="describedBy"
     :invalid="invalid"
     :min="schema.minimum"
     :max="schema.maximum"
-    :step="schema.type === 'integer' ? 1 : 'any'"
-    @update:model-value="emit('update:modelValue', $event === '' ? undefined : Number($event))"
+    :integer="schema.type === 'integer'"
+    @update:model-value="emit('update:modelValue', $event)"
+    @problem="emit('problem', $event)"
   />
   <div v-else-if="kind === 'boolean'" class="-ml-3 flex items-center gap-1">
     <QSwitch :model-value="!!current" :label="label" @update:model-value="emit('update:modelValue', $event)" />

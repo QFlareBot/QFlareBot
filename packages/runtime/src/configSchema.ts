@@ -99,6 +99,9 @@ function checkField(schema: Json, value: unknown): string | null {
       if (!Array.isArray(value)) return `应为数组，实际是${typeName(value)}`
       // 标量数组在面板上是一个输入组件，错误报在数组本身；对象数组逐项往下查（见 checkValue）
       const items = schema['items']
+      // 多选：items 是 enum 或带 const 的 oneOf，每一项都得是其中之一
+      const choices = isPlainObject(items) ? (Array.isArray(items['enum']) ? items['enum'] : constOptions(items)) : null
+      if (choices && !value.every((v) => choices.includes(v))) return `只能从 ${choices.map((v) => JSON.stringify(v)).join(' / ')} 中选`
       const itemType = isPlainObject(items) ? items['type'] : undefined
       const valid = typeof itemType === 'string' ? SCALAR_ITEM[itemType] : undefined
       if (valid && !value.every(valid)) return `每一项都应为${TYPE_NAMES[itemType as string] ?? (itemType === 'integer' ? '整数' : itemType)}`
@@ -130,17 +133,44 @@ function checkValue(schema: Json, value: unknown, path: string, errors: ConfigFi
   }
 }
 
+/** 深比较：对象不看键的顺序，数组看顺序；值为 undefined 的键等于没有这个键 */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b || (a !== a && b !== b)) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => sameValue(v, b[i]))
+  }
+  if (!isPlainObject(a) || !isPlainObject(b)) return false
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (!sameValue(a[k], b[k])) return false
+  return true
+}
+
+/**
+ * 字段的 x-showIf：`{ 同级字段: 期望值 }`，每一条都满足才显示；期望值写成数组表示「等于其中任意一个」。没写就一直显示。
+ * 藏起来的字段在面板上改不了，这里也就不校验它（连 required 一起跳过）。
+ * 与 packages/ui/src/lib/schemaState.ts 的 isShown 是同一个约定，两边必须一致。
+ */
+export function isShown(schema: unknown, siblings: Json): boolean {
+  const cond = isPlainObject(schema) ? schema['x-showIf'] : undefined
+  if (!isPlainObject(cond)) return true
+  return Object.entries(cond).every(([key, expected]) => {
+    const actual = Object.hasOwn(siblings, key) ? siblings[key] : undefined
+    return Array.isArray(expected) ? expected.some((e) => sameValue(e, actual)) : sameValue(expected, actual)
+  })
+}
+
 /** 对象的子字段：required、properties 里声明了的逐个查；未声明的键放行（插件可能自己存额外状态），除非给了 additionalProperties 的 schema */
 function checkObject(schema: Json, value: Json, path: string, errors: ConfigFieldError[]): void {
   const properties = isPlainObject(schema['properties']) ? schema['properties'] : {}
+  const hidden = (key: string) => Object.hasOwn(properties, key) && !isShown(properties[key], value)
   const required = Array.isArray(schema['required']) ? schema['required'] : []
   for (const key of required) {
-    if (typeof key === 'string' && value[key] === undefined) errors.push({ path: join(path, key), message: '必填' })
+    if (typeof key === 'string' && value[key] === undefined && !hidden(key)) errors.push({ path: join(path, key), message: '必填' })
   }
   const extra = schema['additionalProperties']
   for (const [key, fieldValue] of Object.entries(value)) {
     // 缺失交给上面的 required 判断，这里只管有值的
-    if (fieldValue === undefined) continue
+    if (fieldValue === undefined || hidden(key)) continue
     const sub = Object.hasOwn(properties, key) ? properties[key] : extra
     if (isPlainObject(sub)) checkValue(sub, fieldValue, join(path, key), errors)
   }
@@ -149,8 +179,8 @@ function checkObject(schema: Json, value: Json, path: string, errors: ConfigFiel
 /**
  * 按 configSchema 校验面板提交的配置。
  *
- * 只覆盖面板能渲染的子集：string/number/integer/boolean/enum/oneOf 常量、标量数组、嵌套对象、
- * 键名不固定的对象（additionalProperties）、对象数组，以及各层的 required。
+ * 只覆盖面板能渲染的子集：string/number/integer/boolean/enum/oneOf 常量、标量数组、多选、嵌套对象、
+ * 键名不固定的对象（additionalProperties）、对象数组，以及各层的 required；x-showIf 藏起来的字段不查。
  * 未在 properties 里声明的键一律放行：插件可能自己存额外状态。
  */
 export function validateConfig(schema: JsonSchema | undefined, value: unknown): ConfigFieldError[] {
