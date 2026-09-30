@@ -6,6 +6,7 @@ import { dispatch, type DispatchReport } from './dispatcher.js'
 import { ensureReady } from './lifecycle.js'
 import type { PluginRegistry } from './registry.js'
 import { publicUrlFor } from './publicUrl.js'
+import { refIndexes } from './refIndex.js'
 import { buildSession, type Sender } from './session.js'
 import { kvTokenCache, profileOf, readBotConfig, readSnapshot } from './store.js'
 import type { BotConfig, ResolvedOptions, RuntimeEnv, Snapshot } from './types.js'
@@ -35,8 +36,15 @@ export class RequestScope {
     requestOrigin?: string,
   ): Promise<RequestScope> {
     const [snapshot, bot] = await Promise.all([readSnapshot(env), readBotConfig(env)])
+    // 机器人发出的每条消息（被动回复、ctx.api 主动发送）都记进 ref index 对照表，引用机器人的消息撤回时要用
     const api = bot
-      ? new QQBotClient({ appId: bot.appId, secret: bot.secret, tokenCache: kvTokenCache(env, bot.appId), fetchImpl: options.fetchImpl })
+      ? new QQBotClient({
+          appId: bot.appId,
+          secret: bot.secret,
+          tokenCache: kvTokenCache(env, bot.appId),
+          fetchImpl: options.fetchImpl,
+          onSent: (target, result) => refIndexes.rememberSent(target, result),
+        })
       : null
     const contexts = new ContextFactory({
       env,
@@ -81,6 +89,7 @@ export class RequestScope {
       botName: profile?.name ?? '',
       botAvatar: profile?.avatar ?? '',
       botAdmins: botAdminsOf(this.snapshot),
+      refIndexes,
       sender: counting,
       maxPassiveReplies: this.options.maxPassiveReplies,
     })

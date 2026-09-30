@@ -17,7 +17,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 | 富媒体：视频 / 语音 / 文件 | `{ media: { type: 'video' \| 'voice' \| 'file', url, filename } }` | 图 png/jpg、视频 mp4、语音 silk；软限 20–30MB |
 | 分片上传大文件（upload_prepare / part_finish） | raw | 文件 >200MB 才需要 |
 | 引用回复 `message_reference` | `{ quote: true }` 引用当前消息；`{ quote: refIndex }` 引用指定 | `session.refIndex` / `SendResult.refIndex` |
-| 收到引用消息（`message_type` 103） | `session.quote` | 被引用消息的 id（`message_reference.message_id`，没有再取 `msg_elements[0]` 的）、原文与附件（`msg_elements[0]`）、ref index（`message_scene.ext` 的 `ref_msg_idx`）。规则照 AstrBot 的 QQ 官方适配器，未单独线上实测 |
+| 收到引用消息（`message_type` 103） | `session.quote` | 原文与附件（`msg_elements[0]`，规则照 AstrBot 的 QQ 官方适配器）、ref index（`message_scene.ext` 的 `ref_msg_idx`，没有再取 `msg_elements[0].msg_idx`）。被引用消息的 id：频道看 `message_reference.message_id`；群、单聊的推送不带（腾讯官方适配器 openclaw-qqbot 的类型里没有；线上照 AstrBot 的字段取，拿到的是空的），运行时在内存里记「ref index → 消息 id」，收到的和机器人发出的消息都记，约 3 分钟，引用时拿 ref index 查。只查得到同一个 isolate 里见过的消息，查不到是空串，不写任何存储 |
 | 被动回复 `msg_id` + `msg_seq` | `session.reply()` | `msg_seq` 集中分配，默认上限 5 |
 | **被动回复 `event_id`** | `session.reply()` | 对 `GROUP_ADD_ROBOT`、`INTERACTION_CREATE`、`*_MSG_RECEIVE`、`FRIEND_ADD` 自动改用 event_id，不消耗主动额度；`session.canReply` 可判断 |
 | 主动消息 | `session.send(msg, target?)` / `ctx.api.sendMessage()` | 群聊需群主打开机器人的「主动消息」权限；单聊有频控 |

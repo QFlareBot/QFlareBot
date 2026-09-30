@@ -25,6 +25,7 @@ import {
 } from '@qqbot/sdk'
 import { toAttachments } from './attachments.js'
 import { buildQuote } from './quote.js'
+import type { RefIndexTable } from './refIndex.js'
 
 /** 出站抽象：真实环境是 QQBotClient，测试与 dry-run 用记录器 */
 export interface Sender {
@@ -42,6 +43,8 @@ export interface SessionOptions {
   botAvatar?: string
   /** Bot 管理员名单（见 botAdmins.ts），决定 session.isBotAdmin；不传当没有 */
   botAdmins?: readonly string[]
+  /** ref index → 消息 id 对照表：收到的消息记进去，引用消息从这里补 quote.messageId；不传就不记也不查 */
+  refIndexes?: RefIndexTable
   sender: Sender
   maxPassiveReplies: number
 }
@@ -163,7 +166,10 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   const timestamp =
     typeof d.timestamp === 'number' ? d.timestamp * 1000 : d.timestamp ? Date.parse(d.timestamp) || Date.now() : Date.now()
   const here: SendTarget = { scene, id: targetId }
-  const { sender } = options
+  const { sender, refIndexes } = options
+  const refIndex = extractRefIndex(d)
+  // 记下这条消息，之后有人引用它时才查得到消息 id
+  refIndexes?.remember(here, refIndex, messageId)
 
   // 同一条消息/事件的被动回复由这里统一编号
   let seq = 0
@@ -188,7 +194,6 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   const resolveQuote = (message: OutgoingMessage): OutgoingMessage => {
     if (typeof message === 'string' || message.quote !== true) return message
     const { quote: _q, ...rest } = message
-    const refIndex = extractRefIndex(d)
     return refIndex ? { ...rest, quote: refIndex } : rest
   }
 
@@ -210,8 +215,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     memberRole,
     isBotAdmin: userId !== '' && (options.botAdmins?.includes(userId) ?? false),
     messageId,
-    refIndex: extractRefIndex(d),
-    quote: buildQuote(d),
+    refIndex,
+    quote: buildQuote(d, refIndexes && ((ref) => refIndexes.lookup(here, ref))),
     canReply: passive() !== null,
     content: cleanContent(d.content),
     mentions,

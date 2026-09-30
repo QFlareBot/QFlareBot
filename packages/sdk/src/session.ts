@@ -23,10 +23,14 @@ export interface Mention {
 
 /**
  * 这条消息引用（回复）的那条消息，读自推送里的 `message_reference`、`msg_elements[0]`（`message_type` 为 103 时）
- * 与 `message_scene.ext` 的 `ref_msg_idx`。平台给多少就是多少，哪样没给就是空值。
+ * 与 `message_scene.ext` 的 `ref_msg_idx`。除了 `messageId` 可能由运行时补上，平台给多少就是多少，哪样没给就是空值。
  */
 export interface QuotedMessage {
-  /** 被引用消息的 id，撤回它就用这个：`session.recall(quote.messageId)`；平台没给时是空串 */
+  /**
+   * 被引用消息的 id，撤回它就用这个：`session.recall(quote.messageId)`。
+   * 群、单聊的推送不带这个 id，运行时拿 ref index 查自己在内存里记的对照表（收到和发出的消息都记，约 3 分钟）；
+   * 查不到时是空串：消息太早、机器人没收到过（群主没开全量消息时，群友不 @ 机器人的消息收不到），或落在了别的 isolate
+   */
   readonly messageId: string
   /** 被引用消息的原文，不去 `<@…>`、不去空白；平台没给时是空串 */
   readonly content: string

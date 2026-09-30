@@ -28,6 +28,8 @@ export interface QQBotClientOptions {
   tokenProvider?: TokenProvider
   fetchImpl?: typeof fetch
   baseUrl?: string
+  /** 每次 sendMessage 得到结果后调用（成败都调）；运行时用它记下机器人发出消息的 ref index → 消息 id */
+  onSent?: (target: SendTarget, result: SendResult) => void
 }
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -96,9 +98,11 @@ export class QQBotClient implements BotApi {
   private readonly tokens: TokenProvider
   private readonly fetchImpl: typeof fetch
   private readonly baseUrl: string
+  private readonly onSent: QQBotClientOptions['onSent']
 
   constructor(options: QQBotClientOptions) {
     this.appId = options.appId
+    this.onSent = options.onSent
     // 不能把全局 fetch 直接存成属性再 this.fetchImpl() 调用：workerd 会因 this 不是全局对象抛 Illegal invocation
     const impl = options.fetchImpl ?? fetch
     this.fetchImpl = (input, init) => impl(input, init)
@@ -224,7 +228,9 @@ export class QQBotClient implements BotApi {
       else if (options.eventId) body.event_id = options.eventId
     }
 
-    return toSendResult(await this.safeRaw<SendResponse>('POST', messagePath(target), body))
+    const result = toSendResult(await this.safeRaw<SendResponse>('POST', messagePath(target), body))
+    this.onSent?.(target, result)
+    return result
   }
 
   async typing(userOpenid: string, seconds = 10, options: SendOptions = {}): Promise<SendResult> {

@@ -41,6 +41,22 @@ describe('buildQuote（session.quote）', () => {
     expect(buildQuote(msg({ message_scene: { ext: ['ref_msg_idx=REFIDX_q'] } }))).toMatchObject({ messageId: '', refIndex: 'REFIDX_q' })
   })
 
+  it('推送不带 id 时拿 ref index 问 lookup；ref index 没在 ext 里就取 msg_elements[0].msg_idx', () => {
+    const lookup = (ref: string) => (ref === 'REFIDX_q' ? 'found' : undefined)
+    // 腾讯官方适配器类型里的群引用消息：没有 message_reference，被引用那条只有 msg_idx 和原文
+    const group = msg({ message_type: 103, msg_elements: [{ msg_idx: 'REFIDX_q', content: '原文' }] })
+    expect(buildQuote(group, lookup)).toEqual({ messageId: 'found', content: '原文', attachments: [], refIndex: 'REFIDX_q' })
+    expect(buildQuote(group)?.messageId).toBe('')
+    expect(buildQuote(msg({ message_scene: { ext: ['ref_msg_idx=REFIDX_other'] } }), lookup)?.messageId).toBe('')
+    // 推送自带 id 时不查
+    expect(buildQuote(msg({ message_reference: { message_id: 'r1' }, message_scene: { ext: ['ref_msg_idx=REFIDX_q'] } }), lookup)?.messageId).toBe('r1')
+  })
+
+  it('message_reference 里是 ref index 时不当消息 id', () => {
+    const quote = buildQuote(msg({ message_reference: { message_id: 'REFIDX_q' } }), () => 'found')
+    expect(quote).toMatchObject({ messageId: 'found', refIndex: 'REFIDX_q' })
+  })
+
   it('没引用、形状不对都是 undefined，不抛', () => {
     expect(buildQuote(msg({}))).toBeUndefined()
     expect(buildQuote(msg({ message_scene: { ext: ['msg_idx=REFIDX_self'] } }))).toBeUndefined()

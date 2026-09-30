@@ -196,7 +196,7 @@ buttons: {
 
 `session` 只读字段（完整类型见 `@qqbot/sdk`）：
 
-- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`）
+- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`。群、单聊的推送不带被引用消息的 id，`messageId` 是运行时拿 ref index 查内存里的对照表补上的，只有约 3 分钟内、机器人收到过或发出的消息查得到，查不到是空串，要准备好这种情况）
 - **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
 - **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）

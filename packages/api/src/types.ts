@@ -51,9 +51,10 @@ export interface RawMessageEvent {
   message_scene?: { source?: string; ext?: string[] }
   /** 103 是引用消息：被引用的那条放在 msg_elements[0] */
   message_type?: number
-  /** 被引用消息的 id */
+  /** 被引用消息的 id。群、单聊的引用消息没有这个字段，只有 ext 里的 ref_msg_idx（见腾讯官方适配器 openclaw-qqbot 的类型） */
   message_reference?: { message_id?: string }
-  msg_elements?: Array<{ id?: string; message_id?: string; content?: string; attachments?: RawAttachment[] }>
+  /** 被引用的那条：腾讯官方适配器的类型里只有 msg_idx、原文和附件，没有消息 id；id / message_id 照 AstrBot 也读 */
+  msg_elements?: Array<{ id?: string; message_id?: string; msg_idx?: string; content?: string; attachments?: RawAttachment[] }>
   [key: string]: unknown
 }
 
