@@ -17,16 +17,16 @@ describe('RefIndexTable', () => {
     expect(table.lookup({ scene: 'c2c', id: 'G1' }, 'REFIDX_a', 1000)).toBeUndefined()
   })
 
-  it('约 3 分钟后查不到，过期的在下次记的时候清掉', () => {
+  it('2 分钟后查不到，过期的在下次记的时候清掉', () => {
     const table = new RefIndexTable()
     table.remember(G1, 'REFIDX_old', 'old', 0)
-    expect(table.lookup(G1, 'REFIDX_old', 179_999)).toBe('old')
-    expect(table.lookup(G1, 'REFIDX_old', 180_000)).toBeUndefined()
+    expect(table.lookup(G1, 'REFIDX_old', 119_999)).toBe('old')
+    expect(table.lookup(G1, 'REFIDX_old', 120_000)).toBeUndefined()
 
     table.remember(G1, 'REFIDX_x', 'x', 0)
-    table.remember(G1, 'REFIDX_y', 'y', 200_000)
+    table.remember(G1, 'REFIDX_y', 'y', 130_000)
     expect(table.size).toBe(1)
-    expect(table.lookup(G1, 'REFIDX_y', 200_000)).toBe('y')
+    expect(table.lookup(G1, 'REFIDX_y', 130_000)).toBe('y')
   })
 
   it('缺目标、ref index 或消息 id 的不记；发送失败的不记', () => {

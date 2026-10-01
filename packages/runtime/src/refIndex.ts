@@ -1,7 +1,7 @@
 import type { SendResult, SendTarget } from '@qqbot/sdk'
 
-/** 平台只允许撤回 2 分钟内的消息，多留 1 分钟余量 */
-const TTL_MS = 3 * 60_000
+/** 平台只允许撤回发出 2 分钟内的消息，更早的查到 id 也撤不回。收到时才记，比发出时晚一点，不用另留余量 */
+const TTL_MS = 2 * 60_000
 /** 条数上限：一条约几百字节，满了先丢最早的 */
 const MAX_ENTRIES = 5000
 

@@ -28,8 +28,8 @@ export interface Mention {
 export interface QuotedMessage {
   /**
    * 被引用消息的 id，撤回它就用这个：`session.recall(quote.messageId)`。
-   * 群、单聊的推送不带这个 id，运行时拿 ref index 查自己在内存里记的对照表（收到和发出的消息都记，约 3 分钟）；
-   * 查不到时是空串：消息太早、机器人没收到过（群主没开全量消息时，群友不 @ 机器人的消息收不到），或落在了别的 isolate
+   * 群、单聊的推送不带这个 id，运行时拿 ref index 查自己在内存里记的对照表（收到和发出的消息都记，留 2 分钟，和平台的撤回时限一样）；
+   * 查不到时是空串：消息超过 2 分钟、机器人没收到过（群主没开全量消息时，群友不 @ 机器人的消息收不到），或落在了别的 isolate
    */
   readonly messageId: string
   /** 被引用消息的原文，不去 `<@…>`、不去空白；平台没给时是空串 */
