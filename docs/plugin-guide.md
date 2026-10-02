@@ -198,6 +198,7 @@ buttons: {
 
 - **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`。群、单聊的推送不带被引用消息的 id，`messageId` 是运行时拿 ref index 查内存里的对照表补上的，只有 2 分钟内（和平台的撤回时限一样）、机器人收到过或发出的消息查得到，查不到是空串，要准备好这种情况）
 - **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
+- **展示或交给 AI 的正文**：用 `session.displayContent ?? session.content`，保留其他人的 @ 和位置，有名字时显示 `@名字`，未知对象保留原始标记；只移除能确认是本机器人的提及。QQ 的编码表情会转为可读描述，坏数据显示 `[表情]`。原有 `content` 和命令匹配规则不变，原始数据仍在 `raw`。
 - **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 
@@ -224,6 +225,10 @@ buttons: {
 `keyboard` 会自动把消息升级为 markdown（平台要求）。按键的 `id` 对应 `buttons` 匹配器的键；按键处理器返回数字即回应平台（0 成功 · 4 无权限 …），返回消息则回复并自动 ack——客户端永远不会转圈。
 
 辅助：`session.typing(seconds)`（仅单聊，≤60s；占用一个 `msg_seq`，但不计入被动回复的条数上限）、`session.stream()`（仅单聊流式，群聊退化为 end 时一次性回复）、`session.recall(id?)`（不传撤回自己最后一条，平台限 2 分钟内）。
+
+流式写入首片立即发送，后续按 500ms 合并；`write()` 返回 `ok: true, status: 0` 表示已缓冲，必须 `await end()` 发完缓冲并检查最终结果。一个流共用一个消息序号，只占一条被动回复额度；发送失败后停止续片，重复 `end()` 不重复发送，结束后 `write()` 返回失败。
+
+原生 Markdown 被明确拒绝时，普通 Markdown 消息会降级为纯文本，优先使用消息对象的 `text`，否则使用 `markdown.content`；保留原来的回复凭据和序号。带键盘或模板的消息直接返回失败，避免静默丢掉交互或模板内容。发送结果可通过 `code`、`traceId`、`raw` 查看平台错误，包括上传阶段的错误。请求的超时与重试规则见[错误语义](./capabilities.md#错误语义)。
 
 处理器有时限：一次事件的全部处理（所有插件加起来）在给 QQ 回 ACK 之后只有 30 秒，慢活要自己拆，见[第 9 节](#_9-平台限额-免费版的硬预算)。
 

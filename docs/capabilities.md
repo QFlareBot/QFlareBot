@@ -11,11 +11,11 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 | 平台能力 | 暴露方式 | 备注 |
 | --- | --- | --- |
 | 文本 `msg_type 0` | `session.reply('text')` / `{ text }` | |
-| Markdown `msg_type 2` | `{ markdown: { content } }` | 模板 `customTemplateId` + `params` 已废弃但可传 |
+| Markdown `msg_type 2` | `{ markdown: { content } }` | 原生 Markdown 权限被明确拒绝时自动退回纯文本；带键盘/模板不降级。模板 `customTemplateId` + `params` 已废弃但可传 |
 | **内嵌按键 keyboard** | `{ text, keyboard }` 或 `{ markdown, keyboard }` | 平台要求挂在 markdown 上，只给 text 时自动升级；`keyboard()` / `button.*` builder 见 `@qqbot/sdk` |
 | 富媒体 `msg_type 7`：图片 | `{ image: { url \| base64 } }` | |
 | 富媒体：视频 / 语音 / 文件 | `{ media: { type: 'video' \| 'voice' \| 'file', url, filename } }` | 图 png/jpg、视频 mp4、语音 silk；软限 20–30MB |
-| 分片上传大文件（upload_prepare / part_finish） | raw | 文件 >200MB 才需要 |
+| 分片上传大文件（upload_prepare / part_finish） | raw | 暂无高层封装；当前使用 URL/base64。官方列出的 200MB 是硬上限，不是分片起点 |
 | 引用回复 `message_reference` | `{ quote: true }` 引用当前消息；`{ quote: refIndex }` 引用指定 | `session.refIndex` / `SendResult.refIndex` |
 | 收到引用消息（`message_type` 103） | `session.quote` | 原文与附件（`msg_elements[0]`，规则照 AstrBot 的 QQ 官方适配器）、ref index（`message_scene.ext` 的 `ref_msg_idx`，没有再取 `msg_elements[0].msg_idx`）。被引用消息的 id：频道看 `message_reference.message_id`；群、单聊的推送不带（腾讯官方适配器 openclaw-qqbot 的类型里没有；线上照 AstrBot 的字段取，拿到的是空的），运行时在内存里记「ref index → 消息 id」，收到的和机器人发出的消息都记，留 2 分钟（平台只能撤回 2 分钟内的消息），引用时拿 ref index 查。只查得到同一个 isolate 里见过的消息，查不到是空串，不写任何存储 |
 | 被动回复 `msg_id` + `msg_seq` | `session.reply()` | `msg_seq` 集中分配，默认上限 5 |
@@ -23,7 +23,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 | 主动消息 | `session.send(msg, target?)` / `ctx.api.sendMessage()` | 群聊需群主打开机器人的「主动消息」权限；单聊有频控 |
 | 互动召回 `is_wakeup` | `ctx.api.sendMessage(t, msg, { wakeup: true })` | 仅单聊 |
 | 输入中状态 `input_notify` | `session.typing(seconds)` | 仅单聊，≤60s |
-| **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊；群聊自动退化为 end 时一次性回复 |
+| **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊，首片立即发送，后续按 500ms 合并；一个流共用一个 msg_seq、占一条回复额度；必须 await end；群聊退化为 end 时一次性回复 |
 | 撤回 | `session.recall(id?)` / `ctx.api.recallMessage()` | 2 分钟内；群管理员可撤成员消息 |
 | **用户头像**（官方 CDN 规范） | `session.avatarUrl`（640） / `qqAvatar(botId, openid, size)` | 纯拼接 `thirdqq.qlogo.cn/qqapp/{botId}/{openid}/{size}`（size 40/100/140/640），不发请求、无缓存 |
 | **@ 提及**（拼接文本） | `qqAt(openid)` → `<@openid>` | 放进 text / markdown content 即可；`session.mentions` 反向读取消息里 @ 了谁 |
@@ -35,7 +35,7 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 
 | 平台事件 | 事件名 | Session 字段 |
 | --- | --- | --- |
-| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、attachments、refIndex、quote、mentions、atMe、memberRole |
+| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、displayContent、attachments、refIndex、quote、mentions、atMe、memberRole |
 | C2C_MESSAGE_CREATE | `qq.c2c.message` | 同上 |
 | AT_MESSAGE_CREATE / MESSAGE_CREATE / DIRECT_MESSAGE_CREATE | `qq.guild.*` | |
 | GROUP_ADD_ROBOT / GROUP_DEL_ROBOT | `qq.group.robot_added` / `robot_removed` | canReply（event_id） |
@@ -84,7 +84,9 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 
 ## 错误语义
 
-非 2xx 统一抛 `QQApiError`（结果型方法转为 `SendResult.error`，不再抛）。message 由 `describeApiError` 生成：平台 message 优先，附加已收录错误码/状态码的中文说明与错误码原值（如 `主动消息失败, 无权限（错误码 40034）`）。`err.code` / `err.traceId` / `err.body` 可取原始信息；已知码表在 `@qqbot/api` 的 `errors.ts`，遇到新错误码欢迎补录。
+类型化方法在 HTTP 或业务错误时抛 `QQApiError`（结果型方法转为 `SendResult`，不再抛；`raw` 仍返回原始状态和数据）。message 由 `describeApiError` 生成：平台 message 优先，附加已收录错误码/状态码的中文说明与错误码原值（如 `主动消息失败, 无权限（错误码 40034）`）。`err.code` / `err.traceId` / `err.body` 可取原始信息；结果型方法也保留 `status` / `code` / `traceId` / `raw`，包括媒体上传失败。业务码兼容 `code` / `err_code` / `biz_code`，traceId 同时读取响应体和 `X-Tps-trace-ID`。
+
+单次尝试最多 8 秒，包含取凭证、发送请求与读完响应；一次 `sendMessage` 的上传、重试和 Markdown 降级共用 20 秒预算。401 最多刷新凭证重试一次；读取、仅上传文件和带去重凭据的被动消息遇到临时错误最多重试一次，保持原消息序号。主动消息、append 流式分片和通用写操作遇到网络结果不明时不重放；权限、限流与额度错误直接返回。流式发送失败后停止续片，错误通过后续 `write()` / `end()` 返回。以上预算不延长事件处理的 30 秒时限。
 
 ## 未验证项
 

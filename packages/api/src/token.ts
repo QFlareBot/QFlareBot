@@ -1,4 +1,5 @@
-import { QQApiError } from './errors.js'
+import { apiFailed, QQApiError } from './errors.js'
+import { requestJson } from './request.js'
 
 export interface CachedToken {
   token: string
@@ -52,16 +53,17 @@ export function createTokenProvider(options: TokenProviderOptions): TokenProvide
   const tokenUrl = options.tokenUrl ?? 'https://api.bot.qq.com/app/getAppAccessToken'
   const skew = options.skewSeconds ?? 60
   const key = `${tokenUrl}\n${options.appId}\n${options.secret}`
+  let invalidated = false
 
   async function refresh(): Promise<string> {
-    const res = await fetchImpl(tokenUrl, {
+    const res = await requestJson(fetchImpl, tokenUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ appId: options.appId, clientSecret: options.secret }),
-    })
-    const data = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number | string }
-    if (!res.ok || !data.access_token) {
-      throw new QQApiError(res.status, data, '获取 AccessToken 失败，请检查 AppID 与 AppSecret')
+    }, { retry: true })
+    const data = (res.data ?? {}) as { access_token?: string; expires_in?: number | string }
+    if (apiFailed(res.status, data) || !data.access_token) {
+      throw new QQApiError(res.status, data, '获取 AccessToken 失败，请检查 AppID 与 AppSecret', res.traceId)
     }
     const expiresIn = Number(data.expires_in) || 7200
     try {
@@ -75,20 +77,24 @@ export function createTokenProvider(options: TokenProviderOptions): TokenProvide
 
   return {
     async get() {
-      const cached = await cache.get()
+      const cached = invalidated ? null : await cache.get()
       if (cached && cached.expiresAt - skew > Date.now() / 1000) return cached.token
       let task = inflight.get(key)
       if (!task) {
         task = refresh().finally(() => inflight.delete(key))
         inflight.set(key, task)
       }
-      return task
+      const token = await task
+      invalidated = false
+      return token
     },
     async invalidate() {
+      // KV 写失败或读到旧副本时，本客户端也必须跳过旧 token。
+      invalidated = true
       try {
         await cache.set({ token: '', expiresAt: 0 })
       } catch {
-        // 作废没写进去只是下次还拿旧 token 撞一次 401，不该让调用方（发消息）跟着抛错
+        // 本实例仍会强制刷新，不让缓存故障阻止发送恢复。
       }
     },
   }

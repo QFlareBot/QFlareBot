@@ -203,7 +203,7 @@ describe('结果型方法不抛异常', () => {
     const f: FetchMock = vi.fn(async () => jsonResponse({ code: 10001, message: 'invalid appid or secret' }, 400))
     const c = new QQBotClient({ appId: 'a', secret: 's', fetchImpl: f })
     const r = await c.sendMessage({ scene: 'group', id: 'G' }, 'x')
-    expect(r).toMatchObject({ ok: false, status: 0, error: 'invalid appid or secret（错误码 10001）' })
+    expect(r).toMatchObject({ ok: false, status: 400, code: 10001, raw: { code: 10001 }, error: 'invalid appid or secret（错误码 10001）' })
     expect(await c.ackInteraction('I')).toBe(false)
     expect(await c.recallMessage({ scene: 'group', id: 'G' }, 'M')).toBe(false)
   })

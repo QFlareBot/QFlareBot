@@ -718,6 +718,7 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
         event: session.event,
         scene: session.scene,
         content: session.content,
+        displayContent: session.displayContent,
         userId: session.userId,
         canReply: session.canReply,
         interaction: session.interaction ? { type: session.interaction.type, buttonId: session.interaction.buttonId } : null,

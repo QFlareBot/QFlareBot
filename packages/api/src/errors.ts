@@ -24,15 +24,39 @@ const STATUS_HINTS: Record<number, string> = {
   429: '触发平台限流，请稍后重试',
 }
 
+/** QQ 的不同接口使用 code / err_code / biz_code，统一成数字供错误分类。 */
+export function apiErrorCode(body: unknown): number | undefined {
+  if (!body || typeof body !== 'object') return undefined
+  const b = body as Record<string, unknown>
+  const value = b.code ?? b.err_code ?? b.biz_code
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) return undefined
+  const code = Number(value)
+  return Number.isFinite(code) ? code : undefined
+}
+
+export function apiFailed(status: number, body: unknown): boolean {
+  const code = apiErrorCode(body)
+  return status <= 0 || status >= 300 || (code !== undefined && code !== 0)
+}
+
+/** 50056 是官方的原生 Markdown 权限错误；旧接口有时只返回这句明确拒绝。 */
+export function isMarkdownDenied(body: unknown): boolean {
+  if (apiErrorCode(body) === 50056) return true
+  if (!body || typeof body !== 'object') return false
+  const message = (body as { message?: unknown }).message
+  return typeof message === 'string' && /不允许发送原生\s*markdown/i.test(message)
+}
+
 /**
  * 把平台错误整理成一句可读文案：平台 message 优先，附加已知错误码/状态码说明与错误码原值。
  * 结果型方法（sendMessage 等）用它生成 `SendResult.error`，`QQApiError.message` 也来自这里。
  */
 export function describeApiError(status: number, body: unknown, fallback?: string): string {
-  const b = (body ?? {}) as { message?: string; code?: number }
-  const hint = (b.code !== undefined ? CODE_HINTS[b.code] : undefined) ?? STATUS_HINTS[status]
+  const b = (body ?? {}) as { message?: string }
+  const errorCode = apiErrorCode(body)
+  const hint = (errorCode !== undefined ? CODE_HINTS[errorCode] : undefined) ?? STATUS_HINTS[status]
   const message = b.message ?? fallback ?? `HTTP ${status}`
-  const code = b.code !== undefined ? `（错误码 ${b.code}）` : ''
+  const code = errorCode !== undefined ? `（错误码 ${errorCode}）` : ''
   return hint ? `${message}${code}：${hint}` : `${message}${code}`
 }
 
@@ -42,13 +66,13 @@ export class QQApiError extends Error {
   readonly traceId: string | undefined
   readonly body: unknown
 
-  constructor(status: number, body: unknown, fallback: string) {
-    const b = (body ?? {}) as { code?: number; trace_id?: string }
+  constructor(status: number, body: unknown, fallback: string, traceId?: string) {
+    const b = (body ?? {}) as { trace_id?: string }
     super(describeApiError(status, body, fallback))
     this.name = 'QQApiError'
     this.status = status
-    this.code = b.code
-    this.traceId = b.trace_id
+    this.code = apiErrorCode(body)
+    this.traceId = b.trace_id ?? traceId
     this.body = body
   }
 }

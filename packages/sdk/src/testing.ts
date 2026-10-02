@@ -33,6 +33,7 @@ const DEFAULT_MAX_PASSIVE_REPLIES = 5
 
 export interface MockSessionOptions {
   content?: string
+  displayContent?: string
   scene?: Scene
   event?: EventName
   rawType?: string
@@ -147,6 +148,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     },
     canReply: true,
     content: options.content ?? '',
+    displayContent: options.displayContent ?? options.content ?? '',
     // 默认事件是 at_message（已被 @），atMe 跟着默认走
     mentions: options.mentions ?? [],
     atMe: options.atMe ?? true,
@@ -170,15 +172,24 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
       return OK
     },
     stream(): StreamWriter {
+      const chunks: string[] = []
+      let ended: SendResult | undefined
       return {
         messageId: 'mock-stream',
         async write(chunk) {
+          if (ended) return { ok: false, status: 0, error: '流式消息已结束，不能继续写入', raw: null }
           streamed.push(chunk)
+          chunks.push(chunk)
           return OK
         },
         async end(chunk) {
-          if (chunk) streamed.push(chunk)
-          return passiveReply(streamed.join(''))
+          if (ended) return ended
+          if (chunk) {
+            streamed.push(chunk)
+            chunks.push(chunk)
+          }
+          ended = chunks.join('') ? passiveReply(chunks.join('')) : { ok: true, status: 0, raw: null }
+          return ended
         },
       }
     },

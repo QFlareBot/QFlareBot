@@ -15,7 +15,7 @@ function setup(payload: WebhookPayload) {
   const calls: Array<{ kind: Kind; options: SendOptions | undefined }> = []
   const record = (kind: Kind, options: SendOptions | undefined) => {
     calls.push({ kind, options })
-    return OK
+    return { ...OK, messageId: 'sent' }
   }
   const sender: Sender = {
     sendMessage: async (_t, _m, options) => record('reply', options),
@@ -54,7 +54,7 @@ describe('session.typing 的 msg_seq', () => {
     expect(calls.filter((c) => c.kind === 'reply').map((c) => c.options?.msgSeq)).toEqual([3, 4, 5, 6, 7])
   })
 
-  it('stream 与 typing、回复共用序号，计数方式不变', async () => {
+  it('一个流占一个序号，与 typing、普通回复不撞号', async () => {
     const { session, calls } = setup(c2cMessage)
     await session.typing()
     const w = session.stream()
@@ -64,8 +64,8 @@ describe('session.typing 的 msg_seq', () => {
     expect(calls.map((c) => [c.kind, c.options?.msgSeq])).toEqual([
       ['typing', 1],
       ['stream', 2],
-      ['stream', 3],
-      ['reply', 4],
+      ['stream', 2],
+      ['reply', 3],
     ])
   })
 

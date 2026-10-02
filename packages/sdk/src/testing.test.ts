@@ -163,6 +163,19 @@ describe('mock session.reply 有线上的被动回复上限', () => {
     expect(session.typingSeconds).toEqual([5])
   })
 
+  it('流的缓冲互相独立，结束幂等，关闭后不可写入', async () => {
+    const session = createMockSession({ maxPassiveReplies: 2 })
+    const a = session.stream()
+    const b = session.stream()
+    await a.write('a')
+    await b.write('b')
+    await a.end('1')
+    await a.end('不能重复发送')
+    expect((await a.write('关闭后')).ok).toBe(false)
+    expect((await b.end('2')).ok).toBe(true)
+    expect(session.replies).toEqual(['a1', 'b2'])
+  })
+
   it('runCommand：生成器连发超过上限，多出来的发不出去', async () => {
     const p = definePlugin({
       name: 'spam',

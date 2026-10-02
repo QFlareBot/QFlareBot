@@ -41,6 +41,19 @@ describe('token 缓存写失败', () => {
     const provider = createTokenProvider({ appId: 'a', secret: 's', cache, fetchImpl: vi.fn(async () => tokenResponse()) })
     await expect(provider.invalidate()).resolves.toBeUndefined()
   })
+
+  it('invalidate 后即使缓存一直返回旧值，也会请求新 token', async () => {
+    const cache: TokenCache = {
+      get: async () => ({ token: 'old', expiresAt: Date.now() / 1000 + 3600 }),
+      set: async () => { throw new Error('KV unavailable') },
+    }
+    const fetchImpl = vi.fn(async () => tokenResponse())
+    const provider = createTokenProvider({ appId: 'stale-cache', secret: 's', cache, fetchImpl })
+    expect(await provider.get()).toBe('old')
+    await provider.invalidate()
+    expect(await provider.get()).toBe('tok')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('并发换 token', () => {

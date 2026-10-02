@@ -13,7 +13,8 @@ import type {
   StreamChunkOptions,
   UploadedMedia,
 } from '@qqbot/sdk'
-import { describeApiError, QQApiError } from './errors.js'
+import { apiErrorCode, apiFailed, describeApiError, isMarkdownDenied, QQApiError } from './errors.js'
+import { REQUEST_BUDGET_MS, requestJson, type JsonResponse } from './request.js'
 import { createGroupApi } from './group.js'
 import { createTokenProvider, type TokenCache, type TokenProvider } from './token.js'
 import { FileType, MsgType } from './types.js'
@@ -73,15 +74,29 @@ function toMedia(media: MediaSource | ImageSource): MediaSource {
   return 'type' in media ? media : { type: 'image', ...media }
 }
 
-type SendResponse = { id?: string; message?: string; ext_info?: { ref_idx?: string } }
+type SendResponse = { id?: string; message?: string; trace_id?: string; ext_info?: { ref_idx?: string } }
 
-function toSendResult(res: { status: number; data: SendResponse | null; error?: string }): SendResult {
-  const ok = res.status > 0 && res.status < 300
+function toSendResult(res: JsonResponse & { error?: string }): SendResult {
+  const data = res.data as SendResponse | null
+  const ok = res.error === undefined && !apiFailed(res.status, data)
   const result: SendResult = { ok, status: res.status, raw: res.data }
-  if (res.data?.id) result.messageId = res.data.id
-  if (res.data?.ext_info?.ref_idx) result.refIndex = res.data.ext_info.ref_idx
+  if (data?.id) result.messageId = data.id
+  if (data?.ext_info?.ref_idx) result.refIndex = data.ext_info.ref_idx
+  const code = apiErrorCode(res.data)
+  if (code !== undefined) result.code = code
+  const traceId = data?.trace_id ?? res.traceId
+  if (traceId) result.traceId = traceId
   if (!ok) result.error = res.error ?? describeApiError(res.status, res.data)
   return result
+}
+
+function failedRequest(error: unknown): JsonResponse & { error: string } {
+  return {
+    status: error instanceof QQApiError ? error.status : 0,
+    data: error instanceof QQApiError ? error.body : null,
+    ...(error instanceof QQApiError && error.traceId ? { traceId: error.traceId } : {}),
+    error: error instanceof Error ? error.message : String(error),
+  }
 }
 
 /** 被动回复凭据：msg_id / event_id / is_wakeup 三者互斥 */
@@ -119,44 +134,47 @@ export class QQBotClient implements BotApi {
   }
 
   async raw<T = unknown>(method: HttpMethod, path: string, body?: unknown): Promise<{ status: number; data: T }> {
-    const token = await this.tokens.get()
-    const res = await this.fetchImpl(this.baseUrl + path, {
-      method,
-      headers: {
-        authorization: `QQBot ${token}`,
-        'content-type': 'application/json',
-        'x-union-appid': this.appId,
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    })
-    const text = await res.text()
-    let data: unknown = null
-    if (text) {
-      try {
-        data = JSON.parse(text)
-      } catch {
-        data = { raw: text }
+    const res = await this.request(method, path, body)
+    return { status: res.status, data: res.data as T }
+  }
+
+  private request(method: HttpMethod, path: string, body?: unknown, deadline?: number): Promise<JsonResponse> {
+    const b = (body ?? {}) as Record<string, unknown>
+    // 消息重试沿用原 msg_id/event_id + msg_seq；主动消息和通用写操作没有去重凭据，不重放。
+    const message = method === 'POST' && /\/messages$/.test(path) &&
+      !!(b.msg_id || b.event_id) && typeof b.msg_seq === 'number'
+    // append 流在网络中断时无法确认分片是否已追加，交给流状态机停止，避免重复文本。
+    const upload = method === 'POST' && /\/files$/.test(path) && b.srv_send_msg === false
+    const json = body === undefined ? null : JSON.stringify(body)
+    return requestJson(this.fetchImpl, this.baseUrl + path, async (refreshToken) => {
+      if (refreshToken) await this.tokens.invalidate()
+      const token = await this.tokens.get()
+      return {
+        method,
+        headers: {
+          authorization: `QQBot ${token}`,
+          'content-type': 'application/json',
+          'x-union-appid': this.appId,
+        },
+        body: json,
       }
-    }
-    // token 失效时刷新，下次调用自动重取
-    if (res.status === 401) await this.tokens.invalidate()
-    return { status: res.status, data: data as T }
+    }, { retry: method === 'GET' || message || upload, refreshToken: true, ...(deadline !== undefined ? { deadline } : {}) })
   }
 
   /** raw 的兜底版本：token 获取失败等异常转成失败结果，供返回 SendResult 的方法使用 */
-  private async safeRaw<T = unknown>(method: HttpMethod, path: string, body?: unknown): Promise<{ status: number; data: T | null; error?: string }> {
+  private async safeRaw(method: HttpMethod, path: string, body?: unknown, deadline?: number): Promise<JsonResponse & { error?: string }> {
     try {
-      return await this.raw<T>(method, path, body)
+      return await this.request(method, path, body, deadline)
     } catch (err) {
-      return { status: 0, data: null, error: err instanceof Error ? err.message : String(err) }
+      return failedRequest(err)
     }
   }
 
-  /** raw 的抛错版本：非 2xx 抛 QQApiError */
+  /** raw 的抛错版本：HTTP 或业务错误抛 QQApiError */
   async call<T = unknown>(method: HttpMethod, path: string, body?: unknown, what = path): Promise<T> {
-    const { status, data } = await this.raw<T>(method, path, body)
-    if (status >= 300) throw new QQApiError(status, data, `${what} 失败 (HTTP ${status})`)
-    return data
+    const { status, data, traceId } = await this.request(method, path, body)
+    if (apiFailed(status, data)) throw new QQApiError(status, data, `${what} 失败 (HTTP ${status})`, traceId)
+    return data as T
   }
 
   /** 机器人自身资料（GET /users/@me）；调用频率由插件自己控制，框架不做缓存 */
@@ -165,6 +183,10 @@ export class QQBotClient implements BotApi {
   }
 
   async uploadMedia(target: SendTarget, source: MediaSource | ImageSource): Promise<UploadedMedia> {
+    return this.upload(target, source, Date.now() + REQUEST_BUDGET_MS)
+  }
+
+  private async upload(target: SendTarget, source: MediaSource | ImageSource, deadline: number): Promise<UploadedMedia> {
     const media = toMedia(source)
     if (!media.url && !media.base64) throw new Error('富媒体需提供 url 或 base64')
     const body: Record<string, unknown> = {
@@ -174,17 +196,15 @@ export class QQBotClient implements BotApi {
     }
     if (media.filename) body.file_name = media.filename
 
-    const data = await this.call<{ file_info?: string; file_uuid?: string; ttl?: number }>(
-      'POST',
-      filesPath(target),
-      body,
-      '上传富媒体',
-    )
-    if (!data?.file_info) throw new QQApiError(200, data, '上传富媒体未返回 file_info')
+    const res = await this.request('POST', filesPath(target), body, deadline)
+    if (apiFailed(res.status, res.data)) throw new QQApiError(res.status, res.data, '上传富媒体失败', res.traceId)
+    const data = res.data as { file_info?: string; file_uuid?: string; ttl?: number } | null
+    if (!data?.file_info) throw new QQApiError(res.status, data, '上传富媒体未返回 file_info', res.traceId)
     return { fileInfo: data.file_info, fileUuid: data.file_uuid ?? '', ttl: data.ttl ?? 0 }
   }
 
   async sendMessage(target: SendTarget, message: OutgoingMessage, options: SendOptions = {}): Promise<SendResult> {
+    const deadline = Date.now() + REQUEST_BUDGET_MS
     const msg = normalizeMessage(message)
     const body: Record<string, unknown> = {}
     const media = msg.media ?? (msg.image ? toMedia(msg.image) : undefined)
@@ -193,9 +213,9 @@ export class QQBotClient implements BotApi {
       if (media) {
         let uploaded: UploadedMedia
         try {
-          uploaded = await this.uploadMedia(target, media)
+          uploaded = await this.upload(target, media, deadline)
         } catch (err) {
-          return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err), raw: null }
+          return toSendResult(failedRequest(err))
         }
         body.msg_type = MsgType.Media
         body.media = { file_info: uploaded.fileInfo }
@@ -228,14 +248,26 @@ export class QQBotClient implements BotApi {
       else if (options.eventId) body.event_id = options.eventId
     }
 
-    const result = toSendResult(await this.safeRaw<SendResponse>('POST', messagePath(target), body))
+    const path = messagePath(target)
+    let response = await this.safeRaw('POST', path, body, deadline)
+    const markdown = body.markdown as { content?: string } | undefined
+    // 只在明确的原生 Markdown 权限拒绝时降级；键盘/模板不能静默丢失交互或内容。
+    if (apiFailed(response.status, response.data) && isMarkdownDenied(response.data) &&
+      !msg.keyboard && !msg.markdown?.customTemplateId && markdown?.content) {
+      const fallback = { ...body }
+      delete fallback.markdown
+      fallback.content = msg.text || markdown.content
+      if (isV2Scene(target.scene)) fallback.msg_type = MsgType.Text
+      response = await this.safeRaw('POST', path, fallback, deadline)
+    }
+    const result = toSendResult(response)
     this.onSent?.(target, result)
     return result
   }
 
   async typing(userOpenid: string, seconds = 10, options: SendOptions = {}): Promise<SendResult> {
     return toSendResult(
-      await this.safeRaw<SendResponse>('POST', `/v2/users/${userOpenid}/messages`, {
+      await this.safeRaw('POST', `/v2/users/${userOpenid}/messages`, {
         msg_type: MsgType.InputNotify,
         input_notify: { input_type: 1, input_second: Math.min(60, Math.max(1, Math.round(seconds))) },
         ...passiveFields(options),
@@ -253,7 +285,9 @@ export class QQBotClient implements BotApi {
       ...passiveFields(options),
     }
     if (options.streamId) body.stream_msg_id = options.streamId
-    return toSendResult(await this.safeRaw<SendResponse>('POST', `/v2/users/${userOpenid}/stream_messages`, body))
+    const result = toSendResult(await this.safeRaw('POST', `/v2/users/${userOpenid}/stream_messages`, body))
+    this.onSent?.({ scene: 'c2c', id: userOpenid }, result)
+    return result
   }
 
   async recallMessage(target: SendTarget, messageId: string): Promise<boolean> {
@@ -266,12 +300,12 @@ export class QQBotClient implements BotApi {
             ? `/channels/${target.id}/messages/${messageId}?hidetip=true`
             : null
     if (!path) return false
-    const { status } = await this.safeRaw('DELETE', path)
-    return status > 0 && status < 300
+    const { status, data, error } = await this.safeRaw('DELETE', path)
+    return error === undefined && !apiFailed(status, data)
   }
 
   async ackInteraction(interactionId: string, code: InteractionCode = 0): Promise<boolean> {
-    const { status } = await this.safeRaw('PUT', `/interactions/${interactionId}`, { code })
-    return status > 0 && status < 300
+    const { status, data, error } = await this.safeRaw('PUT', `/interactions/${interactionId}`, { code })
+    return error === undefined && !apiFailed(status, data)
   }
 }

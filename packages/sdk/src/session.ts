@@ -105,15 +105,19 @@ export interface SendResult {
   /** 供他人引用本条消息的 ref index（ext_info.ref_idx） */
   refIndex?: string
   error?: string
+  /** 平台业务错误码；网络错误没有此字段 */
+  code?: number
+  /** QQ 链路追踪 ID，来自响应体或 X-Tps-trace-ID */
+  traceId?: string
   /** OpenAPI 原始响应体 */
   raw: unknown
 }
 
 /** 流式消息写入器（仅单聊） */
 export interface StreamWriter {
-  /** 追加一段文本并下发 */
+  /** 追加文本；首片立即发送，其余按 500ms 合并。ok=true/status=0 表示已缓冲，尚未发出 */
   write(chunk: string): Promise<SendResult>
-  /** 结束流；可附带最后一段 */
+  /** 必须 await：发完缓冲并结束流，返回最终结果；重复调用返回同一结果，结束后不能 write */
   end(chunk?: string): Promise<SendResult>
   readonly messageId: string | undefined
 }
@@ -206,6 +210,11 @@ export interface Session {
   readonly canReply: boolean
   /** 去掉 @ 与首尾空白后的正文 */
   readonly content: string
+  /**
+   * 展示/AI 用正文：只移除明确指向本机器人的 @，保留其他提及的位置，将 QQ 表情转为可读描述。
+   * 不改变 content 的命令匹配语义；旧运行时没有此字段时用 content 回退。
+   */
+  readonly displayContent?: string
   /** 消息里 @ 的对象（含机器人）；部分事件平台不下发，为空数组 */
   readonly mentions: ReadonlyArray<Mention>
   /**

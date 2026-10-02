@@ -24,8 +24,10 @@ import {
   type StreamWriter,
 } from '@qqbot/sdk'
 import { toAttachments } from './attachments.js'
+import { displayContent } from './content.js'
 import { buildQuote } from './quote.js'
 import type { RefIndexTable } from './refIndex.js'
+import { createStreamWriter } from './stream.js'
 
 /** 出站抽象：真实环境是 QQBotClient，测试与 dry-run 用记录器 */
 export interface Sender {
@@ -173,8 +175,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
 
   // 同一条消息/事件的被动回复由这里统一编号
   let seq = 0
-  // 其中 typing 用掉的号：输入中状态和回复共用 msg_seq（撞号会被平台拒收），但不算被动回复条数
-  let typingSeq = 0
+  // 回复条数与序号分开：typing 不计条数，一个流不论多少分片只占一条。
+  let replies = 0
   let lastSent: string | undefined
 
   const passive = (): SendOptions | null => {
@@ -219,6 +221,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     quote: buildQuote(d, refIndexes && ((ref) => refIndexes.lookup(here, ref))),
     canReply: passive() !== null,
     content: cleanContent(d.content),
+    displayContent: displayContent(d, options.botId),
     mentions,
     atMe,
     attachments: toAttachments(d.attachments),
@@ -227,7 +230,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     async reply(message) {
       const base = passive()
       if (!base) return fail('当前事件不支持被动回复')
-      if (seq - typingSeq >= options.maxPassiveReplies) return fail(`被动回复已达上限 ${options.maxPassiveReplies} 条`)
+      if (replies >= options.maxPassiveReplies) return fail(`被动回复已达上限 ${options.maxPassiveReplies} 条`)
+      replies += 1
       seq += 1
       return track(await sender.sendMessage(here, resolveQuote(message), { ...base, msgSeq: seq }))
     },
@@ -244,46 +248,21 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
       if (!base) return sender.typing(targetId, seconds, {})
       // 不带 msgSeq 时客户端默认填 1，正好和第一条回复撞号
       seq += 1
-      typingSeq += 1
       return sender.typing(targetId, seconds, { ...base, msgSeq: seq })
     },
 
     stream(): StreamWriter {
       const base = passive()
       const canStream = scene === 'c2c' && !!sender.streamChunk && !!base
-      let index = 0
-      let streamId: string | undefined
-      const buffer: string[] = []
-
-      const push = async (chunk: string, final: boolean): Promise<SendResult> => {
-        seq += 1
-        const opts: StreamChunkOptions = { ...base!, msgSeq: seq, index, final }
-        if (streamId) opts.streamId = streamId
-        const result = await sender.streamChunk!(targetId, chunk, opts)
-        if (result.ok && result.messageId && !streamId) streamId = result.messageId
-        index += 1
-        return result
-      }
-
-      return {
-        get messageId() {
-          return streamId
-        },
-        async write(chunk) {
-          if (!canStream) {
-            buffer.push(chunk)
-            return { ok: true, status: 0, raw: null }
-          }
-          return push(chunk, false)
-        },
-        async end(chunk) {
-          if (!canStream) {
-            if (chunk) buffer.push(chunk)
-            return session.reply(buffer.join(''))
-          }
-          return push(chunk ?? '', true)
-        },
-      }
+      let streamSeq: number | undefined
+      return createStreamWriter(canStream ? async (chunk, opts) => {
+        if (streamSeq === undefined) {
+          if (replies >= options.maxPassiveReplies) return fail(`被动回复已达上限 ${options.maxPassiveReplies} 条`)
+          replies += 1
+          streamSeq = ++seq
+        }
+        return track(await sender.streamChunk!(targetId, chunk, { ...base!, msgSeq: streamSeq, ...opts }))
+      } : undefined, (content) => session.reply(content))
     },
 
     async recall(id) {

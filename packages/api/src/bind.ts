@@ -9,6 +9,8 @@
  * 接口不带 CORS 头，只能从服务端调用。
  */
 
+import { requestJson } from './request.js'
+
 export const DEFAULT_BIND_HOST = 'https://q.qq.com'
 
 export interface BindTask {
@@ -47,13 +49,13 @@ function fromBase64(value: string): Uint8Array {
 
 async function post(path: string, payload: unknown, options: BindOptions): Promise<Record<string, unknown>> {
   const fetchImpl = options.fetchImpl ?? fetch
-  const res = await fetchImpl(`${options.host ?? DEFAULT_BIND_HOST}${path}`, {
+  const res = await requestJson(fetchImpl, `${options.host ?? DEFAULT_BIND_HOST}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(payload),
-  })
-  if (!res.ok) throw new Error(`QQ 机器人绑定接口 HTTP ${res.status}`)
-  const data = (await res.json().catch(() => null)) as { retcode?: unknown; msg?: unknown; data?: unknown } | null
+  }, { retry: path === '/lite/poll_bind_result' })
+  if (res.status >= 300) throw new Error(`QQ 机器人绑定接口 HTTP ${res.status}`)
+  const data = res.data as { retcode?: unknown; msg?: unknown; data?: unknown } | null
   if (!data || typeof data !== 'object') throw new Error('QQ 机器人绑定接口响应格式异常')
   if (data.retcode !== undefined && Number(data.retcode) !== 0) {
     throw new Error(typeof data.msg === 'string' && data.msg ? data.msg : 'QQ 机器人绑定接口返回失败')
