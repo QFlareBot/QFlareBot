@@ -382,7 +382,7 @@ export default definePlugin({
   durableObjects: { Room },
   commands: {
     join: async ({ ctx, session }) => {
-      const room = ctx.durable.get<Room>('Room', session.groupId ?? 'dm')
+      const room = ctx.durable.get<Room>('Room', session.targetId)   // 群聊是群 openid，单聊是用户 openid
       return `当前 ${await room.join(session.userId)} 人`   // RPC，直接拿返回值
     },
   },
