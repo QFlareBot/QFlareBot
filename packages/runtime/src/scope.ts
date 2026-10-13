@@ -79,7 +79,15 @@ export class RequestScope {
         return r
       },
       ...(inner.typing && { typing: inner.typing.bind(inner) }),
-      ...(inner.streamChunk && { streamChunk: inner.streamChunk.bind(inner) }),
+      // 一个流算一条回复：结束片发成功才记；失败后不再续片，所以每个流至多记一次失败
+      ...(inner.streamChunk && {
+        streamChunk: async (u, c, o) => {
+          const r = await inner.streamChunk!(u, c, o)
+          if (!r.ok) failed += 1
+          else if (o.final) outbox += 1
+          return r
+        },
+      }),
       ...(inner.recallMessage && { recallMessage: inner.recallMessage.bind(inner) }),
       ...(inner.ackInteraction && { ackInteraction: inner.ackInteraction.bind(inner) }),
     }

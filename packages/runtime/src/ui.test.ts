@@ -320,6 +320,48 @@ describe('事件记录', () => {
     )
   })
 
+  it('单聊流式回复计一条，发送失败记进 failed 和 ok', async () => {
+    const streamer = definePlugin({
+      name: 'streamer',
+      version: '1.0.0',
+      commands: {
+        stream: {
+          async handler({ session }) {
+            const w = session.stream()
+            await w.write('a')
+            await w.end('b')
+          },
+        },
+      },
+    })
+    const c2c = (id: string) => ({
+      op: 0,
+      id: `C2C_MESSAGE_CREATE:${id}`,
+      t: 'C2C_MESSAGE_CREATE',
+      d: { id: `ROBOT1.0_${id}`, content: '/stream', timestamp: new Date().toISOString(), author: { user_openid: 'U1' } },
+    })
+    const run = async (fetchImpl: typeof fetch, id: string) => {
+      const runtime = createRuntime({ plugins: [streamer], fetchImpl })
+      const ctx = createExecutionContext()
+      consoleLog.mockClear()
+      await runtime.fetch!(await signedRequest(`${BASE}/webhook`, c2c(id)), createEnv(), ctx)
+      await ctx.flush()
+      return consoleLog.mock.calls.map(([line]) => JSON.parse(String(line))).find((l) => l.data?.kind === 'dispatch')
+    }
+
+    const sent = await run(qqFetch, 's1')
+    expect(sent.data).toMatchObject({ outbox: 1, failed: 0, ok: true })
+    expect(sent.message).toMatch(/ · 回复 1 条$/)
+
+    const rejecting = (async (input: RequestInfo | URL) =>
+      String(input).includes('/stream_messages')
+        ? new Response(JSON.stringify({ code: 40034, message: '拒绝' }), { status: 400 })
+        : qqFetch(input)) as typeof fetch
+    const failed = await run(rejecting, 's2')
+    expect(failed.data).toMatchObject({ outbox: 0, failed: 1, ok: false })
+    expect(failed.message).toMatch(/ · 发送失败 1 条$/)
+  })
+
   it('开了实时调试才写进 D1，/admin/events 可查正文', async () => {
     const runtime = createRuntime({ plugins: [echo], fetchImpl: qqFetch })
     const env = createEnv()
