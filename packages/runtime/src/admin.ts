@@ -634,7 +634,8 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     if (!scene || !targetId || body?.message === undefined) return error('需要 scene、targetId 与 message', 400)
     const result = await scope.api.sendMessage({ scene, id: targetId }, body.message)
     deps.logger.info('面板主动发送', { scene, targetId, ok: result.ok, status: result.status })
-    return json({ ok: result.ok, result }, result.ok ? 200 : 502)
+    // 和下面 /qq/* 一样 HTTP 200 内嵌结果，面板才看得到平台给的错误原因，而不是只有「HTTP 502」
+    return json({ ok: result.ok, result })
   }
 
   // —— QQ 机器人全局配置：机器人的"外观"由运营者在面板管理，不走插件契约 ——

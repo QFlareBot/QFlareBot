@@ -1332,6 +1332,24 @@ describe('QQ 全局配置代理（指令面板 / 分享链接）', () => {
     expect(await res.json()).toMatchObject({ ok: true, data: { url: 'https://q.qq.com/bot/invite' } })
   })
 
+  it('POST /admin/send 发送失败也回 200，平台的错误原因在 result.error 里', async () => {
+    const qq = createQQFetch()
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes('/v2/groups/bad/')
+        ? new Response(JSON.stringify({ code: 11255, message: '机器人不在群里' }), { status: 400 })
+        : qq.fetchImpl(input, init)) as typeof fetch
+    const runtime = createRuntime({ plugins: [], fetchImpl })
+    const env = createEnv()
+    const send = async (targetId: string) => {
+      const res = await runtime.fetch!(adminRequest('POST', '/send', { scene: 'group', targetId, message: 'hi' }), env, createExecutionContext())
+      return { status: res.status, body: (await res.json()) as { ok: boolean; result: { ok: boolean; error?: string } } }
+    }
+    expect(await send('G1')).toMatchObject({ status: 200, body: { ok: true, result: { ok: true } } })
+    const bad = await send('bad')
+    expect(bad).toMatchObject({ status: 200, body: { ok: false, result: { ok: false } } })
+    expect(bad.body.result.error).toContain('机器人不在群里')
+  })
+
   it('上次发送的面板存 D1，按场景分开；格式不对拒收；没绑 D1 时 persist: false', async () => {
     const runtime = createRuntime({ plugins: [], fetchImpl: createQQFetch().fetchImpl })
     const env = createEnv()
