@@ -95,7 +95,7 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
   抽清单的子进程只带白名单里的环境变量（PATH、HOME、代理、npm 源这类），入口顶层读不到构建机上的任何凭证。上线前还有一道：新版本先在预览地址上把每个插件都加载一遍（`/healthz?plugins=1`），入口一加载就抛错的插件会让这次部署不切流量、线上保持旧版，面板「未上线的改动」里会写明是哪个插件加载失败。
 - **命名**：仓库名 = 包名 = `qflarebot-plugin-<name>`（或 `@scope/qflarebot-plugin-<name>`），`name` 用小写字母/数字/`-`/`_`——它同时是 KV 前缀、D1 表前缀、路由 `/p/<name>/` 前缀与撞名检测键。改名前的 `qqbot-plugin-<name>` 构建时照样认，但登记不进插件目录。
 - **版本**：取自 `package.json` 的 `version`。
-- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()` 和 `ctx.publicUrl`（机器人 0.4.0 起；`ctx.publicUrl` 可能没有值，读的时候有退路就不必写 2）；3 加了 `ctx.botAdmins`、`meetsPermission()`、`mentionedUsers()`、`session.isBotAdmin` 和 `session.quote`（机器人 0.5.0 起；两个 session 字段在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们就不必写 3）。SDK 里的函数也算新能力：机器人构建插件时 `@qqbot/sdk` 用的是**机器人自己那一份**，不是插件装的，老机器人上没有这个函数，构建就会失败。
+- **契约版本（`apiVersion`）**：清单里的是插件**最低**要求的版本，不写就是构建时 SDK 的版本。机器人接受不高于自己的：老插件在新机器人上照常能装；用了新能力的插件装到老机器人上，安装时就被拦下并提示升级机器人。用新版 SDK 构建、但没用到新能力，又想让老版本的机器人也能装，就在 `definePlugin` 里写上更低的 `apiVersion`。目前的版本：1 是初版契约；2 加了 `ctx.db.batch()` 和 `ctx.publicUrl`（机器人 0.4.0 起；`ctx.publicUrl` 可能没有值，读的时候有退路就不必写 2）；3 加了 `ctx.botAdmins`、`meetsPermission()`、`mentionedUsers()`、`session.isBotAdmin` 和 `session.quote`（机器人 0.5.0 起；两个 session 字段在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们就不必写 3）；4 加了 `ctx.images` 和 `ctx.browser`。SDK 里的函数也算新能力：机器人构建插件时 `@qqbot/sdk` 用的是**机器人自己那一份**，不是插件装的，老机器人上没有这个函数，构建就会失败。
 - **permissions 只是告知**：插件与核心同 isolate、无沙箱，声明的权限运行时不强制。
 - **额度是全机器人共享的，省着用**：KV、D1、CPU、请求数的每日额度是框架和所有插件合用一份，一个插件用超了，整台机器人一起停摆（免费版 KV 一天只能写 1,000 次，D1 写 10 万行）。**不要每收到一条消息就写一次 KV 或 D1**，频繁变的数据别放 KV。怎么选存储见[第 6 节](#_6-存储状态)，额度与省写入的写法见[第 9 节](#_9-平台限额-免费版的硬预算)。
 
@@ -539,6 +539,8 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | --- | --- |
 | `ctx.config` | 面板保存的配置（缺的字段回落 defaultConfig，见第 5 节） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
+| `ctx.images` | 图片处理，见 [Images binding](https://developers.cloudflare.com/images/optimization/binding/)；未绑定时为 undefined |
+| `ctx.browser` | 浏览器渲染，见 [Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)；未绑定时为 undefined。`quickAction()` 要求 `compatibility_date >= 2026-03-24`，本地调用需设置 `browser.remote: true` |
 | `ctx.durable` | 自己声明的 Durable Object：`get(类名, 实例名)` / `namespace(类名)`，见第 6 节 |
 | `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |
 | `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |

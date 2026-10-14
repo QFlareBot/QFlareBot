@@ -11,6 +11,8 @@ export interface WranglerConfig {
   kv_namespaces?: Array<{ binding: string; id?: string; preview_id?: string }>
   d1_databases?: Array<{ binding: string; database_id?: string; database_name?: string }>
   r2_buckets?: Array<{ binding: string; bucket_name?: string }>
+  images?: { binding: string; remote?: boolean }
+  browser?: { binding: string; remote?: boolean }
   vars?: Record<string, unknown>
   durable_objects?: { bindings?: Array<{ name: string; class_name: string; script_name?: string }> }
   migrations?: WranglerMigration[]
@@ -134,6 +136,23 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
   }
   if (r2) bindings.r2 = { binding: r2.binding, bucketName: r2.bucket_name || envR2Name || PROVISIONED_PLACEHOLDER }
   if (Object.keys(vars).length) bindings.vars = vars
+  const occupied = new Set([
+    ...(config.kv_namespaces ?? []).map((b) => b.binding),
+    ...(config.d1_databases ?? []).map((b) => b.binding),
+    ...(config.r2_buckets ?? []).map((b) => b.binding),
+    ...(config.durable_objects?.bindings ?? []).map((b) => b.name),
+    ...Object.keys(vars),
+  ])
+  for (const kind of ['images', 'browser'] as const) {
+    const value = config[kind]
+    if (value === undefined) continue
+    const name = kind === 'images' ? 'IMAGES' : 'BROWSER'
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.binding !== name) {
+      throw new Error(`wrangler ${kind}.binding 必须为 ${name}`)
+    }
+    if (occupied.has(name)) throw new Error(`wrangler 绑定名 ${name} 与其他绑定或 vars 冲突`)
+    bindings[kind] = { binding: name }
+  }
   return { bindings, warnings }
 }
 

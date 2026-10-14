@@ -49,6 +49,8 @@ export class ContextFactory {
       kv: createScopedKV(env.KV, name),
       db: createScopedDB(env.DB, name),
       r2: createScopedR2(env.R2, name),
+      ...(env.IMAGES ? { images: env.IMAGES } : {}),
+      ...(env.BROWSER ? { browser: env.BROWSER } : {}),
       api: this.options.api,
       durable: createScopedDurable(env, name, plugin.manifest.durableObjects),
       service: <T>(serviceName: string): T => {

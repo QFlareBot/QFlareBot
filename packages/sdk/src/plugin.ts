@@ -11,11 +11,12 @@ import type { Awaitable, PluginContext } from './context.js'
  * - 2：`ctx.db.batch()`；`ctx.publicUrl`（可能没有值，读的时候照样要有退路，所以只用它的插件不必写 2）
  * - 3：`ctx.botAdmins`、`meetsPermission()`、`mentionedUsers()`；`session.isBotAdmin`、`session.quote`
  *   （这两个在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们的插件不必写 3）
+ * - 4：`ctx.images`、`ctx.browser`
  *
  * SDK 导出的函数也算：构建插件时 `@qqbot/sdk` 一律解析成**机器人仓库里**那一份（见 apps/seed/scripts/build-plugin.mjs），
  * 老机器人上没有这个导出，构建就失败。命令上的 `panelOnlyAdmin` 这类纯数据字段不算：老 SDK 抽清单时原样带过去、老面板忽略它
  */
-export const API_VERSION = 3 as const
+export const API_VERSION = 4 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
 export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'

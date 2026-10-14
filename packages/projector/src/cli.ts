@@ -14,7 +14,7 @@ const USAGE = `用法：
 
 选项：
   --manifest   部署清单（DeployManifest JSON），source 支持 file:（相对清单文件）与 npm:/github:/url:
-  --wrangler   基础 wrangler.jsonc；bindings 从 kv_namespaces[0]/d1_databases[0]/r2_buckets[0]/vars 推导
+  --wrangler   基础 wrangler.jsonc；bindings 从 kv_namespaces[0]/d1_databases[0]/r2_buckets[0]/vars/images/browser 推导
   --out        投影输出目录（写入 index.js、runtime.js、plugins/*.js、projection.json）
 `
 
@@ -74,6 +74,9 @@ async function build(args: { manifest: string; wrangler: string; out: string }):
 
   const compatibilityDate = wranglerConfig.compatibility_date ?? new Date().toISOString().slice(0, 10)
   if (!wranglerConfig.compatibility_date) warnings.push(`wrangler 配置缺少 compatibility_date，使用今天：${compatibilityDate}`)
+  if (bindings.browser && compatibilityDate < '2026-03-24') {
+    warnings.push('Browser quickAction() 需要 compatibility_date >= 2026-03-24；当前日期仍可使用其他 Browser 接口')
+  }
 
   const projection = await project({
     manifest,

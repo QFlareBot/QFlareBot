@@ -32,6 +32,23 @@ function recordingDB() {
 
 const plugin = { name: 'hello' }
 
+describe('mock 原生绑定', () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])('按注入情况提供原对象：images=%s browser=%s', (withImages, withBrowser) => {
+    const images = {} as ImagesBinding
+    const browser = {} as BrowserRun
+    const ctx = createMockContext(plugin, {
+      ...(withImages ? { images } : {}),
+      ...(withBrowser ? { browser } : {}),
+    })
+    expect(Object.hasOwn(ctx, 'images')).toBe(withImages)
+    expect(Object.hasOwn(ctx, 'browser')).toBe(withBrowser)
+    expect(ctx.images).toBe(withImages ? images : undefined)
+    expect(ctx.browser).toBe(withBrowser ? browser : undefined)
+    expect(Object.isFrozen(images)).toBe(false)
+    expect(Object.isFrozen(browser)).toBe(false)
+  })
+})
+
 describe('mock ctx.db 走线上的表名检查', () => {
   it('越界的表名在本地就抛同样的错，替身收不到', async () => {
     const { db, seen } = recordingDB()
