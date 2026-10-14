@@ -321,6 +321,10 @@ export interface PluginContext<C = unknown> {
   readonly db: PluginDB
   /** 大文件存储；未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
+  /** 图片处理；未绑定 IMAGES 时为 undefined */
+  readonly images?: ImagesBinding
+  /** 浏览器渲染；未绑定 BROWSER 时为 undefined */
+  readonly browser?: BrowserRun
   readonly api: BotApi
   /** 本插件声明的 Durable Object；未声明该类名或绑定缺失时抛错 */
   readonly durable: ScopedDurableObjects

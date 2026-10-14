@@ -15,6 +15,11 @@
   // 的降级失效：生成配置时它是个非空值，剥离分支永远进不去，R2 未激活的账户会卡在首次部署。
   "r2_buckets": [{ "binding": "R2" }],
 
+  // 图片处理
+  "images": { "binding": "IMAGES" },
+  // 浏览器渲染
+  "browser": { "binding": "BROWSER" },
+
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发
   "triggers": { "crons": ["* * * * *"] },
 

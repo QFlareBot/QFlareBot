@@ -7,6 +7,8 @@ export interface RuntimeEnv {
   /** 可选：缺省时去重退回 KV、实时调试不可用、插件 ctx.db 调用抛错（免费版 D1 配额有限） */
   DB?: D1Database
   R2?: R2Bucket
+  IMAGES?: ImagesBinding
+  BROWSER?: BrowserRun
   /** 优先用 secret；未设置时回退到 KV 中面板保存的配置 */
   BOT_APPID?: string
   BOT_SECRET?: string

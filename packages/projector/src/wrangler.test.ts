@@ -3,7 +3,51 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
 import { parseJsonc, stripJsonComments } from './jsonc.js'
 import type { BaseBindings } from './types.js'
-import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig, resolveState } from './wrangler.js'
+import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig, resolveState, type WranglerConfig } from './wrangler.js'
+
+describe('Images / Browser 配置', () => {
+  it.each([{}, { images: { binding: 'IMAGES' } }, { browser: { binding: 'BROWSER' } }, {
+    images: { binding: 'IMAGES', remote: true }, browser: { binding: 'BROWSER', remote: false },
+  }])('只生成实际声明的绑定，Wrangler 保留 remote：%j', (base: WranglerConfig) => {
+    const { bindings } = deriveBindings(base)
+    const generated = generateWranglerConfig({ base, bindings, projection: makeProjection(), mainPath: 'dist/index.js', warnings: [] })
+    for (const kind of ['images', 'browser'] as const) {
+      if (base[kind]) {
+        expect(bindings[kind]).toEqual({ binding: base[kind].binding })
+        expect(generated[kind]).toEqual(base[kind])
+      } else {
+        expect(bindings).not.toHaveProperty(kind)
+        expect(generated).not.toHaveProperty(kind)
+      }
+    }
+  })
+
+  it.each(['images', 'browser'] as const)('%s 拒绝无效结构和名字', (kind) => {
+    for (const value of [null, false, '', [], {}, { binding: '' }, { binding: 1 }, { binding: 'CUSTOM' }]) {
+      expect(() => deriveBindings({ [kind]: value } as WranglerConfig)).toThrow(/binding 必须为/)
+    }
+  })
+
+  it.each(['images', 'browser'] as const)('%s 拒绝与 KV/D1/R2/DO/vars 重名', (kind) => {
+    const binding = kind === 'images' ? 'IMAGES' : 'BROWSER'
+    const conflicts: WranglerConfig[] = [
+      { kv_namespaces: [{ binding: 'KV' }, { binding }] },
+      { d1_databases: [{ binding }] },
+      { r2_buckets: [{ binding }] },
+      { durable_objects: { bindings: [{ name: binding, class_name: 'Example' }] } },
+      { vars: { [binding]: 'value' } },
+    ]
+    for (const config of conflicts) {
+      expect(() => deriveBindings({ ...config, [kind]: { binding } })).toThrow(/冲突/)
+    }
+  })
+
+  it('种子默认声明两项，不启用 remote', () => {
+    const seed = parseJsonc<WranglerConfig>(readFileSync(new URL('../../../apps/seed/wrangler.jsonc', import.meta.url), 'utf8'))
+    expect(seed.images).toEqual({ binding: 'IMAGES' })
+    expect(seed.browser).toEqual({ binding: 'BROWSER' })
+  })
+})
 
 describe('jsonc', () => {
   it('去掉行注释、块注释与尾随逗号，保留字符串内容', () => {

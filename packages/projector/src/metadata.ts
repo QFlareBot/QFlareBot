@@ -22,6 +22,8 @@ export function buildBindings(bindings: BaseBindings, manifest: DeployManifest):
   for (const [name, text] of Object.entries(bindings.vars ?? {})) {
     out.push({ type: 'plain_text', name, text })
   }
+  if (bindings.images) out.push({ type: 'images', name: bindings.images.binding })
+  if (bindings.browser) out.push({ type: 'browser', name: bindings.browser.binding })
   for (const d of collectDurableObjects(manifest.plugins)) {
     out.push({ type: 'durable_object_namespace', name: d.exportName, class_name: d.exportName })
   }
