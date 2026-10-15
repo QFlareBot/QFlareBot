@@ -9,6 +9,9 @@ export default definePlugin<Config>({
   // 包名去掉 qflarebot-plugin- 前缀的短名，同时是 KV 前缀、D1 表前缀与路由 /p/<name>/
   // 构建时会校验它与 package.json 的 name 对得上
   name: 'example',
+  // 插件最低要求的契约版本，不写就是构建时 SDK 的版本，老机器人会拒装。
+  // 只用了初版契约的能力就写 1；用到新能力时照插件指南「契约版本」那条改高，再 npm run sync
+  apiVersion: 1,
   displayName: '示例插件',
   description: '演示命令、正则、事件与按键的最小插件',
   // 仅供安装前展示，运行时不强制（插件与核心同 isolate，无法沙箱）
