@@ -488,7 +488,7 @@ if (base) return { image: { url: `${base}/p/${ctx.plugin.name}/img/${id}` } }
 | D1 | 读 500 万行/天；写 100,000 行/天；单库 500 MB；每账户 10 库共 5 GB；单条 SQL ≤100 KB、绑定 ≤100 个、单值 ≤2 MB |
 | R2 | 存储 10 GB·月；Class A（写/列）1,000,000 次/月；Class B（读）10,000,000 次/月 |
 | Images（`ctx.images`） | 不重复的变换 5,000 次/月；超了新变换报错（不扣费），缓存过的照常出 |
-| Browser Run（`ctx.browser`） | 浏览器时间 10 分钟/天；同时最多 3 个浏览器 |
+| Browser Run（`ctx.browser`） | 浏览器时间 10 分钟/天；Quick Actions（`quickAction()` 截图、转 PDF 等）每 10 秒 1 次；自己开浏览器会话每 20 秒新开 1 个、同时最多 3 个 |
 
 Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟触发器、再按插件的 cron 表达式内部分发，插件随便声明都不会撞这个限制，但**每次调度同样只有 10 ms CPU**。
 
@@ -499,6 +499,7 @@ Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟
 - **一次事件只有 30 秒**。运行时先给 QQ 回 ACK，再在后台处理事件，平台只给后台 30 秒——这是这次事件里**所有插件**加起来的时间，不是每个插件一份。到点直接被平台掐断，事件摘要和插件后面的日志一行都不留；框架在 25 秒时会先打一条告警，日志里至少看得到是哪个事件卡住了。调慢接口、生成大图这类活要自己拆：先回一句「处理中」，重活交给外部服务（做完再用 `ctx.api.sendMessage` 主动推，或者回调插件的公开路由），或者交给 Durable Object 在 `alarm()` 里分批跑。
 - **子请求 50 是硬顶**。一次消息处理里，每次 KV / D1 / R2 / fetch 都计 1。循环里逐条 `kv.put` 的写法 50 次就断：热路径（计数器、排行榜）用 D1 一条 SQL 顶 N 次 KV：一条 SQL 改多少行都只算一次。`ctx.db.batch()` 省的是往返时间，里面每条语句照样各算一次。
 - **日配额是全机器人共享的**，不是每插件一份。"每条消息都写库"的设计（签到、积分）会把 KV 每天 1,000 次写几天内打满，同一 key 还限 1 次/秒，并发就报错——加去重、攒批、内存缓存 + 定时落盘（落盘那次的 CPU 依然在 10 ms 里）。请求 100,000 次/天看着多：一条群消息就是一次 webhook，几个活跃群加 cron 底座就能摸到，真到量就升级付费版——CPU 30 s、子请求 10,000，上面大半焦虑直接消失。
+- **浏览器只给低频的活**。免费版的 `ctx.browser` 每 10 秒只接 1 次 Quick Actions，群里几个人同时触发，第二个起就被拒；10 分钟/天按一张图几秒算也只够一百来张，还是全机器人共用。管理员命令、偶尔截一张网页这类用它；群里人人都会触发的出图（运势、卡片）用 t2i 服务。截图拿回来的是图片字节，发给 QQ 要么转 base64（吃 CPU，见上面那条），要么存进 R2、经插件的公开路由给出地址。
 - **内存 128 MB 同样共享**。大响应别整个读进内存，能流式就流式（`ctx.r2.getStream`）；大媒体先落 R2。`ctx.waitUntil` 的后台任务和本次请求共享 CPU / 内存预算，不是白给的。
 - **cron 处理器按 10 ms 写**。每日汇总这类任务要么足够轻，要么只做"发起"，把重活交给外部服务异步完成。
 
@@ -542,7 +543,7 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | `ctx.config` | 面板保存的配置（缺的字段回落 defaultConfig，见第 5 节） |
 | `ctx.kv` / `ctx.db` / `ctx.r2` | 隔离存储，见第 6 节 |
 | `ctx.images` | 图片处理（缩放、裁剪、转格式、叠图），Cloudflare 原生的 [Images 绑定](https://developers.cloudflare.com/images/optimization/binding/)；没绑定时是 undefined，额度全机器人共用，见[第 9 节](#_9-平台限额-免费版的硬预算) |
-| `ctx.browser` | 浏览器渲染（截图、HTML 转图片、PDF），Cloudflare 原生的 [Browser Run 绑定](https://developers.cloudflare.com/browser-run/quick-actions/)；没绑定时是 undefined，额度同上 |
+| `ctx.browser` | 浏览器渲染（截图、HTML 转图片、PDF），Cloudflare 原生的 [Browser Run 绑定](https://developers.cloudflare.com/browser-run/quick-actions/)；没绑定时是 undefined。免费版限速很紧，只适合低频的活，见第 9 节 |
 | `ctx.durable` | 自己声明的 Durable Object：`get(类名, 实例名)` / `namespace(类名)`，见第 6 节 |
 | `ctx.api` | QQ OpenAPI：`me()`（机器人资料）/ `sendMessage` / `uploadMedia` / `typing` / `streamChunk` / `recallMessage` / `ackInteraction` / `group.*`（含群信息、禁言、审批、入群策略）/ `raw()`。非 2xx 统一抛带错误码说明的 `QQApiError`，结果型方法转为 `SendResult.error` |
 | `ctx.logger` | `debug / info / warn / error`，结构化 JSON 行 |
