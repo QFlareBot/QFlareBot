@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250917.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@qqbot/plugin-cli": "file:../QFlareBot/packages/plugin-cli",
     "@qqbot/sdk": "file:../QFlareBot/packages/sdk",
     "typescript": "^5.9.0",

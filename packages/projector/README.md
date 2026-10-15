@@ -92,7 +92,7 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 - 写入 `<out>/index.js`、`runtime.js`、`plugins/*.js` 与 `projection.json`（hash、integrity、metadata）
 - 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings`
 - **不合成 `migrations`**：迁移是只追加的历史，构建机没有「上次应用到哪个 tag」的持久状态，造不出来。模板里的 `migrations` 原样保留，并在插件 DO 类没被覆盖时**报错**（附上该追加的条目）。「覆盖」按顺序重放历史来算：`new_classes` / `new_sqlite_classes`、`renamed_classes` 的 `to`、`transferred_classes` 的 `to` 算现存，`deleted_classes` 与 `renamed_classes` 的 `from` 从现存里减掉。类建在 `new_classes`（KV 存储后端）而版本元数据按 sqlite 声明时给一条警告（不失败）。生产路径走 Versions API，用 `exports` 声明 DO 生命周期，不涉及 `migrations`
-- bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒
+- bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` / `images` / `browser` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒。Images 与 Browser 是账户自带的服务，绑定只有名字，没有资源 id
 - `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵：它优先于模板里硬编码的值，命中就把对应字段从生成配置里剥掉。所以**模板只该声明 binding 名，别硬编码 `bucket_name` / `database_id`**——硬编码会让剥离分支永远进不去，「R2 不可用即不绑定」的降级随之失效
 - KV 没有这个哨兵：运行时无条件用它，`CF_KV_ID=none` 不受支持，按「没解析出来」处理（`projection.json` 的 `bindings.kv` 是 `unresolved`，部署护栏拒绝）
 - JSONC 解析先去注释、再单独扫一遍去尾随逗号，逗号与 `]` / `}` 之间隔着注释（`[1, // 说明\n]`）也认得出

@@ -74,9 +74,6 @@ async function build(args: { manifest: string; wrangler: string; out: string }):
 
   const compatibilityDate = wranglerConfig.compatibility_date ?? new Date().toISOString().slice(0, 10)
   if (!wranglerConfig.compatibility_date) warnings.push(`wrangler 配置缺少 compatibility_date，使用今天：${compatibilityDate}`)
-  if (bindings.browser && compatibilityDate < '2026-03-24') {
-    warnings.push('Browser quickAction() 需要 compatibility_date >= 2026-03-24；当前日期仍可使用其他 Browser 接口')
-  }
 
   const projection = await project({
     manifest,

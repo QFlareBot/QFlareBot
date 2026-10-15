@@ -19,12 +19,14 @@ describe('buildVersionMetadata', () => {
     expect(metadata.compatibility_flags).toEqual(['nodejs_compat'])
   })
 
-  it('bindings 包含 KV/D1/R2/vars 与插件 DO', () => {
+  it('bindings 包含 KV/D1/R2/vars/Images/Browser 与插件 DO', () => {
     expect(metadata.bindings).toEqual([
       { type: 'kv_namespace', name: 'KV', namespace_id: 'kv-id' },
       { type: 'd1', name: 'DB', database_id: 'd1-id' },
       { type: 'r2_bucket', name: 'R2', bucket_name: 'bucket' },
       { type: 'plain_text', name: 'ENV', text: 'prod' },
+      { type: 'images', name: 'IMAGES' },
+      { type: 'browser', name: 'BROWSER' },
       { type: 'durable_object_namespace', name: 'P_foo_Game', class_name: 'P_foo_Game' },
     ])
   })
@@ -43,7 +45,7 @@ describe('buildVersionMetadata', () => {
     expect(metadata.annotations['workers/message']).toContain('2 plugins')
   })
 
-  it('无 DO、无 r2/vars/flags 时不出现对应字段', () => {
+  it('无 DO、无 r2/vars/images/browser/flags 时不出现对应字段', () => {
     const manifest = makeDeployManifest()
     manifest.plugins = manifest.plugins.filter((p) => p.name === 'bar')
     const m = buildVersionMetadata({

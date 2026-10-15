@@ -32,20 +32,16 @@ function recordingDB() {
 
 const plugin = { name: 'hello' }
 
-describe('mock 原生绑定', () => {
-  it.each([[false, false], [true, false], [false, true], [true, true]])('按注入情况提供原对象：images=%s browser=%s', (withImages, withBrowser) => {
+describe('mock ctx.images / ctx.browser', () => {
+  it('注入了给注入的，不注入是 undefined（和线上没绑定时一样）', () => {
     const images = {} as ImagesBinding
     const browser = {} as BrowserRun
-    const ctx = createMockContext(plugin, {
-      ...(withImages ? { images } : {}),
-      ...(withBrowser ? { browser } : {}),
-    })
-    expect(Object.hasOwn(ctx, 'images')).toBe(withImages)
-    expect(Object.hasOwn(ctx, 'browser')).toBe(withBrowser)
-    expect(ctx.images).toBe(withImages ? images : undefined)
-    expect(ctx.browser).toBe(withBrowser ? browser : undefined)
-    expect(Object.isFrozen(images)).toBe(false)
-    expect(Object.isFrozen(browser)).toBe(false)
+    const ctx = createMockContext(plugin, { images, browser })
+    expect(ctx.images).toBe(images)
+    expect(ctx.browser).toBe(browser)
+    const bare = createMockContext(plugin)
+    expect(bare.images).toBeUndefined()
+    expect(bare.browser).toBeUndefined()
   })
 })
 

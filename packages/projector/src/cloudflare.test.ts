@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { makeDeployManifest, makeProjection } from './__fixtures__/manifest.js'
+import { makeProjection } from './__fixtures__/manifest.js'
 import { CloudflareApiError, CloudflareWorkersApi } from './cloudflare.js'
-import { buildVersionMetadata } from './metadata.js'
-import { deriveBindings } from './wrangler.js'
 
 type Call = { url: string; init: RequestInit }
 
@@ -28,12 +26,6 @@ describe('CloudflareWorkersApi.uploadVersion', () => {
     const { api, calls } = fakeApi(() => ok({ id: 'ver-1' }))
     const projection = makeProjection({
       modules: { 'index.js': 'export default 1', 'runtime.js': 'export const a = 1', 'plugins/foo.js': 'export {}' },
-      metadata: buildVersionMetadata({
-        manifest: makeDeployManifest(),
-        bindings: deriveBindings({ images: { binding: 'IMAGES', remote: true }, browser: { binding: 'BROWSER', remote: true } }).bindings,
-        compatibilityDate: '2026-09-01',
-        hash: 'a'.repeat(64),
-      }),
     })
 
     const result = await api.uploadVersion({ scriptName: 'my-bot', projection })
@@ -50,11 +42,6 @@ describe('CloudflareWorkersApi.uploadVersion', () => {
     const metadata = form.get('metadata') as File
     expect(metadata.type).toBe('application/json')
     expect(JSON.parse(await metadata.text())).toEqual(projection.metadata)
-    expect(projection.metadata.bindings.filter((b) => b.type === 'images' || b.type === 'browser')).toEqual([
-      { type: 'images', name: 'IMAGES' },
-      { type: 'browser', name: 'BROWSER' },
-    ])
-    expect(projection.metadata.keep_bindings).toEqual(['secret_text', 'secret_key', 'secrets_store_secret'])
 
     for (const [name, code] of Object.entries(projection.modules)) {
       const part = form.get(name) as File

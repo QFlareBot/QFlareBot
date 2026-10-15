@@ -136,23 +136,8 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
   }
   if (r2) bindings.r2 = { binding: r2.binding, bucketName: r2.bucket_name || envR2Name || PROVISIONED_PLACEHOLDER }
   if (Object.keys(vars).length) bindings.vars = vars
-  const occupied = new Set([
-    ...(config.kv_namespaces ?? []).map((b) => b.binding),
-    ...(config.d1_databases ?? []).map((b) => b.binding),
-    ...(config.r2_buckets ?? []).map((b) => b.binding),
-    ...(config.durable_objects?.bindings ?? []).map((b) => b.name),
-    ...Object.keys(vars),
-  ])
-  for (const kind of ['images', 'browser'] as const) {
-    const value = config[kind]
-    if (value === undefined) continue
-    const name = kind === 'images' ? 'IMAGES' : 'BROWSER'
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.binding !== name) {
-      throw new Error(`wrangler ${kind}.binding 必须为 ${name}`)
-    }
-    if (occupied.has(name)) throw new Error(`wrangler 绑定名 ${name} 与其他绑定或 vars 冲突`)
-    bindings[kind] = { binding: name }
-  }
+  if (config.images) bindings.images = { binding: config.images.binding }
+  if (config.browser) bindings.browser = { binding: config.browser.binding }
   return { bindings, warnings }
 }
 

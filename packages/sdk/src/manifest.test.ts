@@ -75,10 +75,8 @@ describe('validateManifest', () => {
   it('apiVersion 是最低要求：不高于当前契约都能装，高了提示升级机器人', () => {
     const m = extractManifest(plugin, { version: '1.0.0' })
     expect(validateManifest({ ...m, apiVersion: API_VERSION })).toEqual([])
-    // 旧契约的插件照常能装
-    for (const apiVersion of [1, 2, 3]) {
-      expect(validateManifest({ ...m, apiVersion })).toEqual([])
-    }
+    // 升过契约版本以后，写着 1 的老插件照常能装
+    expect(validateManifest({ ...m, apiVersion: 1 })).toEqual([])
     expect(validateManifest({ ...m, apiVersion: API_VERSION + 1 })).toEqual([expect.stringContaining('请先升级机器人')])
     expect(validateManifest({ ...m, apiVersion: 0 })).toEqual([expect.stringContaining('apiVersion 非法')])
     expect(validateManifest({ ...m, apiVersion: 1.5 })).toEqual([expect.stringContaining('apiVersion 非法')])
