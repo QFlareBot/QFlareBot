@@ -51,6 +51,8 @@ export const bindings: BaseBindings = {
   kv: { binding: 'KV', namespaceId: 'kv-id' },
   d1: { binding: 'DB', databaseId: 'd1-id' },
   r2: { binding: 'R2', bucketName: 'bucket' },
+  images: { binding: 'IMAGES' },
+  browser: { binding: 'BROWSER' },
   vars: { ENV: 'prod' },
 }
 

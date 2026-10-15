@@ -15,9 +15,9 @@
   // 的降级失效：生成配置时它是个非空值，剥离分支永远进不去，R2 未激活的账户会卡在首次部署。
   "r2_buckets": [{ "binding": "R2" }],
 
-  // 图片处理
+  // 插件的 ctx.images（图片处理）与 ctx.browser（浏览器渲染）。两个都是账户自带的服务，不用建资源，
+  // 免费版也能绑，没有插件调用就不计量。额度全机器人共用：Images 每月 5,000 次变换，Browser 每天 10 分钟
   "images": { "binding": "IMAGES" },
-  // 浏览器渲染
   "browser": { "binding": "BROWSER" },
 
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发

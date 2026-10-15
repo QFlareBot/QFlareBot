@@ -321,9 +321,16 @@ export interface PluginContext<C = unknown> {
   readonly db: PluginDB
   /** 大文件存储；未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
-  /** 图片处理；未绑定 IMAGES 时为 undefined */
+  /**
+   * 图片处理（Cloudflare Images 绑定）：缩放、裁剪、转格式、叠图。
+   * 没绑 IMAGES 时是 undefined，0.6 以前的机器人上也是，所以要先判断，这样也不必为它提高 apiVersion。
+   * 额度全机器人共用（免费版每月 5,000 次变换）
+   */
   readonly images?: ImagesBinding
-  /** 浏览器渲染；未绑定 BROWSER 时为 undefined */
+  /**
+   * 浏览器渲染（Cloudflare Browser Run 绑定）：截图、HTML 转图片、生成 PDF。
+   * 没绑 BROWSER 时是 undefined，0.6 以前的机器人上也是，同上。额度全机器人共用（免费版每天 10 分钟）
+   */
   readonly browser?: BrowserRun
   readonly api: BotApi
   /** 本插件声明的 Durable Object；未声明该类名或绑定缺失时抛错 */

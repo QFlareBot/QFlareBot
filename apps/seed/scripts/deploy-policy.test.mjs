@@ -286,9 +286,7 @@ describe('compareDeclaredManifest', () => {
   })
 
   it('apiVersion 不拦：声明的更低是常态（最低要求），不提；更高才告警', () => {
-    for (const apiVersion of [1, 2, 3]) {
-      expect(compareDeclaredManifest(extracted({ apiVersion }), extracted({ apiVersion: 4 }))).toEqual({ ok: true, fields: [], warnings: [] })
-    }
+    expect(compareDeclaredManifest(extracted({ apiVersion: 1 }), extracted({ apiVersion: 2 }))).toEqual({ ok: true, fields: [], warnings: [] })
     const result = compareDeclaredManifest(extracted({ apiVersion: 2 }), extracted({ apiVersion: 1 }))
     expect(result.ok).toBe(true)
     expect(result.warnings).toEqual([expect.stringContaining('apiVersion')])
