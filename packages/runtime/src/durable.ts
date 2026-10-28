@@ -8,10 +8,14 @@
  * 结果是插件在 DO 里拿到的 `this.plugin.kv / .db / .r2` 与处理器里的 `ctx.kv / .db / .r2`
  * 前缀完全一致，卸载时按前缀清理才清得干净。
  */
+import { QQBotClient } from '@qqbot/api'
 import { doExportName } from '@qqbot/projector'
-import { PLUGIN_SCOPE, type DurableContext, type ScopedDurableObjectClass, type ScopedDurableObjects } from '@qqbot/sdk'
+import { PLUGIN_SCOPE, type BotApi, type DurableContext, type ScopedDurableObjectClass, type ScopedDurableObjects } from '@qqbot/sdk'
 import { createScopedDB, createScopedKV, createScopedR2 } from './scoped.js'
 import { createLogger } from './logger.js'
+import { refIndexes } from './refIndex.js'
+import { kvTokenCache, readBotConfig } from './store.js'
+import { unavailableApi } from './unavailableApi.js'
 import type { RuntimeEnv } from './types.js'
 
 /** 给 DO 类挂上作用域工厂并原样返回；投影入口在重导出时调用 */
@@ -20,7 +24,13 @@ export function durableScope<T>(Impl: T, pluginName: string): T {
   return Impl
 }
 
-/** DO 里可用的作用域上下文。没有 api / config：两者都要读快照，同步构造器等不了 */
+/**
+ * DO 里可用的作用域上下文。
+ *
+ * 没有 `config`：它要读面板快照，而 DO 的构造器是同步的，等不了。
+ * `api` 用**惰性初始化**解决同一个问题——构造时什么都不读，首次调用某个方法时
+ * 才去读凭证并建客户端。这样 DO 里跑完 agent 能直接发消息，不必绕回 Worker。
+ */
 export function createDurableContext(env: RuntimeEnv, pluginName: string): DurableContext {
   return {
     plugin: { name: pluginName },
@@ -28,7 +38,84 @@ export function createDurableContext(env: RuntimeEnv, pluginName: string): Durab
     kv: createScopedKV(env.KV, pluginName),
     db: createScopedDB(env.DB, pluginName),
     r2: createScopedR2(env.R2, pluginName),
+    api: lazyBotApi(env),
   }
+}
+
+/**
+ * 惰性 QQ API 客户端。
+ *
+ * 为什么不能同步建：`readBotConfig()` 要读 KV（面板保存的凭证）或 Worker Secret，
+ * 是异步的，而 `DurableContext` 在 `PluginDurableObject` 的构造器里同步装配。
+ *
+ * 为什么用 Proxy 而不是返回 Promise：`ctx.api` 的用法是 `await api.sendMessage(...)`，
+ * 直接给 Promise 会变成 `await (await p).sendMessage` —— 插件侧写法全要改。
+ * Proxy 让每个方法调用返回 Promise，用法与 `ctx.api` 完全一致。
+ *
+ * `group` 是属性（`GroupApi`）不是方法，单独处理：拿到时先返回一个占位代理，
+ * 等它上面的方法被调用时再转发。这样 `api.group.mute(...)` 也能用。
+ */
+function lazyBotApi(env: RuntimeEnv): BotApi {
+  let clientPromise: Promise<BotApi> | null = null
+
+  const ensure = (): Promise<BotApi> => {
+    // 并发首次调用只读一次凭证
+    clientPromise ??= buildBotApi(env).catch((error: unknown) => {
+      // 建失败不缓存，下次重试——否则一次 KV 抖动会让这个 DO 实例永远拿不到 api
+      clientPromise = null
+      throw error
+    })
+    return clientPromise
+  }
+
+  // 每个方法都转发到真实 client；`group` 走另一个代理
+  const methodProxy = (prefix: string[]): unknown =>
+    new Proxy(() => {}, {
+      get: (_target, prop) => {
+        if (prop === 'then') return undefined // 别让 await 把代理当 thenable
+        return methodProxy([...prefix, String(prop)])
+      },
+      apply: async (_target, _thisArg, args: unknown[]) => {
+        const client = await ensure()
+        // 沿 prefix 逐层取到真实对象，再调用
+        let target: unknown = client
+        for (const key of prefix.slice(0, -1)) {
+          target = (target as Record<string, unknown>)[key]
+        }
+        const fn = (target as Record<string, unknown>)[prefix.at(-1) ?? ''] as
+          | ((...a: unknown[]) => unknown)
+          | undefined
+        if (typeof fn !== 'function') {
+          throw new Error(`ctx.api 上没有 ${prefix.join('.')} 这个方法`)
+        }
+        return fn.apply(target, args)
+      },
+    })
+
+  return new Proxy({} as BotApi, {
+    get: (_target, prop) => {
+      if (prop === 'then') return undefined
+      if (prop === 'appId') {
+        // 同步字段：没配置时给空串，避免插件读它就炸
+        return env.BOT_APPID ?? ''
+      }
+      return methodProxy([String(prop)])
+    },
+  })
+}
+
+/** 真正建客户端。凭证读取与 Worker 侧共用同一个缓存，所以换号后行为一致 */
+async function buildBotApi(env: RuntimeEnv): Promise<BotApi> {
+  const bot = await readBotConfig(env)
+  if (!bot) return unavailableApi()
+
+  return new QQBotClient({
+    appId: bot.appId,
+    secret: bot.secret,
+    tokenCache: kvTokenCache(env, bot.appId),
+    // 与 Worker 侧同一张对照表：DO 里发出的消息也要能被引用/撤回
+    onSent: (target, result) => refIndexes.rememberSent(target, result),
+  })
 }
 
 /**

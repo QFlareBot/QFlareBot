@@ -10,7 +10,7 @@
  * 再交给平台基类。裸 env 到不了插件手里，而 `this.ctx`（DurableObjectState）与 RPC
  * 方法调用都原样可用。
  */
-import type { Logger, PluginDB, ScopedKV, ScopedR2 } from './context.js'
+import type { BotApi, Logger, PluginDB, ScopedKV, ScopedR2 } from './context.js'
 
 /**
  * 作用域工厂挂在类上的键。
@@ -29,7 +29,16 @@ export const PLUGIN_SCOPE = Symbol.for('qqbot.durable.scope')
  */
 export const PLUGIN_DURABLE_BASE = Symbol.for('qqbot.durable.base')
 
-/** DO 里可用的插件上下文。与 `PluginContext` 的存储三件套同源，前缀隔离一致 */
+/**
+ * DO 里可用的插件上下文。与 `PluginContext` 的存储三件套同源，前缀隔离一致。
+ *
+ * `api` 是**惰性初始化**的：DO 的构造器是同步的，而读机器人凭证要走 KV，
+ * 所以首次访问 `api` 上的方法时才去读凭证、建客户端。没配置机器人时行为与
+ * `ctx.api` 一致（`sendMessage` 返回 `ok: false`，其余抛可读错误）。
+ *
+ * `config` 仍然没有：它要读面板快照，而且 DO 里改配置没有意义——
+ * 需要配置的地方应该由调用方在处理器里读好传进来。
+ */
 export interface DurableContext {
   readonly plugin: { readonly name: string }
   readonly logger: Logger
@@ -37,6 +46,12 @@ export interface DurableContext {
   readonly db: PluginDB
   /** 未绑定 R2 时调用会抛出可读错误 */
   readonly r2: ScopedR2
+  /**
+   * QQ OpenAPI 客户端，惰性初始化。DO 里跑完 agent 后要发消息就用它。
+   *
+   * 与 `ctx.api` 同一份实现、同一套凭证缓存，所以引用记录（refIndex）也对得上。
+   */
+  readonly api: BotApi
 }
 
 /** 由运行时实现、投影入口注入：把平台给的裸 env 换成本插件的作用域上下文 */

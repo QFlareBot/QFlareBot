@@ -87,3 +87,101 @@ describe('durableScope + PluginDurableObject', () => {
     expect(() => new Loose({} as DurableObjectState, createEnv())).toThrow('没有作用域工厂')
   })
 })
+
+describe('DurableContext.api（惰性初始化）', () => {
+  it('构造时不读凭证——KV 一次都没被读', async () => {
+    const env = createEnv()
+    let kvReads = 0
+    const originalGet = env.KV.get.bind(env.KV)
+    ;(env.KV as unknown as { get: typeof originalGet }).get = (...args: Parameters<typeof originalGet>) => {
+      kvReads += 1
+      return originalGet(...args)
+    }
+
+    createDurableContext(env, 'agent')
+    // 构造完不该有任何 KV 读：凭证是首次调用方法时才读的
+    expect(kvReads).toBe(0)
+  })
+
+  it('未配置机器人时 sendMessage 返回 ok:false，而不是抛异常', async () => {
+    const env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })
+    const dctx = createDurableContext(env, 'agent')
+    const result = await dctx.api.sendMessage({ scene: 'c2c', id: 'u1' }, { text: 'hi' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('尚未配置')
+  })
+
+  it('未配置机器人时 raw() 抛可读错误', async () => {
+    const env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })
+    const dctx = createDurableContext(env, 'agent')
+    await expect(dctx.api.raw('GET', '/users/@me')).rejects.toThrow('尚未配置')
+  })
+
+  it('配置了凭证时能真的发出请求（用注入的 fetch 断言，不打真网络）', async () => {
+    const calls: Array<{ url: string; body: unknown }> = []
+    const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      // 换 token 的请求
+      if (url.includes('/app/getAppAccessToken')) {
+        return Response.json({ access_token: 'tok', expires_in: 7200 })
+      }
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
+      return Response.json({ id: 'msg-1', timestamp: '2026-01-01T00:00:00Z' })
+    }
+
+    const env = createEnv()
+    const dctx = createDurableContext({ ...env, fetchImpl: fakeFetch } as never, 'agent')
+    // fetchImpl 不在 RuntimeEnv 上，这里走全局 fetch 的替身
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fakeFetch as typeof fetch
+    try {
+      const result = await dctx.api.sendMessage({ scene: 'c2c', id: 'u1' }, { text: '你好' })
+      expect(result.ok).toBe(true)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.url).toContain('/v2/users/u1/messages')
+      expect((calls[0]?.body as { content: string }).content).toBe('你好')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('并发首次调用只初始化一次（凭证只读一遍）', async () => {
+    const env = createEnv()
+    let kvReads = 0
+    const originalGet = env.KV.get.bind(env.KV)
+    ;(env.KV as unknown as { get: typeof originalGet }).get = (...args: Parameters<typeof originalGet>) => {
+      kvReads += 1
+      return originalGet(...args)
+    }
+
+    const dctx = createDurableContext(env, 'agent')
+    const fakeFetch = async () => Response.json({ access_token: 'tok', expires_in: 7200 })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fakeFetch as typeof fetch
+    try {
+      // 同时发 3 个，全部失败也无所谓，只看凭证读了几次
+      await Promise.allSettled([
+        dctx.api.sendMessage({ scene: 'c2c', id: 'u1' }, { text: 'a' }),
+        dctx.api.sendMessage({ scene: 'c2c', id: 'u1' }, { text: 'b' }),
+        dctx.api.sendMessage({ scene: 'c2c', id: 'u1' }, { text: 'c' }),
+      ])
+      // 建客户端只读一次；token 缓存可能额外读，但不该随调用数线性涨
+      expect(kvReads).toBeLessThanOrEqual(2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('appId 是同步可读的（插件可能拿它拼头像地址）', () => {
+    const env = createEnv()
+    const dctx = createDurableContext(env, 'agent')
+    expect(typeof dctx.api.appId).toBe('string')
+  })
+
+  it('group 子对象上的方法也能转发', async () => {
+    const env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })
+    const dctx = createDurableContext(env, 'agent')
+    // 未配置凭证时，group 上的方法应当报同一个可读错误（说明转发确实走到了客户端）
+    await expect(dctx.api.group.mute('g1', [])).rejects.toThrow('尚未配置')
+  })
+})

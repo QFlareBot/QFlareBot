@@ -392,7 +392,9 @@ export default definePlugin({
 三件事一起看：
 
 - **`ctx.durable.get(类名, 实例名)`** 取实例，实例名走 `idFromName` —— 一个群 / 一个用户 / 一局游戏一个实例。类名不在自己 `durableObjects` 里会抛错，够不到别的插件的 DO。需要 `newUniqueId` / `idFromString` 时用 `ctx.durable.namespace(类名)`。
-- **`this.plugin`** 是 DO 里的作用域上下文（`kv` / `db` / `r2` / `logger`），前缀与处理器里的 `ctx.kv` / `ctx.db` 完全一致 —— 所以 DO 里建的表卸载时也清得掉。没有 `api` 与 `config`：两者都要读快照，同步构造器等不了。`this.ctx` 仍然是平台的 `DurableObjectState`（`storage`、`blockConcurrencyWhile` 照用）。
+- **`this.plugin`** 是 DO 里的作用域上下文（`kv` / `db` / `r2` / `logger` / `api`），前缀与处理器里的 `ctx.kv` / `ctx.db` 完全一致 —— 所以 DO 里建的表卸载时也清得掉。`this.ctx` 仍然是平台的 `DurableObjectState`（`storage`、`blockConcurrencyWhile` 照用）。
+  - `this.plugin.api` 是 **惰性初始化**的：DO 的构造器是同步的，而读机器人凭证要走 KV，所以首次调用 `api` 上的方法时才去读凭证、建客户端。用法与 `ctx.api` 完全一致（`await this.plugin.api.sendMessage(...)`），未配置机器人时 `sendMessage` 返回 `ok: false`、其余方法抛可读错误。DO 里跑完长任务要直接回复用户就靠它，不必绕回 Worker。
+  - **没有 `config`**：它要读面板快照，而且 DO 里改配置没有意义。需要配置的地方在处理器里读好、作为参数传进 DO。
 - **继承是强制的，`qqbot-plugin build` 会拦。** 不继承的话平台把**未加前缀的裸 env** 直接塞给你，第 6 节那套「前缀即所有权」在 DO 里就失效了：建的表框架不认识，卸载时清不掉，永远是孤儿。这种「忘了就出事、出事还看不见」的约定不能只写在文档里，所以放在构建期挡住。
 
 投影时框架把类以 **`P_<插件名>_<类名>`** 导出到 Worker 主模块（插件名里的非字母数字换成 `_`，所以是 `P_game_Room`），并在导出时挂上作用域工厂 —— `PluginDurableObject` 的构造器就是靠它把裸 env 换掉的。因此 DO 类只能经由投影入口导出，手工在 `wrangler.jsonc` 里导出会在构造时抛错。

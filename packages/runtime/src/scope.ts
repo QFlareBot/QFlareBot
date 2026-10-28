@@ -9,6 +9,7 @@ import { publicUrlFor } from './publicUrl.js'
 import { refIndexes } from './refIndex.js'
 import { buildSession, type Sender } from './session.js'
 import { kvTokenCache, profileOf, readBotConfig, readSnapshot } from './store.js'
+import { unavailableApi } from './unavailableApi.js'
 import type { BotConfig, ResolvedOptions, RuntimeEnv, Snapshot } from './types.js'
 import type { WebhookPayload } from '@qqbot/api'
 
@@ -111,19 +112,4 @@ export class RequestScope {
     })
     return { session, report, outbox, failed }
   }
-}
-
-/** 机器人未配置时的占位实现：所有出站调用都返回明确错误 */
-function unavailableApi(): QQBotClient {
-  const error = '机器人尚未配置 AppID/AppSecret'
-  return {
-    appId: '',
-    raw: async () => {
-      throw new Error(error)
-    },
-    uploadMedia: async () => {
-      throw new Error(error)
-    },
-    sendMessage: async () => ({ ok: false, status: 0, error, raw: null }),
-  } as unknown as QQBotClient
 }
