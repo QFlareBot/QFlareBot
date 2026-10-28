@@ -30,15 +30,22 @@ export function durableScope<T>(Impl: T, pluginName: string): T {
  * 没有 `config`：它要读面板快照，而 DO 的构造器是同步的，等不了。
  * `api` 用**惰性初始化**解决同一个问题——构造时什么都不读，首次调用某个方法时
  * 才去读凭证并建客户端。这样 DO 里跑完 agent 能直接发消息，不必绕回 Worker。
+ *
+ * `options.fetchImpl` 只给测试用：DO 由平台构造、拿不到 `RuntimeOptions`，
+ * 线上走全局 fetch；测试里注入替身，不必 stub 全局。
  */
-export function createDurableContext(env: RuntimeEnv, pluginName: string): DurableContext {
+export function createDurableContext(
+  env: RuntimeEnv,
+  pluginName: string,
+  options: { fetchImpl?: typeof fetch } = {},
+): DurableContext {
   return {
     plugin: { name: pluginName },
     logger: createLogger(`durable:${pluginName}`),
     kv: createScopedKV(env.KV, pluginName),
     db: createScopedDB(env.DB, pluginName),
     r2: createScopedR2(env.R2, pluginName),
-    api: lazyBotApi(env),
+    api: lazyBotApi(env, options.fetchImpl),
   }
 }
 
@@ -55,12 +62,12 @@ export function createDurableContext(env: RuntimeEnv, pluginName: string): Durab
  * `group` 是属性（`GroupApi`）不是方法，单独处理：拿到时先返回一个占位代理，
  * 等它上面的方法被调用时再转发。这样 `api.group.mute(...)` 也能用。
  */
-function lazyBotApi(env: RuntimeEnv): BotApi {
+function lazyBotApi(env: RuntimeEnv, fetchImpl?: typeof fetch): BotApi {
   let clientPromise: Promise<BotApi> | null = null
 
   const ensure = (): Promise<BotApi> => {
     // 并发首次调用只读一次凭证
-    clientPromise ??= buildBotApi(env).catch((error: unknown) => {
+    clientPromise ??= buildBotApi(env, fetchImpl).catch((error: unknown) => {
       // 建失败不缓存，下次重试——否则一次 KV 抖动会让这个 DO 实例永远拿不到 api
       clientPromise = null
       throw error
@@ -105,7 +112,7 @@ function lazyBotApi(env: RuntimeEnv): BotApi {
 }
 
 /** 真正建客户端。凭证读取与 Worker 侧共用同一个缓存，所以换号后行为一致 */
-async function buildBotApi(env: RuntimeEnv): Promise<BotApi> {
+async function buildBotApi(env: RuntimeEnv, fetchImpl?: typeof fetch): Promise<BotApi> {
   const bot = await readBotConfig(env)
   if (!bot) return unavailableApi()
 
@@ -113,6 +120,7 @@ async function buildBotApi(env: RuntimeEnv): Promise<BotApi> {
     appId: bot.appId,
     secret: bot.secret,
     tokenCache: kvTokenCache(env, bot.appId),
+    ...(fetchImpl ? { fetchImpl } : {}),
     // 与 Worker 侧同一张对照表：DO 里发出的消息也要能被引用/撤回
     onSent: (target, result) => refIndexes.rememberSent(target, result),
   })
