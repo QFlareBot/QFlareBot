@@ -13,8 +13,8 @@ import type { RuntimeEnv } from './types.js'
 const logger: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
 const contexts = { prepare: async () => ({}) } as unknown as ContextFactory
 
-function registered(name: string): RegisteredPlugin {
-  return { manifest: { name, version: '1.0.0' } } as unknown as RegisteredPlugin
+function registered(name: string, version = '1.0.0'): RegisteredPlugin {
+  return { manifest: { name, version } } as unknown as RegisteredPlugin
 }
 
 function deferred() {
@@ -130,5 +130,49 @@ describe('ensureReady', () => {
     await ensureReady(registered('fast'), fast, env, contexts, logger)
     gate.resolve()
     await pending
+  })
+})
+
+/**
+ * onInstall 的触发条件：**每个版本一次**，而不是「装过就再也不跑」。
+ *
+ * 框架没有 migration runner，建表全在 onInstall 里。只在「装过没有」上判断的话，
+ * 插件升级新增一张表就只会在第一次用到时炸 `no such table`——真实踩过
+ * （agent 插件升到带 {conversations} 的版本后，/agent persona 直接报 D1_ERROR）。
+ */
+describe('onInstall 与版本', () => {
+  it('版本变了会重跑一次 onInstall（升级路径能补建表）', async () => {
+    const kv = createKV()
+    const env = { KV: kv } as unknown as RuntimeEnv
+    let installs = 0
+    const def = { name: 'p', hooks: { onInstall: async () => void installs++ } } as unknown as PluginDefinition<unknown>
+
+    // 1.0.0 跑一次并记下版本
+    await ensureReady(registered('p', '1.0.0'), def, env, contexts, logger)
+    expect(installs).toBe(1)
+    expect(kv.store.get('rt:installed:p')).toBe('1.0.0')
+
+    // 同版本的新 isolate：不重跑
+    resetLifecycle()
+    await ensureReady(registered('p', '1.0.0'), def, env, contexts, logger)
+    expect(installs).toBe(1)
+
+    // 升到 1.1.0：重跑一次，并把标记更新成新版本
+    resetLifecycle()
+    await ensureReady(registered('p', '1.1.0'), def, env, contexts, logger)
+    expect(installs).toBe(2)
+    expect(kv.store.get('rt:installed:p')).toBe('1.1.0')
+  })
+
+  it('老部署的旧标记（不是版本号的任意值）会在下次冷启动补跑一次', async () => {
+    const kv = createKV()
+    kv.store.set('rt:installed:p', 'legacy-marker')
+    const env = { KV: kv } as unknown as RuntimeEnv
+    let installs = 0
+    const def = { name: 'p', hooks: { onInstall: async () => void installs++ } } as unknown as PluginDefinition<unknown>
+
+    await ensureReady(registered('p', '1.0.0'), def, env, contexts, logger)
+    expect(installs).toBe(1)
+    expect(kv.store.get('rt:installed:p')).toBe('1.0.0')
   })
 })

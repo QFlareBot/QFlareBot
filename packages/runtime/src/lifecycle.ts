@@ -13,8 +13,20 @@ const ready = new Map<string, Promise<void>>()
 
 /**
  * 首次触及插件时执行生命周期钩子：
- * onInstall 以 KV 标记保证跨部署只跑一次（幂等由插件保证），onBoot 每个 isolate 一次。
+ * onInstall 以 KV 标记保证**每个版本**跑一次（幂等由插件保证），onBoot 每个 isolate 一次。
  * 钩子抛错只记日志、本 isolate 不再重试；读 KV 标记失败才会让这次就绪失败，下个请求重来。
+ *
+ * ## 为什么标记要存版本
+ *
+ * 以前只在「装过没有」这一个维度上判断，于是插件升级后 `onInstall` **不会**再跑。
+ * 而框架没有 migration runner，建表全在 `onInstall` 里——升级新增一张表，就只会在
+ * 第一次用到时炸 `no such table`。这个坑是真实踩到的（agent 插件升到带 `{conversations}`
+ * 的版本后，`/agent persona` 直接报 D1_ERROR）。
+ *
+ * 现在标记里存「最后跑 onInstall 的版本」，版本变了就重跑一次。
+ * 增量迁移的正确性由插件保证：所有 DDL 都应写成 `IF NOT EXISTS` / `ADD COLUMN` 当判空，
+ * 所以重跑是安全的（本意就是「幂等」这两个字）。老部署的标记值是旧格式（可能是空串或
+ * 任意字符串），与版本号对不上，因此会在下次冷启动时补跑一次——这正是我们想要的。
  */
 export function ensureReady(
   plugin: RegisteredPlugin,
@@ -47,11 +59,12 @@ async function runHooks(
   if (def.hooks?.onInstall) {
     const marker = Keys.installed(name)
     const seen = await env.KV.get(marker)
-    if (!seen) {
+    // 没装过，或装过的是别的版本：都要跑一次。DDL 由插件写成幂等的
+    if (!seen || seen !== version) {
       try {
         await def.hooks.onInstall(await contexts.prepare(plugin))
         await env.KV.put(marker, version)
-        logger.info('插件初始化完成', { plugin: name, version })
+        logger.info('插件初始化完成', { plugin: name, version, upgrade: Boolean(seen) })
       } catch (err) {
         logger.error('插件 onInstall 失败', { plugin: name, ...errorInfo(err) })
       }
