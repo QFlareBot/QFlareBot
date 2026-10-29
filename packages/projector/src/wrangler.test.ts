@@ -294,6 +294,86 @@ describe('generateWranglerConfig', () => {
     expect(out).not.toHaveProperty('migrations')
   })
 
+  describe('模板没有 migrations 时用声明式 exports（免人工维护历史）', () => {
+    /**
+     * 这是「面板装 DO 插件不该要求用户改仓库」的核心：模板不带 migrations 历史时，
+     * 生成器自己产出 exports（与生产路径的 metadata.exports 同一模型），
+     * 于是构建机不再需要「上次应用到哪个 tag」这种它根本没有的持久状态。
+     */
+    const plainBase = { name: 'bot', compatibility_date: '2025-01-01' }
+    const withDo = (...names: string[]) =>
+      makeProjection({
+        metadata: {
+          ...makeProjection().metadata,
+          exports: Object.fromEntries(
+            names.map((n) => [n, { type: 'durable-object' as const, storage: 'sqlite' as const }]),
+          ),
+        },
+      })
+
+    it('板没有 migrations 时自动产出 exports，且不带 migrations', () => {
+      const out = generateWranglerConfig({ base: plainBase, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })
+      expect(out.exports).toEqual({ P_foo_Game: { type: 'durable-object', storage: 'sqlite' } })
+      expect(out).not.toHaveProperty('migrations')
+      expect(out.durable_objects).toEqual({
+        bindings: [{ name: 'P_foo_Game', class_name: 'P_foo_Game' }],
+      })
+    })
+
+    it('多个插件 DO 类一次性全部声明', () => {
+      const out = generateWranglerConfig({
+        base: plainBase,
+        projection: withDo('P_alpha_Room', 'P_beta_Counter'),
+        mainPath: 'o/index.js',
+      })
+      expect(Object.keys(out.exports ?? {}).sort()).toEqual(['P_alpha_Room', 'P_beta_Counter'])
+    })
+
+    it('模板自己已有的 exports 会被保留并与插件类合并', () => {
+      const out = generateWranglerConfig({
+        base: { ...plainBase, exports: { Own: { type: 'durable-object', storage: 'sqlite' } } },
+        projection: withDo('P_foo_Game'),
+        mainPath: 'o/index.js',
+      })
+      expect(out.exports).toEqual({
+        Own: { type: 'durable-object', storage: 'sqlite' },
+        P_foo_Game: { type: 'durable-object', storage: 'sqlite' },
+      })
+      expect(out).not.toHaveProperty('migrations')
+    })
+
+    it('模板已有 migrations 时沿用老模型（行为不变，仍校验），且绝不产出 exports', () => {
+      // exports 与 migrations 互斥：两者同时出现 wrangler 会直接报错，
+      // 所以老部署绝不能因为我们多写一个字段而挂掉
+      const out = generateWranglerConfig({ base: doBase, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })
+      expect(out.migrations).toEqual(doBase.migrations)
+      expect(out).not.toHaveProperty('exports')
+    })
+
+    it('迁移历史缺项时仍然报错（老模型的护栏不放松）', () => {
+      const incomplete = { ...plainBase, migrations: [{ tag: 'v1', new_sqlite_classes: ['Own'] }] }
+      expect(() => generateWranglerConfig({ base: incomplete, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })).toThrow(
+        /P_foo_Game/,
+      )
+    })
+
+    it('无插件 DO 时既不产出 exports 也不产出 migrations', () => {
+      const out = generateWranglerConfig({ base: plainBase, projection: makeProjection(), mainPath: 'o/index.js' })
+      expect(out).not.toHaveProperty('exports')
+      expect(out).not.toHaveProperty('migrations')
+    })
+
+    it('重复生成是幂等的（拿上一次的输出当模板再生成一次）', () => {
+      // 构建机每次都是全新环境，但本地 `pnpm project` 会把结果写回再用；
+      // 导出名不能越叠越多，也不能把 exports 丢掉退回 migrations
+      const once = generateWranglerConfig({ base: plainBase, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })
+      const twice = generateWranglerConfig({ base: once, projection: withDo('P_foo_Game'), mainPath: 'o/index.js' })
+      expect(twice.exports).toEqual(once.exports)
+      expect(twice).not.toHaveProperty('migrations')
+      expect(twice.durable_objects).toEqual(once.durable_objects)
+    })
+  })
+
   it('无插件 DO 时不追加；缺 compatibility_date 时从投影补齐', () => {
     const out = generateWranglerConfig({
       base: { name: 'bot' },

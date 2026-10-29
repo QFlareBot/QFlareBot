@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 一次预检的结果：权限、命令、服务、第三方依赖、警告、要补的 DO migrations */
+/** 一次预检的结果：权限、命令、服务、第三方依赖、警告、DO 说明（会随主模块求值、无版本预览地址；不再需要人工补 migrations） */
 import type { InstallPreview } from '../../api/types.js'
 import QBadge from '../ui/QBadge.vue'
 

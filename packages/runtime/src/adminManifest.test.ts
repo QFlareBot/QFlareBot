@@ -463,23 +463,34 @@ describe('自部署触发与状态同步', () => {
     expect(triggerWrites).toEqual([])
   })
 
-  it('声明了 Durable Object 的插件先拦下来，给出要往 wrangler.jsonc 补的 migrations', async () => {
-    const { call, triggerWrites } = setup()
+  /**
+   * 回归：装 DO 插件**不再**要求用户改仓库。
+   *
+   * 以前这里是 409 + 「请去 apps/seed/wrangler.jsonc 补一条 migrations 并 push」，
+   * 与「面板点两下装插件」的设计前提冲突。现在投影器在模板没有 migrations 历史时
+   * 自动产出声明式 exports，所以安装直接放行，DO 的风险说明降级成 warnings。
+   */
+  it('声明了 Durable Object 的插件直接放行，DO 的代价只作为提醒', async () => {
+    const { call } = setup()
     const res = await call('/admin/manifest/plugins', {
       method: 'POST',
       headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
       body: JSON.stringify({ source: 'git:me/qqbot-plugin-game@e5f6a7b8c9' }),
     })
-    expect(res.status).toBe(409)
-    const body = (await res.json()) as { error: string; code: string }
-    expect(body.code).toBe('durable_objects_migration_required')
-    // 报的必须是投影后的导出名——用户照着抄进 wrangler.jsonc，构建期的 checkDoMigrations 才认
-    expect(body.error).toContain('"new_sqlite_classes": ["P_game_Room", "P_game_Lobby"]')
+    expect(res.status).toBe(200)
 
-    // 拦下来就不该留任何痕迹：没写 D1、没记账本、更没触发构建
+    const body = (await res.json()) as { warnings?: string[]; build?: { buildUuid: string } }
+    // 提醒里要包含投影后的导出名，让人对得上构建日志
+    expect(body.warnings?.join('\n')).toContain('P_game_Room')
+    // 不该再出现「去改仓库 / 补 migrations」这种要求
+    expect(body.warnings?.join('\n')).not.toContain('migrations 末尾追加')
+    expect(body.warnings?.join('\n')).not.toContain('提交推送')
+    // 放行就该真的触发构建
+    expect(body.build?.buildUuid).toBe('build-9')
+
+    // 并且真的写进了清单
     const manifest = await (await call('/admin/build-manifest', { headers: { authorization: `Bearer ${ADMIN}` } })).json()
-    expect((manifest as { plugins: unknown[] }).plugins).toEqual([])
-    expect(triggerWrites).toEqual([])
+    expect((manifest as { plugins: Array<{ name: string }> }).plugins.map((p) => p.name)).toEqual(['game'])
   })
 
   it('确认已补 migrations 后放行', async () => {
@@ -1111,12 +1122,14 @@ describe('dryRun 预检', () => {
     expect(triggerWrites).toEqual([])
   })
 
-  it('声明了 DO：预检不 409，把要补的 migrations 摆出来', async () => {
+  it('声明了 DO：预检放行，把 DO 的代价作为提醒摆出来', async () => {
     const { call } = setup()
     const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', dryRun: true })
     expect(res.status).toBe(200)
-    expect(data.durableObjects).toMatchObject({ required: true })
-    expect(data.durableObjects.message).toContain('"new_sqlite_classes": ["P_game_Room", "P_game_Lobby"]')
+    // 预检不再要求用户先改仓库：这里的 message 是说明而不再是「必须先补 migrations」
+    expect(data.durableObjects).toMatchObject({ required: false })
+    expect(data.durableObjects.message).toContain('P_game_Room')
+    expect(data.durableObjects.message).not.toContain('migrations 末尾追加')
   })
 
   it('硬规则照旧拒绝：依赖缺失，带上 code 供面板批量安装识别', async () => {
@@ -1185,20 +1198,23 @@ describe('只提醒、不拦的情况（以前能装的现在照样能装）', (
   })
 })
 
-describe('Durable Object：只拦新增的类', () => {
-  it('确认过 migrations 的插件，升级时 DO 类没变就直接放行；新增了类才要再确认', async () => {
+describe('Durable Object：不再拦截，只做提醒', () => {
+  it('首次安装与升级都直接放行；新增 DO 类时把新类名放进 warnings', async () => {
     const { call } = setup()
-    expect((await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', acknowledgeDurableObjects: true })).res.status).toBe(200)
+    expect((await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9' })).res.status).toBe(200)
 
-    // 类不变：以前每次升级都 409，声明了 DO 的插件永远没法一键更新
+    // 类不变：升级照旧放行
     const same = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8d0' })
     expect(same.res.status).toBe(200)
+    expect(same.data.warnings?.join('\n') ?? '').not.toContain('Arena')
 
+    // 新增了类：仍然放行（投影器自动声明），但要把新类名说出来
     const added = await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8d1' })
-    expect(added.res.status).toBe(409)
-    expect(added.data.code).toBe('durable_objects_migration_required')
-    expect(added.data.error).toContain('新增了 Durable Object 类（Arena）')
-    expect(added.data.error).toContain('"new_sqlite_classes": ["P_game_Arena"]')
+    expect(added.res.status).toBe(200)
+    expect(added.data.warnings?.join('\n')).toContain('新增了 Durable Object 类（Arena）')
+    expect(added.data.warnings?.join('\n')).toContain('P_game_Arena')
+    // 不再是「先去改仓库」的要求
+    expect(added.data.warnings?.join('\n')).not.toContain('提交推送')
   })
 
   it('线上部署里已有的类同样算数', async () => {

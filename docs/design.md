@@ -22,7 +22,7 @@ TypeScript + wrangler。Workers 是 JS 一等公民，WebCrypto/fetch 原生；R
 
 1. 部署走"先上传后切流量"，健康检查失败就不切。健康检查带 `?plugins=1`：新版本把每个插件都加载一遍，入口一加载就抛错的插件同样让这次不切流量（旧运行时忽略这个参数）。含 Durable Object 的 Worker 没有版本预览 URL（平台限制），此时跳过健康检查——这是当前最大的例外
 2. 插件用动态 `import()`，某个插件求值抛错只影响自己，面板照常可用（声明 Durable Object 的插件例外：类必须静态导出，随主模块求值，求值失败会拖垮整个 Worker）
-3. 声明 Durable Object 的插件在**安装**这一步就被拦下并给出要补的 `migrations`——投影对 DO 迁移只校验不合成（构建机没有「上次应用到哪个 tag」的持久状态），校验在构建阶段，不拦的话插件已入 D1 才炸，且此后每次构建都炸
+3. 声明 Durable Object 的插件可以**直接安装**，投影器在生成部署配置时自动以声明式 `exports`（`{ P_<插件>_<类>: { type: "durable-object", storage: "sqlite" } }`）声明，与生产路径的 `metadata.exports` 同一模型——`exports` 没有历史，构建机不需要「上次应用到哪个 tag」这种它没有的持久状态。模板里已经写过 `migrations` 的老部署沿用老路径（两者在 Cloudflare 侧互斥），那里才仍需维护者补条目。DO 的代价在预检里作为提醒展示：类随主模块求值、且没有版本预览地址
 4. 快照里的 `safeMode` 跳过全部插件；Cloudflare 后台版本回滚、以及"恢复 D1 清单快照 + 重新触发构建"是最后手段
 5. 部署凭证不进 Worker：Worker 只持有 Builds 触发 token（user-scoped，权限仅触发构建与读构建状态）；编译与部署凭证由构建机持有
 

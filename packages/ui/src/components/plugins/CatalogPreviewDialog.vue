@@ -31,7 +31,7 @@ const emit = defineEmits<{ cancel: []; confirm: [] }>()
           <PreviewDetails :preview="row.preview" :notice="row.notice" />
           <label v-if="row.preview.durableObjects" class="mt-2 flex cursor-pointer items-center gap-2 text-xs text-fg">
             <input v-model="row.ackDo" type="checkbox" />
-            已往仓库补好 migrations 并推送（不勾就不装它）
+            我了解这个插件声明了 Durable Object（会随主模块求值，且没有版本预览地址）
           </label>
         </template>
       </li>

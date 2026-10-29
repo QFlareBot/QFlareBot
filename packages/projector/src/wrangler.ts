@@ -319,9 +319,35 @@ export function generateWranglerConfig(opts: {
     delete config.durable_objects
   }
 
-  // migrations 只校验、不合成——构建机没有「上次应用到哪个 tag」的持久状态，造不出正确的历史
-  if (doNames.length) checkDoMigrations(base, doNames, opts.warnings)
-  if (!(base.migrations ?? []).length) delete config.migrations
+  // DO 生命周期有两条互斥的声明方式（Cloudflare 规定 exports 与 migrations 不能同时出现）：
+  //
+  // - **exports（声明式）**：只描述「当前有哪些类」，没有历史。构建机不需要任何持久状态，
+  //   装/升/卸 DO 插件全程自动——这才是面板装插件该有的体验。
+  //   生产部署（Versions API）一直是这条模型：metadata.ts 把插件 DO 写进 `metadata.exports`。
+  //   这里让降级路径（wrangler deploy）与它对齐。
+  //
+  // - **migrations（只追加的历史）**：平台记着「上次应用到哪个 tag」，构建机造不出正确的历史，
+  //   所以只能校验、不能合成。模板里已经有 migrations 的部署沿用这条老路（行为不变），
+  //   缺项时照旧报错让人补——强制迁移会把已经在用的机器人打挂。
+  if (doNames.length) {
+    const pluginExports = Object.fromEntries(
+      doNames.map((name) => [name, { type: 'durable-object' as const, storage: 'sqlite' as const }]),
+    )
+    if ((base.migrations ?? []).length > 0) {
+      // 老模型：模板自己维护 migrations 历史，只校验不合成
+      checkDoMigrations(base, doNames, opts.warnings)
+      config.exports = { ...(base.exports ?? {}) }
+      if (!Object.keys(config.exports).length) delete config.exports
+    } else {
+      // 新模型：模板没有 migrations，用声明式 exports 覆盖插件类
+      config.exports = { ...(base.exports ?? {}), ...pluginExports }
+      delete config.migrations
+    }
+  } else {
+    delete config.migrations
+    if (base.exports && Object.keys(base.exports).length > 0) config.exports = { ...base.exports }
+    else delete config.exports
+  }
 
   return config
 }

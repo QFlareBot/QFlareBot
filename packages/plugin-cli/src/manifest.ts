@@ -103,12 +103,18 @@ function isPluginDefinition(value: unknown): value is PluginDefinition<unknown> 
   return typeof value === 'object' && value !== null && typeof (value as { name?: unknown }).name === 'string'
 }
 
-/** 把入口打成 Node 可执行的临时 ESM 文件并 import，取默认导出 */
-async function loadDefinition(
+/**
+ * 把入口打成 Node 可执行的临时 ESM 文件并 import。
+ *
+ * 返回**整个模块命名空间**而不只是默认导出：`durableObjects` 的键名必须与入口里
+ * 真正导出的类名一致（投影生成的 glue 是 `import { <键名> as … } from '插件模块'`），
+ * 这件事只有在拿到命名空间时才能在构建期检查出来。见 `assertDurableObjectExports`。
+ */
+async function loadModule(
   entry: string,
   cwd: string,
   alias: Record<string, string> | undefined,
-): Promise<PluginDefinition<unknown>> {
+): Promise<Record<string, unknown>> {
   const tmpFile = path.join(os.tmpdir(), `qqbot-plugin-${process.pid}-${randomUUID()}.mjs`)
   try {
     await esbuild.build({
@@ -125,14 +131,49 @@ async function loadDefinition(
       ...(alias ? { alias } : {}),
     })
 
-    const mod = (await import(pathToFileURL(tmpFile).href)) as { default?: unknown }
-    if (!isPluginDefinition(mod.default)) {
-      throw new Error(`入口必须默认导出 definePlugin(...)：${path.relative(cwd, entry)}`)
-    }
-    return mod.default
+    return (await import(pathToFileURL(tmpFile).href)) as Record<string, unknown>
+  } catch (error) {
+    // 产物是临时的，报错里带着 /tmp 路径对作者没有意义，换成入口文件
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`加载插件入口失败（${path.relative(cwd, entry) || entry}）：${message}`)
   } finally {
     await rm(tmpFile, { force: true })
   }
+}
+
+/**
+ * `durableObjects` 的键必须与入口模块里**真的导出**的名字一致。
+ *
+ * 投影器生成的入口是 `import { Agent as _do_P_agent_Agent } from './plugins/agent.js'`，
+ * 它按清单里的键名去取导出。插件若写 `durableObjects: { Agent: AgentObject }`
+ * （类叫 AgentObject、键叫 Agent），清单里记的是键 `Agent`，而模块只导出 `AgentObject`——构建成功、
+ * 部署时 workerd 抛 `does not provide an export named 'Agent'`。
+ *
+ * 这一步必须在构建期挡住：`project()` 只是拼字符串、不执行 glue，所以构建机发现不了；
+ * 而含 DO 的 Worker 又没有版本预览地址，部署前的 `/healthz` 健康检查会被跳过，
+ * 于是坏版本一路切到线上。等线上报错时，作者拿到的是一句 workerd 语法错误，很难归因。
+ */
+function assertDurableObjectExports(def: PluginDefinition<unknown>, mod: Record<string, unknown>): void {
+  const declared = Object.keys(def.durableObjects ?? {})
+  if (declared.length === 0) return
+
+  const missing = declared.filter((name) => typeof mod[name] !== 'function')
+  if (missing.length === 0) return
+
+  // 常见写法是「键写成投影想要的名字，值指向另一个类名」，把可能的候选说出来
+  const exported = Object.keys(mod).filter((k) => k !== 'default' && typeof mod[k] === 'function')
+  const hint = exported.length
+    ? `入口当前导出的类：${exported.join('、')}\n` +
+      `  若类名与键名不同，请把类直接命名为 \`${missing[0]}\` 并写成 \`durableObjects: { ${missing[0]} }\`，` +
+      '或把键改成与导出一致的名字。'
+    : '入口没有导出任何类。'
+
+  throw new Error(
+    `插件 ${def.name} 的 durableObjects 键名与入口的导出名不一致：${missing.join('、')}\n` +
+      `  投影器会按清单里的键名 import（\`import { ${missing[0]} as … } from '插件模块'\`），` +
+      '模块里没有同名导出就会在启动时失败。\n' +
+      `  ${hint}`,
+  )
 }
 
 /** 在 Node 中加载插件入口，抽取并校验清单（不写任何文件） */
@@ -141,7 +182,13 @@ export async function extractPluginManifest(options: ExtractManifestOptions = {}
   const entry = path.resolve(cwd, options.entry ?? 'src/index.ts')
 
   const pkg = await readPackageJson(cwd)
-  const def = await loadDefinition(entry, cwd, options.alias)
+  const mod = await loadModule(entry, cwd, options.alias)
+  if (!isPluginDefinition(mod['default'])) {
+    throw new Error(`入口必须默认导出 definePlugin(...)：${path.relative(cwd, entry)}`)
+  }
+  const def = mod['default']
+  // 先于清单提取：导出名不对的话，后面产出的清单看着完全合法，问题只在部署时才炸
+  assertDurableObjectExports(def, mod)
   const manifest = extractManifest(def, pkg)
 
   const errors = validateManifest(manifest)

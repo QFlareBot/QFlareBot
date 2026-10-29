@@ -71,7 +71,7 @@ npm run sync             # 把 dist/manifest.json 复制到仓库根目录（声
 npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSession / createMockContext
 ```
 
-装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接，先预检（权限、命令重名、要补的 DO migrations 一次列出来），确认后安装并就地触发构建——等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}`（加 `"dryRun": true` 只预检不写）。构建机拉源码编译，声明清单与源码不一致会直接失败。**只支持公开的 GitHub 仓库**：安装时匿名读仓库里的 `manifest.json`，构建机也是匿名下载源码，私有仓库两步都会 404。
+装到机器人：面板 → 插件 → 安装插件，粘贴仓库链接，先预检（权限、命令重名、依赖与警告一次列出来），确认后安装并就地触发构建——等价于 `POST /admin/manifest/plugins` 提交 `{"source": "git:<owner>/<repo>@<完整commit>"}`（加 `"dryRun": true` 只预检不写）。构建机拉源码编译，声明清单与源码不一致会直接失败。**只支持公开的 GitHub 仓库**：安装时匿名读仓库里的 `manifest.json`，构建机也是匿名下载源码，私有仓库两步都会 404。
 
 安装记录钉在具体 commit 上——推了新代码不会自动生效。更新就是换到上游默认分支的最新提交：面板「已装插件」里点「检查全部更新」，勾选要更新的，点「更新选中」——逐个写进清单、**只触发一次构建**（API 上是每个 `POST /admin/manifest/plugins` 带 `"build": false`，最后 `POST /admin/builds`）。单个插件的 `check-update` / `update` 端点照旧可用。
 
@@ -399,20 +399,22 @@ export default definePlugin({
 
 投影时框架把类以 **`P_<插件名>_<类名>`** 导出到 Worker 主模块（插件名里的非字母数字换成 `_`，所以是 `P_game_Room`），并在导出时挂上作用域工厂 —— `PluginDurableObject` 的构造器就是靠它把裸 env 换掉的。因此 DO 类只能经由投影入口导出，手工在 `wrangler.jsonc` 里导出会在构造时抛错。
 
-**关键一步：安装会被拦下，要先往机器人仓库补一条 migrations。** 面板预检时会把要加的内容原样给出（直接调安装 API 则返回 409 `durable_objects_migration_required`，内容相同）：
+**安装不需要任何人工步骤。** 投影器会在生成部署配置时，把插件 DO 类以 Cloudflare 的**声明式 `exports`** 写进去（与生产部署的 Versions API 用的是同一模型），装 / 升级 / 卸载全程自动：
 
 ```jsonc
-// apps/seed/wrangler.jsonc 的 migrations 末尾追加（tag 不能与已有重复）
-{ "tag": "p-game-room", "new_sqlite_classes": ["P_game_Room"] }
+// apps/seed/wrangler.generated.jsonc（构建机生成，不要手改）
+"exports": { "P_game_Room": { "type": "durable-object", "storage": "sqlite" } }
 ```
 
-提交推送之后，回面板点「已加好 migrations，确认安装」即可（API 上是带 `acknowledgeDurableObjects: true` 重新安装）。只有**新增**的类才会被拦：以后升级时 DO 类没变就直接更新，新版本多了类才要再补一条。
+`exports` 只描述「当前有哪些 DO 类」，没有历史，所以构建机不需要「上次应用到哪个 tag」这种持久状态——这正是它比 `migrations` 适合本框架的原因。面板预检时只会给一句提醒（DO 类会随主模块求值、且没有版本预览地址），不拦安装。
 
-为什么不能自动：`migrations` 是**只追加的历史**，平台记着「上次应用过的 tag」，下次部署拿它在列表里定位、只应用其后的新增项。构建机每次都是全新环境，没有这个状态，造不出正确的历史——所以投影对它只校验、不合成。而校验发生在构建阶段，不在安装这一步拦住的话，插件已经写进 D1 才炸，并且**此后每一次构建都会炸**（包括之后装别的插件），直到有人想起来把它卸载。
+**唯一的例外**：你的机器人仓库 `apps/seed/wrangler.jsonc` 里**已经**手工写过 `migrations`（老部署）。`exports` 与 `migrations` 在 Cloudflare 侧互斥，所以投影器检测到模板有 migrations 时会沿用老路径、照旧校验并在缺项时报错。想回到免维护的新模型，把模板里那段 `migrations` 删掉即可——前提是那些类已经由之前的部署建好（`exports` 只声明存活，不创建）。
+
+**类名与清单键**：`durableObjects` 的键名必须与入口里**导出的类名完全一致**。投影器的入口是 `import { <键名> as … } from '插件模块'`，名字不一致会在启动时失败。`qqbot-plugin build` 现在会在构建期挡住这种写法，并在报错里给出入口实际导出的类名。
 
 **两条安全阀在 DO 面前会失效**，这是选它之前要接受的代价：DO 类必须静态导出、随主模块求值，所以求值抛错会拖垮整个 Worker，而不是只影响自己（插件平时靠动态 `import()` 隔离求值错误，DO 是例外，见[设计决策](./design.md#_3-单-worker-触发构建自部署)的安全阀）；另外含 DO 的 Worker 没有版本预览 URL，部署时的 `/healthz` 健康检查会被跳过，坏版本不会在切流量前被拦下。
 
-卸载同样要手动收尾：类从 bundle 里消失之后，`wrangler.jsonc` 的 `migrations` 里那条 `new_sqlite_classes` 还留着。走 Versions API 的正常部署不受影响，但一旦降级到 `wrangler deploy`，声明了却不存在的类可能被拒（需要补一条 `deleted_classes`）。**这条我没有实测过**，卸载 DO 插件之后留意一下构建日志。
+卸载也不需要人工收尾：类从 bundle 里消失后，下次投影生成的 `exports` 里自然没有它（`exports` 是当前状态，不是历史）。只有沿用 `migrations` 老路径的仓库才需要维护者补一条 `deleted_classes`。
 
 ## 7. 定时任务与主动推送
 

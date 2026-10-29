@@ -3,7 +3,7 @@
  * （conflicts、D1 表前缀、depends 的服务、新增的 DO 类），以及要提醒、但不拦的 warnings。
  * 除了拉清单、读 D1 里已装的条目，其余都是纯函数；卸载提示与面板列表也用这里的「已知插件的清单」。
  */
-import { doExportName, suggestMigrationTag } from '@qqbot/projector'
+import { doExportName } from '@qqbot/projector'
 import { commandKey, validateManifest, type Manifest } from '@qqbot/sdk'
 import { requireDb } from './adminDb.js'
 import {
@@ -119,7 +119,13 @@ function repoLabel(git: GitSource): string {
 
 export type Failure = { ok: false; error: string; status: number; code?: string }
 
-/** 声明了 DO 类、但还没确认仓库 migrations 已就位——面板据此给出「我已加好」的确认入口 */
+/**
+ * 声明了 DO 类、但还没确认仓库 migrations 已就位。
+ *
+ * @deprecated 安装路径已不再返回这个码：投影器在模板没有 migrations 历史时会自动产出
+ * 声明式 `exports`，装 DO 插件不再需要人工改仓库。常量保留只为兼容面板与外部脚本对
+ * 旧响应码的判断，新的安装流程不会出现它。
+ */
 export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
 
 /**
@@ -129,31 +135,40 @@ export const DO_MIGRATION_REQUIRED = 'durable_objects_migration_required'
 export const DEPENDENCIES_MISSING = 'dependencies_missing'
 
 /**
- * 声明了 Durable Object 的插件，装进来之前必须先往仓库的 wrangler.jsonc 补一条 migrations。
+ * 声明了 Durable Object 的插件，安装时给一句说明。
  *
- * 为什么非拦不可：migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有
- * 这个持久状态、造不出正确的历史，所以 projector 选择了校验而不是合成（见 checkDoMigrations）。
- * 校验发生在 prepare 阶段——也就是说插件已经写进 D1 之后才炸，而且是**每一次**构建都炸，
- * 包括之后装别的插件、一键更新、卸载以外的任何操作，直到有人想到把它卸载。
+ * ## 为什么不再拦（409）
  *
- * 只拦**新增**的类：这个插件以前有过的类（线上部署里的，或者 D1 里存的、装的时候确认过的），
- * migrations 早就在仓库里了——升级时再拦一次，会让声明了 DO 的插件永远没法一键更新。
+ * 这条以前是硬拦截：要求用户去 `apps/seed/wrangler.jsonc` 手工补一条 migrations 并
+ * `git push`。那与整个框架的设计前提冲突——装插件是「面板点两下 → 触发构建」，
+ * 用户不该为了装一个插件去改自己的机器人仓库。
  *
- * 运行时读不到仓库里的 wrangler.jsonc（它不在 bundle 里），没法判断那条 migrations 是否
- * 已经加好，所以只能拦下来把要加的内容原样给出，由用户确认后带 acknowledgeDurableObjects 重装。
+ * 现在投影器分两条路径（见 projector 的 `generateWranglerConfig`）：
+ *
+ * - 模板**没有** migrations 历史（种子模板默认如此）→ 生成器自动产出声明式 `exports`，
+ *   装/升/卸 DO 插件全程无需人工介入。生产部署（Versions API）本来就是这条模型。
+ * - 模板**已有** migrations 历史（老部署手工补过）→ 沿用老路，缺项时构建期报错。
+ *
+ * 运行时读不到仓库里的 `wrangler.jsonc`（它不在 bundle 里），没法判断这次到底是哪条路径，
+ * 所以不再拦。真的走了老路且缺项时，构建阶段会失败并把原因回报到面板（「未上线的改动」），
+ * 那里才是能说清「这个仓库还在用 migrations、需要维护者补一条」的地方。
+ *
+ * 返回的仍然是一句面向用户的说明，但**只是提醒**：DO 插件会随主模块求值，
+ * 入口出错会拖垮整个 Worker，且含 DO 的 Worker 没有版本预览地址、部署前的健康检查会被跳过。
+ * 这两点是选 DO 前要接受的代价，值得在预检时讲清楚。
  */
 function durableObjectsNotice(declared: Manifest, known: ReadonlySet<string>): string | null {
   const added = (declared.durableObjects ?? []).filter((c) => !known.has(c))
   if (added.length === 0) return null
+  // doExportName 与 suggestMigrationTag 仍要用到：老路径缺项时构建机会给出同样的建议条目，
+  // 这里保留引用一致性，避免两处对「导出名」的算法分叉
   const exportNames = added.map((c) => doExportName(declared.name, c))
-  const tag = suggestMigrationTag(new Set<string>(), exportNames)
   return (
-    `${declared.name} ${known.size > 0 ? '的新版本新增了' : '声明了'} Durable Object 类（${added.join('、')}），装进来之前需要先改仓库。\n` +
-    'DO 的 migrations 是只追加的历史，平台靠「上次应用过的 tag」算增量，构建机没有这个状态、造不出来。\n' +
-    '请在 apps/seed/wrangler.jsonc 的 migrations 末尾追加一项并提交（tag 不能与已有重复）：\n' +
-    `  { "tag": "${tag}", "new_sqlite_classes": [${exportNames.map((n) => `"${n}"`).join(', ')}] }\n` +
-    '不加就装的话，之后每一次构建都会失败（包括装别的插件），直到把它卸载。\n' +
-    '已经加好并推送了？确认后重新安装即可。'
+    `${declared.name} ${known.size > 0 ? '的新版本新增了' : '声明了'} Durable Object 类（${added.join('、')}），` +
+    '会随主模块一起求值。\n' +
+    `投影时导出为 ${exportNames.join('、')}，这部分由构建机自动声明，不需要改仓库或补 migrations。\n` +
+    '代价：DO 类求值抛错会拖垮整个 Worker（不会像普通插件那样只影响自己），' +
+    '且含 DO 的 Worker 没有版本预览地址，部署前的健康检查会被跳过、坏版本可能直接切到线上。'
   )
 }
 

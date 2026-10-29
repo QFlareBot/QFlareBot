@@ -303,3 +303,55 @@ export default definePlugin({ name: 'demo', commands: {}, durableObjects: { Coun
     )
   })
 })
+
+describe('Durable Object 导出名必须与清单键一致', () => {
+  /**
+   * 投影器生成的入口按**清单里的键名** import（`import { Agent as _do_P_agent_Agent }`），
+   * 所以 `durableObjects` 的键必须与入口里真正导出的类名相同。
+   *
+   * 写错时构建与清单都合法，只会在部署时由 workerd 抛
+   * `does not provide an export named 'Agent'`；而含 DO 的 Worker 没有版本预览地址、
+   * 健康检查被跳过，坏版本会一路切到线上。必须在构建期挡住。
+   */
+  const MISMATCHED_SOURCE = `
+import { definePlugin, PluginDurableObject } from '@qqbot/sdk'
+
+export class AgentObject extends PluginDurableObject {}
+
+export default definePlugin({ name: 'demo', commands: {}, durableObjects: { Agent: AgentObject } })
+`
+
+  it('键名与导出类名不一致时构建失败，并说明投影器如何 import', async () => {
+    await writePlugin(MISMATCHED_SOURCE)
+    await expect(extractPluginManifest({ cwd: dir, alias })).rejects.toThrow(
+      /durableObjects 键名与入口的导出名不一致：Agent/,
+    )
+  })
+
+  it('报错里给出入口实际导出的类名，便于定位', async () => {
+    await writePlugin(MISMATCHED_SOURCE)
+    await expect(extractPluginManifest({ cwd: dir, alias })).rejects.toThrow(/AgentObject/)
+  })
+
+  it('键名与导出类名一致时正常通过', async () => {
+    await writePlugin(`
+import { definePlugin, PluginDurableObject } from '@qqbot/sdk'
+
+export class Agent extends PluginDurableObject {}
+
+export default definePlugin({ name: 'demo', commands: {}, durableObjects: { Agent } })
+`)
+    const manifest = await extractPluginManifest({ cwd: dir, alias })
+    expect(manifest.durableObjects).toEqual(['Agent'])
+  })
+
+  it('没有 DO 的插件不受影响', async () => {
+    await writePlugin(`
+import { definePlugin } from '@qqbot/sdk'
+
+export default definePlugin({ name: 'demo', commands: {} })
+`)
+    const manifest = await extractPluginManifest({ cwd: dir, alias })
+    expect(manifest.durableObjects).toEqual([])
+  })
+})

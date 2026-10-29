@@ -1,8 +1,10 @@
 <script setup lang="ts">
 /**
- * 按仓库链接安装：先预检（解析最新 commit、dryRun），把权限、依赖、警告、要补的 DO migrations 摆出来，确认后再装。
- * 插件声明了 Durable Object 时要先往仓库 wrangler.jsonc 补 migrations——运行时读不到仓库里的那份配置，
- * 判断不了用户加没加，只能把原文摆出来让人确认；不拦的话装进去之后每一次构建都会失败。
+ * 按仓库链接安装：先预检（解析最新 commit、dryRun），把权限、依赖、警告摆出来，确认后再装。
+ *
+ * 声明了 Durable Object 的插件**不需要**任何人工步骤：投影器在模板没有 migrations 历史时
+ * 会自动产出声明式 `exports`（与生产部署的 metadata.exports 同一模型），
+ * 装/升/卸全程自动。DO 的代价（会随主模块求值、且没有版本预览地址）作为提醒展示，不拦。
  */
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -52,7 +54,9 @@ async function confirmInstall() {
   installing.value = true
   try {
     // 构建由安装端点就地触发，这里不再补发一次——补发只能覆盖面板这一条路径，curl / 脚本装完照样什么都不会发生
-    const result = await api.installPlugin(p.plugin.source, { acknowledgeDurableObjects: !!p.durableObjects })
+    // DO 插件不再需要人工补 migrations：投影器会自动以声明式 exports 声明。
+    // acknowledgeDurableObjects 已废弃，这里不再传。
+    const result = await api.installPlugin(p.plugin.source)
     const label = `${result.plugin.name}@${result.plugin.version}`
     const { text, level } = describeBuild(`已${result.previous ? '升级' : '安装'} ${label}`, result.build)
     push('buildUuid' in result.build ? `${text}，上线后出现在列表里` : text, level)
@@ -101,7 +105,7 @@ onMounted(() => {
         <PreviewDetails :preview="preview" />
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <QButton variant="primary" :loading="installing" @click="confirmInstall">
-            {{ preview.durableObjects ? '已加好 migrations，确认安装' : preview.previous ? '确认升级并构建' : '确认安装并构建' }}
+            {{ preview.previous ? '确认升级并构建' : '确认安装并构建' }}
           </QButton>
           <QButton variant="ghost" :disabled="installing" @click="preview = null">取消</QButton>
         </div>

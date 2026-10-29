@@ -54,7 +54,8 @@ export { listManagedPlugins } from './managedPlugins.js'
  * 可选参数，不传就是原来的行为：
  * - `dryRun: true`：只预检，不写 D1、不记账本、不构建；返回清单摘要、警告与 DO 提示，面板据此让人确认
  * - `build: false`：只写 D1 不触发构建。批量更新时逐个写进去，最后调一次 `POST /admin/builds`
- * - `acknowledgeDurableObjects: true`：已按提示往仓库补好 migrations
+ * - `acknowledgeDurableObjects: true`：**已废弃**。安装不再拦截 DO 插件（投影器自动声明 exports），
+ *   这个参数照旧接受但已不起作用，留着是为了让老面板与老脚本不改也能继续工作
  */
 export async function installManifestPlugin(request: Request, scope: RequestScope, deps: AdminDeps): Promise<Response> {
   const db = await requireDb(scope)
@@ -70,9 +71,8 @@ export async function installManifestPlugin(request: Request, scope: RequestScop
     return json({ ok: true, dryRun: true, ...preview.preview })
   }
 
-  const out = await installFromSource(source, scope, deps, {
-    acknowledgeDurableObjects: body?.acknowledgeDurableObjects === true,
-  })
+  // acknowledgeDurableObjects 已废弃：照旧把它读进来（老面板会传），但不再影响任何判断
+  const out = await installFromSource(source, scope, deps)
   if (!out.ok) return error(out.error, out.status, out.code)
 
   // 就地触发构建：只改 D1 清单的话，插件根本不在正在运行的 bundle 里——装了等于没装。
@@ -123,8 +123,9 @@ async function previewInstall(
       // 第三方依赖：构建时按插件仓库的 lockfile 安装、打进插件自己的 plugin.js。和权限一样让人确认
       dependencies: dependencies.packages,
       warnings: [...installWarnings(inspected, deps.registry), ...dependencyWarnings(dependencies)],
-      // 预检不 409：把要补的 migrations 摆出来，让人确认后带 acknowledgeDurableObjects 正式装
-      durableObjects: doNotice ? { required: true, message: doNotice } : null,
+      // DO 不再拦截：`required` 恒为 false，message 只是「会随主模块求值、且没有版本预览地址」的告知。
+      // 字段保留是为了让面板 UI 照旧能显示这条说明（老面板读 required 也拿不到阻断了）。
+      durableObjects: doNotice ? { required: false, message: doNotice } : null,
     },
   }
 }
@@ -134,20 +135,19 @@ async function installFromSource(
   source: string,
   scope: RequestScope,
   deps: AdminDeps,
-  opts: { acknowledgeDurableObjects?: boolean } = {},
 ): Promise<InstallOutcome> {
   const inspected = await inspectSource(source, scope, deps)
   if (!inspected.ok) return inspected
-  // 与以前同一个顺序：DO 提示先于其他校验
-  if (inspected.doNotice && opts.acknowledgeDurableObjects !== true) {
-    return { ok: false, status: 409, code: DO_MIGRATION_REQUIRED, error: inspected.doNotice }
-  }
   const blocked = blockingProblem(inspected, deps)
   if (blocked) return blocked
 
   const db = scope.env.DB!
   const { entry, existing, declared } = inspected
   const warnings = installWarnings(inspected, deps.registry)
+  // DO 的说明从「拦下来要求改仓库」降级为提醒：投影器在模板没有 migrations 历史时
+  // 自动产出声明式 exports，装 DO 插件不再需要人工介入（见 installChecks 的注释）。
+  // 真走了老路径且缺项时，构建阶段会失败并把原因回报到面板。
+  if (inspected.doNotice) warnings.unshift(inspected.doNotice)
   await upsertManifestPlugin(db, { ...entry, manifest: declared })
   // 卸载的后半段还没跑（旧部署还在）就又装回来：取消它，别让定时任务把新装的这份的数据清掉
   await removePendingCleanup(db, entry.name)
