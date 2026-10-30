@@ -7,6 +7,15 @@ export interface DeployManifest {
   /** 管理面板 @qqbot/ui 的版本；缺省则不带面板（headless）；source 缺省为 `npm:@qqbot/ui` */
   ui?: { version: string; source?: string }
   plugins: InstalledPlugin[]
+  /**
+   * 已经卸载、但平台上还留着 Durable Object 命名空间的类（Worker 导出名）。
+   *
+   * 卸载带 DO 的插件后，新版本不再导出那个类，平台会拒绝部署（错误码 10064），
+   * 要求显式声明删除。声明式 `exports` 模型的写法是一条墓碑
+   * （`{ state: 'deleted' }`）。构建机没有持久状态，这份名单由 Worker 在卸载时
+   * 记进 D1，随 `/admin/build-manifest` 下发到这里。
+   */
+  retiredDoClasses?: Array<{ className: string; plugin: string }>
 }
 
 export interface InstalledPlugin {
@@ -71,6 +80,14 @@ export interface Projection {
   metadata: VersionMetadata
   /** 本次实际拉取到的制品摘要（SRI），供上层回写清单锁定版本 */
   integrity: { core: string; ui?: string; plugins: Record<string, string> }
+  /**
+   * 已卸载插件留下的 DO 类（Worker 导出名）。生成 wrangler 配置时为它们写
+   * `exports` 墓碑（`state: 'deleted'`），否则平台会因「新版本不导出某个已有命名空间的类」
+   * 拒绝部署（错误码 10064）。
+   *
+   * 不参与投影哈希：它只影响部署声明，不影响代码内容。
+   */
+  retiredDoClasses?: Array<{ className: string; plugin: string }>
 }
 
 /** 插件 Durable Object 类在 bundle 顶层的重导出信息 */

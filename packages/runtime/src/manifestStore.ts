@@ -4,6 +4,7 @@ import type { Manifest } from '@qqbot/sdk'
 const TABLE_PLUGINS = 'rt_manifest_plugins'
 const TABLE_INSTALLS = 'rt_installs'
 const TABLE_CLEANUPS = 'rt_pending_cleanups'
+const TABLE_RETIRED_DO = 'rt_retired_do_classes'
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS ${TABLE_PLUGINS} (
@@ -31,6 +32,21 @@ const SCHEMA = [
     name TEXT PRIMARY KEY,
     purge INTEGER NOT NULL,
     ts INTEGER NOT NULL
+  )`,
+  // 退役的插件 Durable Object 类。
+  //
+  // 卸载带 DO 的插件时，新版本不再导出那个类，而 Cloudflare 上已经给它开了命名空间——
+  // 平台会拒绝部署（错误码 10064），要求显式声明「删除这个类」。
+  // 声明式 exports 模型的写法是一条**墓碑**：`{ "P_xxx_Cls": { type, state: 'deleted' } }`。
+  //
+  // 但构建机是全新容器、没有持久状态，它不知道「上一次部署过哪些类」。所以卸载的那一刻
+  // 把类名记到这里（那是唯一还拿得到原声明清单的时机），构建时随清单一起下发。
+  // 写入后**永不删除**：墓碑留着无害（平台会把它标成可移除的 stale 项），
+  // 删掉反而会让下一次构建少一条墓碑、部署再次失败。
+  `CREATE TABLE IF NOT EXISTS ${TABLE_RETIRED_DO} (
+    class_name TEXT PRIMARY KEY,
+    plugin TEXT NOT NULL,
+    retired_at INTEGER NOT NULL
   )`,
 ]
 
@@ -427,4 +443,52 @@ export async function listPendingCleanups(db: D1Database): Promise<PendingCleanu
   await ensureSchema(db)
   const { results } = await db.prepare(`SELECT name, purge, ts FROM ${TABLE_CLEANUPS} ORDER BY ts`).all<Record<string, unknown>>()
   return results.map((r) => ({ name: r.name as string, purge: r.purge === 1 || r.purge === true, ts: r.ts as number }))
+}
+
+// ---------------------------------------------------------------- 退役的 DO 类
+
+/** 卸载带 Durable Object 的插件时记下来的类名，构建时据此生成删除墓碑 */
+export interface RetiredDoClass {
+  /** Worker 里实际导出的类名，形如 `P_<plugin>_<ClassName>` */
+  className: string
+  /** 原属插件名，只用于展示与排障 */
+  plugin: string
+  retiredAt: number
+}
+
+/**
+ * 记下某个插件退役的 DO 类。
+ *
+ * 调用时机只有一个：卸载插件、而且它的声明清单里有 `durableObjects`。
+ * 那一刻是**唯一还能拿到原始类名**的时刻——记录一删，构建机就再也无从得知
+ * 曾经存在过哪些类，而 Cloudflare 要求删除类必须显式声明墓碑（错误码 10064）。
+ *
+ * 幂等：同一个类被记两次只是刷新时间，不会产生重复墓碑。
+ */
+export async function addRetiredDoClasses(
+  db: D1Database,
+  plugin: string,
+  classNames: readonly string[],
+  now = Date.now(),
+): Promise<void> {
+  if (classNames.length === 0) return
+  await ensureSchema(db)
+  await db.batch(
+    classNames.map((className) =>
+      db.prepare(`INSERT OR REPLACE INTO ${TABLE_RETIRED_DO} (class_name, plugin, retired_at) VALUES (?, ?, ?)`).bind(className, plugin, now),
+    ),
+  )
+}
+
+/** 全部退役的 DO 类。用于构建时生成删除墓碑 */
+export async function listRetiredDoClasses(db: D1Database): Promise<RetiredDoClass[]> {
+  await ensureSchema(db)
+  const { results } = await db
+    .prepare(`SELECT class_name, plugin, retired_at FROM ${TABLE_RETIRED_DO} ORDER BY retired_at`)
+    .all<Record<string, unknown>>()
+  return results.map((row) => ({
+    className: String(row['class_name'] ?? ''),
+    plugin: String(row['plugin'] ?? ''),
+    retiredAt: Number(row['retired_at'] ?? 0),
+  })).filter((row) => row.className)
 }

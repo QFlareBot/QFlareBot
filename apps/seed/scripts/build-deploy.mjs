@@ -80,7 +80,13 @@ async function fetchRemoteManifest() {
       const data = JSON.parse(await readFile(file, 'utf8'))
       if (!Array.isArray(data.plugins)) throw new Error('文件缺少 plugins 数组')
       console.log(`已从 ${path.basename(file)} 取得 ${data.plugins.length} 个已安装插件`)
-      return { ok: true, plugins: data.plugins, hash: '', pendingBuild: null }
+      return {
+        ok: true,
+        plugins: data.plugins,
+        hash: '',
+        pendingBuild: null,
+        retiredDoClasses: Array.isArray(data.retiredDoClasses) ? data.retiredDoClasses : [],
+      }
     } catch (err) {
       return { ok: false, error: `读取 MANIFEST_FILE 失败：${err.message}` }
     }
@@ -96,7 +102,14 @@ async function fetchRemoteManifest() {
     const data = await res.json()
     if (!Array.isArray(data.plugins)) throw new Error('响应缺少 plugins 数组')
     console.log(`已从构建清单接口取得 ${data.plugins.length} 个插件（hash ${String(data.hash).slice(0, 12)}…）`)
-    return { ok: true, plugins: data.plugins, hash: String(data.hash ?? ''), pendingBuild: data.pendingBuild ?? null }
+    return {
+      ok: true,
+      plugins: data.plugins,
+      hash: String(data.hash ?? ''),
+      pendingBuild: data.pendingBuild ?? null,
+      // 已卸载插件的 DO 类（构建机需要它生成删除墓碑）
+      retiredDoClasses: Array.isArray(data.retiredDoClasses) ? data.retiredDoClasses : [],
+    }
   } catch (err) {
     return { ok: false, error: err.message }
   }
@@ -345,8 +358,21 @@ async function prepare() {
     throw err
   }
 
-  const resolved = { core: base.core, ...(base.ui ? { ui: base.ui } : {}), plugins }
+  // 已卸载插件的 DO 类：随清单一起传下去，投影器据此写 `exports` 墓碑。
+  // 不传的话，卸载带 DO 的插件后部署会被平台以 10064 拒绝
+  // （「新版本不导出某个类，而它的命名空间还在」）。
+  // 拉不到清单的老路径（no-d1 / forced-fallback）没有这份数据，退化成空——那种部署本来也没有 D1 记录。
+  const retiredDoClasses = Array.isArray(remote.retiredDoClasses) ? remote.retiredDoClasses : []
+  const resolved = {
+    core: base.core,
+    ...(base.ui ? { ui: base.ui } : {}),
+    plugins,
+    ...(retiredDoClasses.length ? { retiredDoClasses } : {}),
+  }
   await writeFile(RESOLVED_MANIFEST, `${JSON.stringify(resolved, null, 2)}\n`)
+  if (retiredDoClasses.length) {
+    console.log(`已卸载插件的 DO 类 ${retiredDoClasses.length} 个，将为它们生成删除墓碑：${retiredDoClasses.map((c) => c.className).join('、')}`)
+  }
 
   // dist 里可能残留上一次构建的插件模块，清掉再投影，deploy 阶段才敢按目录反推模块集
   await rm(path.join(appDir, 'dist'), { recursive: true, force: true })

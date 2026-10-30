@@ -6,6 +6,7 @@ import {
   addPendingCleanup,
   insertInstall,
   listInstalls,
+  listRetiredDoClasses,
   markPendingBuilding,
   resetManifestSchema,
   upsertManifestPlugin,
@@ -1811,5 +1812,38 @@ describe('卸载清数据：一次删一批，删不完或出错都不再是 500
     await cronTick(emptyDeployment(), env)
     expect(db.cleanups.size).toBe(0)
     expect(env.KV.store.has('p:second:a')).toBe(false)
+  })
+})
+
+/**
+ * 卸载带 Durable Object 的插件时，必须把它的 DO 类记下来。
+ *
+ * 不记的话，下一次构建生成的新版本不再导出那个类，而 Cloudflare 上它的命名空间还在，
+ * 部署会被拒（错误码 10064）——报错跟「卸载」毫无关系，很难查。
+ * 记录必须发生在删掉声明清单**之前**：记录一删，类名就再也拿不到了。
+ */
+describe('卸载带 DO 的插件：记录退役类', () => {
+  it('把声明清单里的 DO 类按导出名记进退役表', async () => {
+    // setup 的 fetch mock 里已经有 game 的声明清单（durableObjects: ['Room','Lobby']）
+    const { call, db } = setup({}, [deployed('empty')])
+    await install(call, { source: 'git:me/qqbot-plugin-game@e5f6a7b8c9', build: false })
+
+    const remove = await call('/admin/manifest/plugins/game', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+
+    // 类名是投影器实际导出的形态：P_<插件名>_<类名>
+    expect((await listRetiredDoClasses(db)).map((r) => r.className).sort()).toEqual(['P_game_Lobby', 'P_game_Room'])
+    expect(await listRetiredDoClasses(db)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ plugin: 'game' })]),
+    )
+  })
+
+  it('没有 DO 的插件卸载时不留下任何记录', async () => {
+    const { call, db } = setup({}, [deployed('empty')])
+    await install(call, { source: 'git:me/qqbot-plugin-hello@a1b2c3d4e5', build: false })
+
+    const remove = await call('/admin/manifest/plugins/hello', { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    expect(remove.status).toBe(200)
+    expect(await listRetiredDoClasses(db)).toEqual([])
   })
 })

@@ -68,5 +68,9 @@ export async function project(opts: ProjectOptions): Promise<Projection> {
       ...(uiIntegrity ? { ui: uiIntegrity } : {}),
       plugins: Object.fromEntries(resolvedPlugins.map((p) => [p.name, p.integrity as string])),
     },
+    // 已卸载插件的 DO 类：不参与哈希（只影响部署声明），原样带出去给 wrangler 配置生成用
+    ...(manifest.retiredDoClasses?.length
+      ? { retiredDoClasses: manifest.retiredDoClasses.map(({ className, plugin }) => ({ className, plugin })) }
+      : {}),
   }
 }

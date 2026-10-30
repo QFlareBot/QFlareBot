@@ -6,7 +6,7 @@ import { requireDb } from './adminDb.js'
 import { authenticate, bearerOf, constantTimeEqual } from './auth.js'
 import { inFlight } from './buildLedger.js'
 import { error, json, readJson } from './http.js'
-import { attachBuildError, listInstalls, listManifestPlugins, manifestHash, setPluginBuildError } from './manifestStore.js'
+import { attachBuildError, listInstalls, listManifestPlugins, listRetiredDoClasses, manifestHash, setPluginBuildError } from './manifestStore.js'
 import type { RequestScope } from './scope.js'
 
 /**
@@ -35,6 +35,10 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
   if (!db) return error('未绑定 D1（wrangler.jsonc 的 d1_databases），构建清单不可用', 503)
   const plugins = await listManifestPlugins(db)
   const hash = await manifestHash(plugins)
+  // 已经卸载、但 Cloudflare 上还留着 DO 命名空间的类。构建机据此生成删除墓碑
+  // （`exports` 模型的 `state: 'deleted'`），否则部署会被 10064 拒绝：
+  // 新版本不导出某个类，而平台上那个类的命名空间还在。
+  const retiredDoClasses = await listRetiredDoClasses(db).catch(() => [])
   // 触发这次构建的账本记录（推送触发的构建没有对应记录，返回 null）。构建机据此对照
   // 「触发时的清单」与「实际构建的清单」——不一致只告警、不阻断：并发装两个插件本来就会这样，
   // 收敛到最新是设计语义，把它做成构建失败只会让正常操作无故炸掉。
@@ -47,6 +51,7 @@ export async function handleBuildManifest(request: Request, scope: RequestScope)
     ok: true,
     hash,
     plugins,
+    retiredDoClasses,
     pendingBuild: pending
       ? { buildUuid: pending.buildUuid, hash: pending.manifestHash, triggeredAt: pending.ts }
       : null,

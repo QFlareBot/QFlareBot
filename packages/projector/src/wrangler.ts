@@ -16,8 +16,14 @@ export interface WranglerConfig {
   vars?: Record<string, unknown>
   durable_objects?: { bindings?: Array<{ name: string; class_name: string; script_name?: string }> }
   migrations?: WranglerMigration[]
-  /** 声明 DO 生命周期的另一种模型；与 `migrations` 互斥（Cloudflare 强制） */
-  exports?: Record<string, { type?: string; storage?: string }>
+  /**
+   * 声明 DO 生命周期的另一种模型；与 `migrations` 互斥（Cloudflare 强制）。
+   *
+   * 两种形态：
+   * - **live**：`{ type: 'durable-object', storage: 'sqlite' }` —— 这个类还在
+   * - **墓碑**：`{ type: 'durable-object', state: 'deleted' }` —— 声明「删掉这个类与其数据」
+   */
+  exports?: Record<string, { type?: string; storage?: string; state?: string; renamed_to?: string; transferred_to?: string }>
   [key: string]: unknown
 }
 
@@ -238,6 +244,43 @@ function checkDoMigrations(base: WranglerConfig, doNames: readonly string[], war
 }
 
 /**
+ * 已卸载插件的 DO 类 → 删除墓碑。
+ *
+ * 卸载带 DO 的插件后，新版本不再导出那个类，而 Cloudflare 上它的命名空间还在，
+ * 平台会拒绝部署：
+ *
+ * ```
+ * New version of script does not export class 'P_agent_Agent' which is depended on by
+ * existing Durable Objects. [...] you can use a delete-class migration [code: 10064]
+ * ```
+ *
+ * 声明式 `exports` 模型下的解法是把那一项改成墓碑：
+ *
+ * ```json
+ * "exports": { "P_agent_Agent": { "type": "durable-object", "state": "deleted" } }
+ * ```
+ *
+ * 名单来自 Worker 卸载时记进 D1 的记录（构建机没有持久状态，只能这样传）。
+ *
+ * **墓碑一直留着**：平台删完命名空间后会把这条标成「可移除的 stale 项」，
+ * 但留着无害；删掉反而会让「类已经没了、名单也没有」这件事在下一次构建时
+ * 变得不可判断（而多一条 stale 墓碑只是让平台多一句提示）。
+ */
+function retiredTombstones(
+  projection: Projection,
+): Record<string, { type: 'durable-object'; state: 'deleted' }> {
+  const retired = projection.retiredDoClasses ?? []
+  const live = new Set(Object.keys(projection.metadata.exports ?? {}))
+  const out: Record<string, { type: 'durable-object'; state: 'deleted' }> = {}
+  for (const item of retired) {
+    // 类又回来了（重新装了同名插件）：以 live 为准，不能同时声明删除
+    if (live.has(item.className)) continue
+    out[item.className] = { type: 'durable-object', state: 'deleted' }
+  }
+  return out
+}
+
+/**
  * 基于原 wrangler 配置生成可直接 `wrangler deploy` 的配置：
  * 指向投影输出、关闭打包、追加插件 DO 绑定，并按需注入动态推导的资源绑定 ID。
  *
@@ -340,12 +383,16 @@ export function generateWranglerConfig(opts: {
       if (!Object.keys(config.exports).length) delete config.exports
     } else {
       // 新模型：模板没有 migrations，用声明式 exports 覆盖插件类
-      config.exports = { ...(base.exports ?? {}), ...pluginExports }
+      config.exports = { ...(base.exports ?? {}), ...pluginExports, ...retiredTombstones(projection) }
       delete config.migrations
     }
   } else {
     delete config.migrations
-    if (base.exports && Object.keys(base.exports).length > 0) config.exports = { ...base.exports }
+    // **没有插件 DO 类时也要带墓碑**：卸载最后一个带 DO 的插件正好落在这条分支上，
+    // 早退掉的话墓碑不会生成，部署照样被 10064 拒绝。
+    const tombstones = retiredTombstones(projection)
+    const kept = { ...(base.exports ?? {}), ...tombstones }
+    if (Object.keys(kept).length > 0) config.exports = kept
     else delete config.exports
   }
 

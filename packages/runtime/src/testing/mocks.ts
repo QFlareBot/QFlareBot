@@ -177,6 +177,8 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
   plugins: Map<string, Record<string, unknown>>
   installs: Map<string, Record<string, unknown>>
   cleanups: Map<string, Record<string, unknown>>
+  /** 退役的插件 DO 类（卸载时记录，构建时生成删除墓碑） */
+  retiredDo: Map<string, Record<string, unknown>>
   /** 插件表名 → 行数，喂给 purge.ts 的 sqlite_master 查询 */
   tables: Map<string, number>
   /** rt_manifest_plugins 当前有哪些列 */
@@ -189,6 +191,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
   const plugins = new Map<string, Record<string, unknown>>()
   const installs = new Map<string, Record<string, unknown>>()
   const cleanups = new Map<string, Record<string, unknown>>()
+  const retiredDo = new Map<string, Record<string, unknown>>()
   const tables = new Map<string, number>()
   const pluginColumns = new Set([...LEGACY_PLUGIN_COLUMNS, ...(options.legacy ? [] : ADDED_PLUGIN_COLUMNS)])
   const alters: string[] = []
@@ -240,6 +243,11 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
         if (sql.startsWith('DELETE FROM rt_pending_cleanups')) {
           const existed = cleanups.delete(params[0] as string)
           return { meta: { changes: existed ? 1 : 0 } }
+        }
+        if (sql.startsWith('INSERT OR REPLACE INTO rt_retired_do_classes')) {
+          const [class_name, plugin, retired_at] = params as [string, string, number]
+          retiredDo.set(class_name, { class_name, plugin, retired_at })
+          return { meta: { changes: 1 } }
         }
         if (sql.startsWith('INSERT INTO rt_installs')) {
           const [id, action, name, source, manifest_hash, build_uuid, cf_status, status, commit_hash, error, ts] = params as [
@@ -331,6 +339,10 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
           const results = [...plugins.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string))
           return { results } as { results: T[] }
         }
+        if (sql.includes('FROM rt_retired_do_classes')) {
+          const results = [...retiredDo.values()].sort((a, b) => (a.retired_at as number) - (b.retired_at as number))
+          return { results } as { results: T[] }
+        }
         if (sql.includes('FROM rt_pending_cleanups')) {
           const results = [...cleanups.values()].sort((a, b) => (a.ts as number) - (b.ts as number))
           return { results } as { results: T[] }
@@ -366,6 +378,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
     plugins,
     installs,
     cleanups,
+    retiredDo,
     tables,
     pluginColumns,
     alters,
@@ -387,7 +400,13 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
       }
       return { count: 0, duration: 0 }
     },
-    batch: async () => [],
+    // 真 D1 的 batch 在一个事务里按顺序执行每条语句；这里同样逐条 run，
+    // 否则「只走 batch 的写入」在测试里会静默消失（退役 DO 类就踩过）
+    async batch(statements: Array<{ run(): Promise<unknown> }>) {
+      const results = []
+      for (const statement of statements) results.push(await statement.run())
+      return results
+    },
     dump: async () => new ArrayBuffer(0),
   } as unknown as D1Database & {
     plugins: Map<string, Record<string, unknown>>

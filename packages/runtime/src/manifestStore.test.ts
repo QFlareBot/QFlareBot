@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addPendingCleanup,
+  addRetiredDoClasses,
   attachBuildError,
   clearPluginBuildErrors,
   deleteManifestPlugin,
@@ -11,6 +12,7 @@ import {
   listManifestPluginRecords,
   listManifestPlugins,
   listPendingCleanups,
+  listRetiredDoClasses,
   manifestHash,
   markPendingBuilding,
   parseGitSource,
@@ -32,6 +34,7 @@ const reset = () => {
   d1.plugins.clear()
   d1.installs.clear()
   d1.cleanups.clear()
+  d1.retiredDo.clear()
   resetManifestSchema()
 }
 
@@ -297,5 +300,41 @@ describe('账本治理', () => {
     await insertInstall(d1, { action: 'install', name: 'b', source: 'git:me/b@a1b2c3d4', manifestHash: 'h', status: 'ok' })
     await insertInstall(d1, { action: 'build', name: null, source: null, manifestHash: 'h', status: 'ok' })
     expect((await listInstallNames(d1)).sort()).toEqual(['a', 'b'])
+  })
+})
+
+describe('退役的 DO 类', () => {
+  it('记录后能读回来（构建机据此生成删除墓碑）', async () => {
+    reset()
+    await addRetiredDoClasses(d1, 'agent', ['P_agent_Agent'], 1000)
+    expect(await listRetiredDoClasses(d1)).toEqual([
+      { className: 'P_agent_Agent', plugin: 'agent', retiredAt: 1000 },
+    ])
+  })
+
+  it('空列表不写任何东西（没有 DO 的插件卸载时不该留记录）', async () => {
+    reset()
+    await addRetiredDoClasses(d1, 'echo', [], 1000)
+    expect(await listRetiredDoClasses(d1)).toEqual([])
+  })
+
+  it('重复记录同一个类不会产生两条（幂等，卸载重试时会发生）', async () => {
+    reset()
+    await addRetiredDoClasses(d1, 'agent', ['P_agent_Agent'], 1000)
+    await addRetiredDoClasses(d1, 'agent', ['P_agent_Agent'], 2000)
+    const rows = await listRetiredDoClasses(d1)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.retiredAt).toBe(2000)
+  })
+
+  it('多个插件多个类都保留（重新卸载别的插件时会追加）', async () => {
+    reset()
+    await addRetiredDoClasses(d1, 'agent', ['P_agent_Agent'], 1000)
+    await addRetiredDoClasses(d1, 'game', ['P_game_Room', 'P_game_Lobby'], 2000)
+    expect((await listRetiredDoClasses(d1)).map((r) => r.className)).toEqual([
+      'P_agent_Agent',
+      'P_game_Room',
+      'P_game_Lobby',
+    ])
   })
 })

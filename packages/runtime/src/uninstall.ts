@@ -2,12 +2,14 @@
  * 卸载：DELETE /admin/manifest/plugins/:name 当场做完能做的（钩子、删清单、记账本、触发构建、尽力清数据），
  * 剩下的由 Cron 等插件真的不在部署里了再收尾（processPendingCleanups，待收尾记在 rt_pending_cleanups）。
  */
+import type { Manifest } from '@qqbot/sdk'
 import { requireDb } from './adminDb.js'
 import { BUILD_DEFERRED, buildAfterChange } from './buildTrigger.js'
 import { error, json } from './http.js'
 import { dependentsOf, knownManifests } from './installChecks.js'
 import {
   addPendingCleanup,
+  addRetiredDoClasses,
   deleteManifestPlugin,
   getManifestPlugin,
   insertInstall,
@@ -80,6 +82,26 @@ export async function uninstallManifestPlugin(
   // 趁插件代码还在这次部署里，先让它自己收尾；重建之后就没机会了
   const { hook, hookError }: HookReport =
     registered && !liveIsBuiltin ? await runUninstallHook(registered, scope.contexts, purgeData, deps.logger) : { hook: 'none' }
+
+  // **趁声明清单还在，先把它的 DO 类记下来**。
+  //
+  // 卸载带 Durable Object 的插件后，新版本不再导出那个类，而 Cloudflare 上
+  // 已经给它开了命名空间——平台会拒绝部署（10064），要求显式声明删除墓碑。
+  // 构建机是全新容器、没有持久状态，只能靠这里记下来的名单生成墓碑。
+  // 记录一删就再也拿不到类名了，所以必须排在 deleteManifestPlugin 之前。
+  // records 里是完整记录（含声明清单）；existing 只有 name/version/source 三个字段
+  const retiredDoClasses = doClassNamesOf(name, records.find((r) => r.name === name)?.manifest ?? null)
+  if (retiredDoClasses.length > 0) {
+    // 失败不回滚卸载：清单已经准备改了，回滚只会更乱。记不下来只影响下次构建——
+    // 那种情况下部署会报 10064，届时按错误提示手动补墓碑即可。
+    await addRetiredDoClasses(db, name, retiredDoClasses).catch((err: unknown) => {
+      deps.logger.warn('记录退役 DO 类失败，下次构建可能因 10064 失败', {
+        plugin: name,
+        classes: retiredDoClasses,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
 
   await deleteManifestPlugin(db, name)
   if (liveIsBuiltin) {
@@ -235,4 +257,19 @@ export async function processPendingCleanups(scope: RequestScope, deps: AdminDep
       deps.logger.warn('卸载收尾失败，下次定时任务再试', { plugin: c.name, error: err instanceof Error ? err.message : String(err) })
     }
   }
+}
+
+
+/**
+ * 声明清单里的 DO 类名 → Worker 实际导出的类名。
+ *
+ * 投影器按 `P_<插件名>_<类名>` 生成导出名（见 projector 的 `doExportName`），
+ * 平台记的是导出名，所以墓碑也必须用导出名。
+ * 插件名里的非字母数字会被替换成下划线，这里保持一致。
+ */
+function doClassNamesOf(plugin: string, manifest: Manifest | null): string[] {
+  const objects = manifest?.durableObjects ?? []
+  if (objects.length === 0) return []
+  const prefix = `P_${plugin.replace(/[^a-zA-Z0-9]/g, '_')}_`
+  return objects.map((className: string) => `${prefix}${className}`)
 }
