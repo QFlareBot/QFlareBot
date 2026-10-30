@@ -37,6 +37,7 @@ export default defineConfig({
         text: '使用',
         items: [
           { text: '内置插件', link: '/builtin-plugins' },
+          { text: 'AI 能力（LLM 接口）', link: '/ai' },
           { text: '升级与运维', link: '/maintenance' },
         ],
       },

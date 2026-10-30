@@ -69,6 +69,7 @@ description: 把 QQ 官方机器人部署到自己的 Cloudflare 账号：Fork �
 ## 接下来
 
 - 自带的两个插件能做什么：[内置插件](./builtin-plugins)
+- 想让机器人用上大模型：装 `llm` 插件，见 [AI 能力](./ai)
 - 装更多插件：[插件市场](./market)，或在面板「插件」页粘贴仓库链接
 - 以后怎么升级、构建失败了看哪里：[升级与运维](./maintenance)
 

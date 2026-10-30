@@ -20,6 +20,7 @@
 - **Fork 即部署**：运行仓库里的 Bootstrap 工作流，跟着网页向导建好 KV / D1 / R2 并完成首次部署。
 - **面板装插件**：在「添加插件」里粘贴仓库链接，或从插件市场勾选几个一起装；插件在 Workers Builds 上从源码构建，构建失败时线上保持原版本。
 - **插件能力完整**：命令、正则、事件、按键回调、定时任务、按插件隔离的 KV / D1 / R2，插件还可以自带 Web 页面。
+- **AI 能力走插件，核心不接模型**：装 [LLM 接口](https://qflarebot.github.io/ai)插件，任何插件都能通过它提供的 `llm` 服务调用大模型；Agent 插件是现成的消费方，也可以自己照接口写一个。
 - **升级就是同步上游**：在你的 Fork 上点 Sync fork，机器人自动重建，面板里装的插件都还在。
 
 ## 部署前要准备
@@ -37,6 +38,7 @@
 | [快速部署](https://qflarebot.github.io/deploy) | Fork、引导工作流、绑域名、配置 QQ 开放平台 |
 | [升级与运维](https://qflarebot.github.io/maintenance) | 同步上游、回滚、换密钥、看构建日志 |
 | [插件市场](https://qflarebot.github.io/market) | 已登记的插件，一键装到你的机器人 |
+| [AI 能力](https://qflarebot.github.io/ai) | 装 LLM 接口插件，让自己的插件用上大模型；Agent 是现成的消费方 |
 | [插件开发指南](https://qflarebot.github.io/plugin-guide) | 从零写一个插件 |
 | [参与开发](https://qflarebot.github.io/development) | 本地开发框架本身 |
 
