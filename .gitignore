@@ -21,3 +21,8 @@ docs/.vitepress/cache/
 
 # WorkBuddy AI 本地工作目录（记忆/技能/会话数据），不进版本库
 .workbuddy-ai/
+
+# 本地分析草稿、评测/工具状态目录，不进版本库
+analysis/
+.eval-scratch/
+.workbuddy/

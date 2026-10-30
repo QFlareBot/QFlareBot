@@ -291,8 +291,19 @@ function collectCandidates(
   const longest = Math.max(0, ...[...candidates, ...denied].map((c) => c.words ?? 0))
   const keep = (c: { kind: string; words?: number }) => c.kind !== 'command' || c.words === longest
 
-  // 稳定排序：优先级高的先执行，同级按注册顺序
-  return { candidates: candidates.filter(keep).sort((a, b) => b.priority - a.priority), denied: denied.filter(keep) }
+  // 稳定排序：优先级高的先执行；同级时主动匹配器（命令/正则/按键）排在事件前面。
+  //
+  // 为什么要有后面那半句：命令默认 block，命中后它**之后**的候选不再执行。如果事件排在
+  // 前面（同 priority 时按注册顺序，取决于部署里装插件的先后），一条 `/weather` 会先被执行
+  // 那个插件当成聊天处理、命令才跑——「有时命令先、有时事件先」，结果不可预期。
+  // 声明了更高 priority 的匹配器仍然能抢到前面：这是显式意图，不该被这里压平。
+  const tier = (c: { kind: string }) => (c.kind === 'event' ? 1 : 0)
+  return {
+    candidates: candidates
+      .filter(keep)
+      .sort((a, b) => b.priority - a.priority || tier(a) - tier(b)),
+    denied: denied.filter(keep),
+  }
 }
 
 /** 收集单个插件的候选；独立成函数，调用方才能按插件兜异常 */
@@ -459,7 +470,15 @@ export async function dispatch(session: Session, deps: DispatchDeps): Promise<Di
       onSendFailure: failSend,
     })
     if (denied.length) deps.logger.debug('权限不足，跳过候选', { denied })
+    // 命令词命中、只是权限不够：这条消息已经归那条命令了，不再交给被动监听的事件。
+    //
+    // 权限不足的候选照样会参与「最长命令名胜出」，所以能走到这里就说明用户打的确实是一条命令。
+    // 不这么挡的话，普通成员发一个 `/reset`（group_admin）会「命令被拒 → 事件接手」，
+    // Agent 这类挂了消息事件的插件就把 `reset` 当成聊天送进模型——而它不可能知道
+    // 别的插件注册了什么命令，靠黑名单堵不住。权限不够本身就是一种消费。
+    const commandDenied = denied.some((d) => d.kind === 'command')
     for (const c of candidates) {
+      if (commandDenied && c.kind === 'event') continue
       report.matched.push({ plugin: c.plugin, kind: c.kind, name: c.name })
       try {
         const ctx = await deps.contexts.prepare(c.registered)
