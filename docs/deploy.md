@@ -58,7 +58,7 @@ description: 把 QQ 官方机器人部署到自己的 Cloudflare 账号：Fork �
 
 ## 3. 创建机器人并配置 QQ 开放平台
 
-用自定义域名打开面板，在「设置」里扫码新建 QQ 机器人，或填入已有机器人的 AppID 与 AppSecret。然后到 QQ 开放平台填写回调地址 `https://bot.example.com/webhook` 并勾选事件；校验通过后，把机器人拉进你是群主的群，按需在群里打开权限。详见[配置 QQ 开放平台](./deploy-qq)。
+用自定义域名打开面板，在「设置」里扫码新建 QQ 机器人，或填入已有机器人的 AppID 与 AppSecret。然后到 QQ 开放平台填写回调地址 `https://bot.example.com/webhook` 并勾选事件；校验通过后，把机器人拉进你是群主或管理员的群（管理员要先升级到最新版手机 QQ），按需在群里打开权限。详见[配置 QQ 开放平台](./deploy-qq)。
 
 ## 4. 试一下
 
