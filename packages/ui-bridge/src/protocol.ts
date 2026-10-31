@@ -24,6 +24,7 @@ export type GuestMessage =
   | { channel: typeof CHANNEL; type: 'toast'; nonce: string; level: 'info' | 'success' | 'warning' | 'error'; message: string }
   | { channel: typeof CHANNEL; type: 'navigate'; nonce: string; to: string }
   | { channel: typeof CHANNEL; type: 'title'; nonce: string; title: string }
+  | { channel: typeof CHANNEL; type: 'dirty'; nonce: string; dirty: boolean }
 
 export function isBridgeMessage(data: unknown): data is HostMessage | GuestMessage {
   return typeof data === 'object' && data !== null && (data as { channel?: unknown }).channel === CHANNEL

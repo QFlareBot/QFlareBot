@@ -46,7 +46,7 @@ export default definePlugin({
   const res = await bridge.fetch('/api/data')       <!-- 自动带桥接令牌，相对路径以 /p/foo 解析 -->
   bridge.toast('已加载', 'success')
   bridge.setTitle('我的页面')
-  bridge.resize()                                   <!-- 上报高度，面板自动撑开 iframe -->
+  bridge.setDirty(false)                            // 编辑时 true，保存或放弃后 false
   bridge.onTheme((t) => ...)
 </script>
 ```
@@ -58,6 +58,8 @@ export default definePlugin({
 3. 运行时对 `auth: 'admin'` 的路由接受面板会话或**本插件**的桥接令牌，其他插件的令牌一律 401。`RouteInput.authenticated` 告诉公开路由当前请求是否已登录。
 4. 令牌只在 iframe 的第一个请求里（`?token=`），页面再加载的脚本、样式、图片带不上它。所以 `auth: 'admin'` 的页面要么是单个 HTML 文件（内置插件都是这样），要么把静态资源设成公开、只把 `/api/*` 设成 `auth: 'admin'`、用 `bridge.fetch` 调。
 5. 有构建步骤的插件页面（Vue/React 等）用 `serveAssets('/ui/*', assets)` 托管：前端在本地构建好，转成资源表提交进仓库（构建机不跑前端构建），做法见[插件开发指南 · 自带 Web 页面](./plugin-guide.md#_8-自带-web-页面与-http-接口)。
+6. 插件 iframe 占满主内容区剩余视口，长内容只在 iframe 内滚动；外层面板不再按内容高度伸长。插件使用正常文档流即可，不要再给主内容套一层固定高度的滚动区。`bridge.resize()` 继续兼容旧面板或自定义宿主，新面板会忽略高度通知。
+7. 表单有修改或保存请求尚未完成时调用 `bridge.setDirty(true)`；全部保存成功或放弃修改后调用 `bridge.setDirty(false)`。宿主会在切换页面时确认、刷新或关闭标签页时触发浏览器提醒。消息只传布尔状态，不传草稿内容；插件内部切换视图仍由插件处理。需要兼容旧面板时用 `bridge.setDirty?.(...)`。
 
 示例：`plugins/t2i` 的「T2I 渲染服务」页面——通过桥调插件自己的 `auth: 'admin'` 接口测连通性、试渲染一段 HTML。
 

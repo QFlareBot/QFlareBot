@@ -22,8 +22,10 @@ export interface Bridge {
   /** 让面板跳转到某个路由，如 `/plugins` */
   navigate(to: string): void
   setTitle(title: string): void
-  /** 上报内容高度；不传则自动测量并持续跟随 */
+  /** 上报内容高度供自定义宿主使用；管理面板使用固定视口，不再按内容拉长 iframe */
   resize(height?: number): void
+  /** 通知面板有未保存编辑或进行中的保存；清除后才恢复无提示离开 */
+  setDirty(dirty: boolean): void
 }
 
 export interface BridgeOptions {
@@ -67,6 +69,8 @@ function connect(options: BridgeOptions): Promise<Bridge> {
   let plugin = guessBase().replace('/p/', '')
   let base = guessBase()
   const themeHandlers = new Set<(t: Theme) => void>()
+  let dirty = false
+  let reportedDirty: boolean | undefined
 
   const setTheme = (t: Theme) => {
     theme = t
@@ -76,6 +80,11 @@ function connect(options: BridgeOptions): Promise<Bridge> {
 
   const post = (msg: GuestMessage) => {
     if (inFrame) window.parent.postMessage(msg, '*')
+  }
+  const reportDirty = () => {
+    if (!nonce || reportedDirty === dirty) return
+    reportedDirty = dirty
+    post({ channel: CHANNEL, type: 'dirty', nonce, dirty })
   }
 
   let observer: ResizeObserver | null = null
@@ -113,6 +122,10 @@ function connect(options: BridgeOptions): Promise<Bridge> {
     setTitle(title) {
       document.title = title
       post({ channel: CHANNEL, type: 'title', nonce, title })
+    },
+    setDirty(next) {
+      dirty = next
+      reportDirty()
     },
     resize(height) {
       if (height !== undefined) {
@@ -154,6 +167,7 @@ function connect(options: BridgeOptions): Promise<Bridge> {
         plugin = msg.plugin
         base = msg.base
         setTheme(msg.theme)
+        reportDirty()
         done()
         return
       }

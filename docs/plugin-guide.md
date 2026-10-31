@@ -482,7 +482,7 @@ if (base) return { image: { url: `${base}/p/${ctx.plugin.name}/img/${id}` } }
 
 常见的三种用法：
 
-- **面板里的管理页**：声明 `ui` 并配 `auth: 'admin'` 的路由，面板在 sandbox iframe 里打开它，页面用 `/bridge.js` 拿令牌、跟随主题、自动撑高。`auth: 'admin'` 路由返回的 HTML 会带 `Content-Security-Policy: sandbox`，所以在新窗口里打开也和 iframe 里一样是 opaque origin：拿不到面板的 localStorage（面板会话就在里面），页面自己也用不了 localStorage / cookie，要存东西走接口。公开路由不受影响。示例是内置的 `plugins/t2i`（连通性测试与试渲染）。细节见[面板与插件页面](./ui.md#插件页面-解耦方案)。
+- **面板里的管理页**：声明 `ui` 并配 `auth: 'admin'` 的路由，面板在 sandbox iframe 里打开它，页面用 `/bridge.js` 拿令牌、跟随主题、上报未保存状态。iframe 占满面板剩余视口，长内容在 iframe 内滚动。`auth: 'admin'` 路由返回的 HTML 会带 `Content-Security-Policy: sandbox`，所以在新窗口里打开也和 iframe 里一样是 opaque origin：拿不到面板的 localStorage（面板会话就在里面），页面自己也用不了 localStorage / cookie，要存东西走接口。公开路由不受影响。示例是内置的 `plugins/t2i`（连通性测试与试渲染）。细节见[面板与插件页面](./ui.md#插件页面-解耦方案)。
 - **给所有人看的公开页**：不写 `auth` 的路由谁都能打开，比如 `https://bot.example.com/p/rank/` 的排行榜，把链接发到群里即可。不需要声明 `ui`；想和面板同样的配色，页面里引 `/tokens.css`。
 - **接收外部回调**：公开的 `POST` 路由可以接 GitHub、支付平台这类 webhook，收到后用 `ctx.api.sendMessage` 推到群里。公开路由谁都能调，**签名要自己验**。处理器的 `authenticated` 告诉你这次请求有没有登录，公开路由也能据此区分管理员。
 

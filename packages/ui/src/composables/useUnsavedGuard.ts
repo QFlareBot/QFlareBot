@@ -9,8 +9,8 @@ import { useConfirm } from './useConfirm.js'
 
 const KEY: InjectionKey<Set<() => boolean>> = Symbol('unsaved')
 
-export function provideUnsavedGuard(): void {
-  const checks = new Set<() => boolean>()
+export function provideUnsavedGuard(ownCheck?: () => boolean): void {
+  const checks = new Set<() => boolean>(ownCheck ? [ownCheck] : [])
   provide(KEY, checks)
   const confirm = useConfirm()
   const dirty = () => [...checks].some((c) => c())

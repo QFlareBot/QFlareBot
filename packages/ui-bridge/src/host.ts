@@ -19,6 +19,7 @@ export interface HostOptions {
   onToast?: (level: 'info' | 'success' | 'warning' | 'error', message: string) => void
   onNavigate?: (to: string) => void
   onTitle?: (title: string) => void
+  onDirtyChange?: (dirty: boolean) => void
   /** token 刷新间隔（毫秒），默认 45 分钟（令牌有效期 1 小时） */
   refreshMs?: number
 }
@@ -71,6 +72,7 @@ export function attachBridgeHost(options: HostOptions): BridgeHost {
       return
     }
     if (handshake) handshake.stale = true
+    options.onDirtyChange?.(false)
     unclaimedLoad = true
   }
 
@@ -78,6 +80,7 @@ export function attachBridgeHost(options: HostOptions): BridgeHost {
     // 同一段里只应答一次；标记要在 await 之前打上，取令牌期间再来的 ready 也算重复
     if (answeredThisLoad || initInFlight) return
     answeredThisLoad = true
+    options.onDirtyChange?.(false)
     initInFlight = true
     const hs: Handshake = { ownLoadPending: !unclaimedLoad, stale: false }
     unclaimedLoad = false
@@ -112,6 +115,9 @@ export function attachBridgeHost(options: HostOptions): BridgeHost {
       return
     }
     if (msg.nonce !== nonce) return
+    if (msg.type === 'dirty' && handshake && !handshake.stale && !initInFlight && typeof msg.dirty === 'boolean') {
+      options.onDirtyChange?.(msg.dirty)
+    }
     if (msg.type === 'resize') options.onResize?.(msg.height)
     if (msg.type === 'toast') options.onToast?.(msg.level, msg.message)
     if (msg.type === 'navigate') options.onNavigate?.(msg.to)
@@ -140,6 +146,7 @@ export function attachBridgeHost(options: HostOptions): BridgeHost {
     },
     destroy() {
       destroyed = true
+      options.onDirtyChange?.(false)
       clearInterval(timer)
       window.removeEventListener('message', onMessage)
       options.iframe.removeEventListener('load', onLoad)

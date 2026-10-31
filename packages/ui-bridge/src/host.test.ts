@@ -47,6 +47,41 @@ afterEach(() => {
 })
 
 describe('attachBridgeHost', () => {
+  it('草稿通知必须来自当前 iframe、匹配 nonce 且为布尔值；换文档后清除', async () => {
+    const onDirtyChange = vi.fn()
+    const h = setup({ onDirtyChange })
+    await h.ready()
+    const nonce = h.inits()[0]!.nonce
+    const message = { channel: CHANNEL, type: 'dirty', nonce, dirty: true }
+    onDirtyChange.mockClear()
+    h.message(message, {})
+    h.message({ ...message, nonce: 'wrong' })
+    h.message({ ...message, dirty: 'true' })
+    expect(onDirtyChange).not.toHaveBeenCalled()
+    h.message(message)
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    h.load() // 当前文档自己的 load 不能清掉已上报的草稿
+    expect(onDirtyChange).toHaveBeenCalledTimes(1)
+    h.load() // 没握手的新文档不能继承旧状态，也不能再更新它
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+    onDirtyChange.mockClear()
+    h.message(message)
+    expect(onDirtyChange).not.toHaveBeenCalled()
+  })
+
+  it('新握手和销毁宿主会清除草稿状态', async () => {
+    const onDirtyChange = vi.fn()
+    const h = setup({ onDirtyChange })
+    await h.ready()
+    h.load()
+    h.message({ channel: CHANNEL, type: 'dirty', nonce: h.inits()[0]!.nonce, dirty: true })
+    await h.ready()
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+    onDirtyChange.mockClear()
+    h.host.destroy()
+    expect(onDirtyChange).toHaveBeenCalledWith(false)
+  })
+
   it('应答 ready 的 init 与以前同一个格式：旧版页面端照常握手', async () => {
     const h = setup()
     await h.ready()

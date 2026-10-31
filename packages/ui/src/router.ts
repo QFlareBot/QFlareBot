@@ -20,7 +20,7 @@ export const router = createRouter({
         // 「添加插件」（插件市场 + 仓库链接）。不放在 plugins/ 下面：会和同名插件的详情页撞路由；
         // 路径保持 /market，文档站的「安装」按钮跳的是 /#/market?install=a,b
         { path: 'market', component: () => import('./pages/AddPluginPage.vue') },
-        { path: 'plugin-ui/:name', component: () => import('./pages/PluginUiPage.vue') },
+        { path: 'plugin-ui/:name', component: () => import('./pages/PluginUiPage.vue'), meta: { embeddedPage: true } },
         { path: 'storage', component: () => import('./pages/StoragePage.vue') },
         { path: 'debug', component: () => import('./pages/DebugPage.vue') },
         { path: 'settings', component: () => import('./pages/SettingsPage.vue') },

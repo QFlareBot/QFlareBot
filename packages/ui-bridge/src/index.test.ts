@@ -27,6 +27,31 @@ afterEach(() => {
 })
 
 describe('createBridge（页面端）', () => {
+  it('只在草稿状态变化时通知宿主', async () => {
+    const s = setup()
+    const pending = createBridge({ timeout: 50 })
+    s.send(s.init('n1', 'token'))
+    const bridge = await pending
+    s.parent.postMessage.mockClear()
+    bridge.setDirty(true)
+    bridge.setDirty(true)
+    bridge.setDirty(false)
+    expect(s.parent.postMessage.mock.calls).toEqual([
+      [{ channel: CHANNEL, type: 'dirty', nonce: 'n1', dirty: true }, '*'],
+      [{ channel: CHANNEL, type: 'dirty', nonce: 'n1', dirty: false }, '*'],
+    ])
+  })
+
+  it('超时后才完成握手时补报最新草稿状态', async () => {
+    const s = setup()
+    const bridge = await createBridge({ timeout: 1 })
+    s.parent.postMessage.mockClear()
+    bridge.setDirty(true)
+    expect(s.parent.postMessage).not.toHaveBeenCalled()
+    s.send(s.init('late', 'token'))
+    expect(s.parent.postMessage).toHaveBeenLastCalledWith({ channel: CHANNEL, type: 'dirty', nonce: 'late', dirty: true }, '*')
+  })
+
   it('向面板发 ready，只认 window.parent 发来的 init', async () => {
     const s = setup()
     const pending = createBridge({ timeout: 50 })

@@ -11,6 +11,7 @@ import QEmpty from '../components/ui/QEmpty.vue'
 import { useStatus } from '../composables/useStatus.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useToast } from '../composables/useToast.js'
+import { provideUnsavedGuard } from '../composables/useUnsavedGuard.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,8 +25,9 @@ const pagePath = computed(() => (plugin.value?.ui ? `/p/${plugin.value.name}${pl
 // iframe 的首个请求带不了 Authorization 头，首次令牌走 ?token=，之后由桥刷新
 const src = ref('')
 const frame = ref<HTMLIFrameElement | null>(null)
-const height = ref(480)
 const title = ref('')
+const dirty = ref(false)
+provideUnsavedGuard(() => dirty.value)
 let host: BridgeHost | null = null
 
 let firstToken: string | null = null
@@ -39,6 +41,8 @@ watch(
   async (path) => {
     const seq = ++pageSeq
     src.value = ''
+    title.value = ''
+    dirty.value = false
     firstToken = null
     if (!path || !plugin.value) return
     try {
@@ -93,10 +97,10 @@ function mount() {
       }
       return (await api.bridgeToken(name)).token
     },
-    onResize: (h) => (height.value = Math.max(240, Math.min(4000, h))),
     onToast: (level, message) => push(message, level),
     onNavigate: (to) => void router.push(to),
     onTitle: (t) => (title.value = t),
+    onDirtyChange: (value) => (dirty.value = value),
   })
 }
 
@@ -104,16 +108,19 @@ function mount() {
 // 已经握过手的页面不会再发 ready，之后的主题、令牌刷新就都到不了它那里
 watch([frame, () => plugin.value?.name], mount)
 watch(theme, (t) => host?.setTheme(t))
-onBeforeUnmount(() => host?.destroy())
+onBeforeUnmount(() => {
+  pageSeq += 1
+  host?.destroy()
+})
 </script>
 
 <template>
-  <div>
-    <RouterLink :to="`/plugins/${name}`" class="mb-3 inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"><ArrowLeft class="size-4" aria-hidden="true" />{{ plugin?.displayName ?? '插件' }}</RouterLink>
+  <div class="plugin-page flex min-h-0 flex-1 flex-col">
+    <RouterLink :to="`/plugins/${name}`" class="mb-2 inline-flex shrink-0 self-start items-center gap-1 text-sm text-fg-muted hover:text-fg"><ArrowLeft class="size-4" aria-hidden="true" />{{ plugin?.displayName ?? '插件' }}</RouterLink>
     <QEmpty v-if="status && (!plugin || !plugin.ui)" title="该插件没有页面" />
     <QEmpty v-else-if="plugin && !plugin.enabled" title="插件已禁用" description="启用后才能打开它的页面。" />
     <template v-else-if="plugin">
-      <PageHeader :title="title || plugin.ui?.title || plugin.displayName">
+      <PageHeader :title="title || plugin.ui?.title || plugin.displayName" class="shrink-0">
         <QButton size="sm" variant="ghost" @click="openInNewWindow"><ExternalLink class="size-3.5" aria-hidden="true" />新窗口打开</QButton>
       </PageHeader>
       <iframe
@@ -123,8 +130,7 @@ onBeforeUnmount(() => host?.destroy())
         :src="src"
         :title="plugin.ui?.title ?? plugin.displayName"
         sandbox="allow-scripts allow-forms allow-popups allow-downloads"
-        class="block w-full rounded-lg border border-border bg-surface transition-[height] duration-(--qb-duration-slow)"
-        :style="{ height: `${height}px` }"
+        class="block min-h-0 w-full flex-1 rounded-lg border border-border bg-surface"
       />
     </template>
   </div>
