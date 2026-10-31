@@ -4,10 +4,13 @@ import { provideUnsavedGuard } from './useUnsavedGuard.js'
 const hooks = vi.hoisted(() => ({
   mounted: [] as Array<() => void>,
   unmounted: [] as Array<() => void>,
-  leave: vi.fn(), update: vi.fn(), confirm: vi.fn(),
+  leave: vi.fn(),
+  update: vi.fn(),
+  confirm: vi.fn(),
 }))
 vi.mock('vue', () => ({
-  provide: vi.fn(), inject: vi.fn(),
+  provide: vi.fn(),
+  inject: vi.fn(),
   onMounted: (fn: () => void) => hooks.mounted.push(fn),
   onBeforeUnmount: (fn: () => void) => hooks.unmounted.push(fn),
 }))
@@ -15,12 +18,14 @@ vi.mock('vue-router', () => ({ onBeforeRouteLeave: hooks.leave, onBeforeRouteUpd
 vi.mock('./useConfirm.js', () => ({ useConfirm: () => hooks.confirm }))
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   hooks.mounted.length = 0
   hooks.unmounted.length = 0
   vi.stubGlobal('window', new EventTarget())
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('页面自身草稿守卫', () => {
   it('动态读取桥接状态，取消保留页面，保存完成后直接离开', async () => {
