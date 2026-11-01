@@ -23,7 +23,7 @@ export interface T2IOptions {
   timeoutMs?: number
 }
 
-export interface T2IRenderOptions extends T2IOptions {}
+export interface T2IRenderOptions extends T2IOptions { signal?: AbortSignal }
 
 export interface T2IRenderResult {
   /** 图片二进制 */
@@ -102,6 +102,9 @@ export class T2I {
   ): Promise<T> {
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs
     const controller = new AbortController()
+    const abort = () => controller.abort(options.signal?.reason)
+    if (options.signal?.aborted) abort()
+    else options.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(() => controller.abort(), timeoutMs)
 
     try {
@@ -130,12 +133,14 @@ export class T2I {
       }
       return await read(response)
     } catch (err: unknown) {
+      if (options.signal?.aborted) throw new Error('T2I 渲染已取消')
       if (err instanceof Error && err.name === 'AbortError') {
         throw new Error(`T2I 渲染超时 (${timeoutMs}ms)，请检查 T2I 节点健康状态`)
       }
       throw err
     } finally {
       clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
     }
   }
 

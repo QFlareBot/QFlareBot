@@ -1,0 +1,9 @@
+/** 插件集成测试入口；仅供 Node 测试，不参与 Worker bundle。 */
+export { ContextFactory } from '../context.js'
+export { PluginRegistry } from '../registry.js'
+export { dispatch } from '../dispatcher.js'
+export { resetLifecycle } from '../lifecycle.js'
+export { resetSnapshotCache } from '../store.js'
+export { unavailableApi } from '../unavailableApi.js'
+export { createEnv, createExecutionContext } from './mocks.js'
+export type { Snapshot } from '../types.js'

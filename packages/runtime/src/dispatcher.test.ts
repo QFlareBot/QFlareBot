@@ -33,7 +33,7 @@ function makeDeps(plugins: RuntimeOptions['plugins'], snapshot?: Snapshot) {
     registry: new PluginRegistry(plugins),
     snapshot: snapshot ?? { revision: 1, plugins: {} },
     // 处理器只用到 match/session，ctx 给个空壳即可
-    contexts: { prepare: async () => ({}) } as unknown as ContextFactory,
+    contexts: { bindSession() {}, prepare: async () => ({}) } as unknown as ContextFactory,
     commandPrefixes: ['/'],
     logger,
   }

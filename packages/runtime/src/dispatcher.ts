@@ -420,6 +420,7 @@ function collectForPlugin(
 
 /** 事件分发：中间件链 → 匹配器；任何插件的异常只记录、不影响其他插件 */
 export async function dispatch(session: Session, deps: DispatchDeps): Promise<DispatchReport> {
+  deps.contexts.bindSession(session)
   const report: DispatchReport = { matched: [], errors: [] }
   if (deps.snapshot.safeMode) {
     await session.interaction?.ack(0).catch(() => false)

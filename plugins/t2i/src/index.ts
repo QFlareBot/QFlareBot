@@ -1,6 +1,6 @@
 import { definePlugin } from '@qqbot/sdk'
 import { T2I } from './t2i.js'
-import type { T2IConfig } from './t2i.js'
+import type { T2IRenderBase64Result, T2IConfig } from './t2i.js'
 import { DEFAULT_T2I_URL } from './t2i.js'
 import { PAGE_HTML } from './page.js'
 
@@ -32,7 +32,8 @@ function t2iFromConfig(config: PluginConfig): T2I {
 export default definePlugin<PluginConfig>({
   name: 't2i',
   displayName: 'T2I 渲染',
-  description: 'AstrBot T2I 渲染服务：把 HTML 渲染成图片；向其他插件导出 t2i 服务，页面可测连通性与试渲染',
+  description:
+    'AstrBot T2I 渲染服务：把 HTML 渲染成图片；向其他插件导出 t2i 服务，页面可测连通性与试渲染',
   permissions: ['net'],
   ui: { path: '/ui/', title: 'T2I 渲染服务' },
 
@@ -64,7 +65,78 @@ export default definePlugin<PluginConfig>({
 
   // 向其他插件提供服务：depends 声明 `{ t2i: '*' }` 后 ctx.service<T2I>('t2i')
   services: {
-    t2i: (ctx) => t2iFromConfig(ctx.config),
+    t2i: ctx => t2iFromConfig(ctx.config),
+  },
+
+  // 同一份公开能力供所有 Agent 使用；普通插件仍可继续依赖 services.t2i。
+  tools: {
+    render: {
+      description:
+        '将完整 HTML 渲染成一张 PNG 图片。当用户需要图片形式的表格、卡片或报告时使用；普通文字回复无需调用。html 需包含要展示的内容与样式，宽高单位为像素。成功返回图片附件以及图片字节数，不会自动向会话发送消息。',
+      service: 't2i',
+      method: 'renderBase64',
+      permission: 'member',
+      sideEffect: 'none',
+      version: 1,
+      timeoutMs: 25_000,
+      inputSchema: {
+        type: 'object',
+        required: ['html'],
+        additionalProperties: false,
+        properties: {
+          html: {
+            type: 'string',
+            description: '要渲染的完整 HTML，可包含内联 CSS。',
+            minLength: 1,
+            maxLength: 50_000,
+          },
+          width: {
+            type: 'integer',
+            description: '图片宽度，单位像素，默认 480。',
+            minimum: 100,
+            maximum: 2560,
+          },
+          height: {
+            type: 'integer',
+            description: '图片高度，单位像素，默认 640。',
+            minimum: 100,
+            maximum: 4096,
+          },
+        },
+      },
+      outputSchema: {
+        type: 'object',
+        required: ['byteSize'],
+        additionalProperties: false,
+        properties: {
+          byteSize: {
+            type: 'integer',
+            minimum: 0,
+            description: '返回的 PNG 图片字节数；图片内容见 artifacts。',
+          },
+        },
+      },
+      mapInput({ ctx, input, signal, deadline }) {
+        const {
+          html,
+          width = 480,
+          height = 640,
+        } = input as { html: string; width?: number; height?: number }
+        return [
+          html,
+          {
+            width,
+            height,
+            signal,
+            timeoutMs: Math.max(1, Math.min(ctx.config.t2i_timeout, deadline - Date.now())),
+          },
+        ]
+      },
+      mapOutput(result) {
+        const { base64, byteSize } = result as T2IRenderBase64Result
+        return { status: 'success', output: { byteSize }, artifacts: [{ type: 'image', base64 }] }
+      },
+    },
   },
 
   // 插件页面：服务状态、连通性测试与试渲染
@@ -73,7 +145,8 @@ export default definePlugin<PluginConfig>({
       method: 'GET',
       path: '/ui/*',
       auth: 'admin',
-      handler: async () => new Response(PAGE_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
+      handler: async () =>
+        new Response(PAGE_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
     },
     {
       method: 'GET',
@@ -101,7 +174,8 @@ export default definePlugin<PluginConfig>({
           width?: number
           height?: number
         }
-        if (!html || !html.trim()) return Response.json({ ok: false, error: 'html 不能为空' }, { status: 400 })
+        if (!html || !html.trim())
+          return Response.json({ ok: false, error: 'html 不能为空' }, { status: 400 })
         const startedAt = Date.now()
         try {
           const { base64, byteSize } = await t2iFromConfig(ctx.config).renderBase64(html, {

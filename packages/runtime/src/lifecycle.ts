@@ -10,6 +10,7 @@ import type { RuntimeEnv } from './types.js'
  * 以前是「开始跑就记下」：onBoot 还没跑完，并发进来的请求就已经进了处理器；onInstall 也会被并发请求各跑一遍
  */
 const ready = new Map<string, Promise<void>>()
+const failed = new Map<string, string>()
 
 /**
  * 首次触及插件时执行生命周期钩子：
@@ -34,6 +35,7 @@ export function ensureReady(
   env: RuntimeEnv,
   contexts: ContextFactory,
   logger: Logger,
+  strict = false,
 ): Promise<void> {
   const { name } = plugin.manifest
   let task = ready.get(name)
@@ -44,7 +46,12 @@ export function ensureReady(
     })
     ready.set(name, task)
   }
-  return task
+  return strict
+    ? task.then(() => {
+        const error = failed.get(name)
+        if (error) throw new Error(error)
+      })
+    : task
 }
 
 async function runHooks(
@@ -55,6 +62,7 @@ async function runHooks(
   logger: Logger,
 ): Promise<void> {
   const { name, version } = plugin.manifest
+  failed.delete(name)
 
   if (def.hooks?.onInstall) {
     const marker = Keys.installed(name)
@@ -66,6 +74,7 @@ async function runHooks(
         await env.KV.put(marker, version)
         logger.info('插件初始化完成', { plugin: name, version, upgrade: Boolean(seen) })
       } catch (err) {
+        failed.set(name, `插件 ${name} 初始化失败：${err instanceof Error ? err.message : String(err)}`)
         logger.error('插件 onInstall 失败', { plugin: name, ...errorInfo(err) })
       }
     }
@@ -75,6 +84,7 @@ async function runHooks(
     try {
       await def.hooks.onBoot(await contexts.prepare(plugin))
     } catch (err) {
+      failed.set(name, `插件 ${name} 启动失败：${err instanceof Error ? err.message : String(err)}`)
       logger.error('插件 onBoot 失败', { plugin: name, ...errorInfo(err) })
     }
   }
@@ -83,4 +93,5 @@ async function runHooks(
 /** 测试用 */
 export function resetLifecycle(): void {
   ready.clear()
+  failed.clear()
 }

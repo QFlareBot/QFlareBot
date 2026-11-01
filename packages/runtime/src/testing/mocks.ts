@@ -154,7 +154,7 @@ export function createD1(options: { legacySeen?: Array<{ id: string; ts: number 
 export function createExecutionContext(): ExecutionContext & { flush(): Promise<void> } {
   const pending: Promise<unknown>[] = []
   return {
-    waitUntil: (p) => void pending.push(p),
+    waitUntil: (p: Promise<unknown>) => void pending.push(p),
     passThroughOnException() {},
     props: {},
     async flush() {
@@ -412,6 +412,7 @@ export function createManifestD1(options: { legacy?: boolean } = {}): D1Database
     plugins: Map<string, Record<string, unknown>>
     installs: Map<string, Record<string, unknown>>
     cleanups: Map<string, Record<string, unknown>>
+    retiredDo: Map<string, Record<string, unknown>>
     tables: Map<string, number>
     pluginColumns: Set<string>
     alters: string[]

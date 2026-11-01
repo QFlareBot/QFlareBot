@@ -1,4 +1,5 @@
-import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject } from '@qqbot/sdk'
+import { CORE_TOOLS_SERVICE } from '@qqbot/sdk'
+import type { BotApi, PluginContext, ScopedDB, ScopedKV, ScopedR2, StoredObject, Session, ToolActor } from '@qqbot/sdk'
 import { botAdminsOf } from './botAdmins.js'
 import { withConfigDefaults } from './configSchema.js'
 import { createLogger } from './logger.js'
@@ -8,6 +9,8 @@ import type { PluginRegistry, RegisteredPlugin } from './registry.js'
 import { isOptionalDependency, providerFor } from './services.js'
 import { scopeSql, tablePrefix } from './sqlScope.js'
 import type { RuntimeEnv, Snapshot } from './types.js'
+import { ToolRegistryHost } from './toolRegistry.js'
+import { ensureReady } from './lifecycle.js'
 
 export interface ContextFactoryOptions {
   env: RuntimeEnv
@@ -18,6 +21,7 @@ export interface ContextFactoryOptions {
   botId: string
   /** 见 publicUrl.ts；拿不到时是 undefined */
   publicUrl?: string | undefined
+  refreshSnapshot?: () => Promise<Snapshot>
 }
 
 /**
@@ -27,11 +31,69 @@ export interface ContextFactoryOptions {
 export class ContextFactory {
   private readonly contexts = new Map<string, PluginContext<unknown>>()
   private readonly services = new Map<string, unknown>()
+  private readonly providerServices = new Map<string, Promise<unknown>>()
   private readonly pending = new Map<string, Promise<void>>()
   /** 解析失败的服务及原因：可选依赖吞掉了错误，插件调用 ctx.service() 时再如实报出来 */
   private readonly unavailable = new Map<string, string>()
+  private actor?: ToolActor
+  readonly tools: ToolRegistryHost
 
-  constructor(private readonly options: ContextFactoryOptions) {}
+  constructor(private readonly options: ContextFactoryOptions) {
+    this.tools = new ToolRegistryHost({
+      ...options,
+      ...(options.refreshSnapshot
+        ? {
+            refreshSnapshot: async () => {
+              options.snapshot = await options.refreshSnapshot!()
+              return options.snapshot
+            },
+          }
+        : {}),
+      actor: () => this.actor,
+      prepare: plugin => this.prepareToolProvider(plugin),
+      service: (plugin, name) => this.resolveProviderService(plugin, name),
+    })
+  }
+
+  /** 仅由事件分发器调用；插件拿到的 ctx 不暴露身份设置入口。 */
+  bindSession(session: Session): void {
+    this.actor = {
+      userId: session.userId,
+      scene: session.scene,
+      targetId: session.targetId,
+      memberRole: session.memberRole,
+      isBotAdmin: session.isBotAdmin,
+    }
+  }
+
+  private async prepareToolProvider(plugin: RegisteredPlugin) {
+    const seen = new Set<string>()
+    const visit = async (current: RegisteredPlugin): Promise<void> => {
+      if (seen.has(current.manifest.name)) return
+      seen.add(current.manifest.name)
+      if (this.options.snapshot.plugins[current.manifest.name]?.enabled === false)
+        throw new Error(`插件 ${current.manifest.name} 未启用`)
+      for (const [name, range] of Object.entries(current.manifest.depends)) {
+        if (name === CORE_TOOLS_SERVICE) continue
+        try {
+          const owner = providerFor(this.options.registry, this.options.snapshot, name)
+          const dependency = owner ? this.options.registry.get(owner) : undefined
+          if (!dependency) throw new Error(`服务 ${name} 没有提供者`)
+          await visit(dependency)
+        } catch (error) {
+          if (!isOptionalDependency(range)) throw error
+        }
+      }
+      const def = await current.load()
+      if (!def) throw new Error(`插件 ${current.manifest.name} 加载失败`)
+      await ensureReady(current, def, this.options.env, this, createLogger('tools'), true)
+      await this.prepare(current)
+    }
+    await visit(plugin)
+    const def = await plugin.load()
+    if (!def) throw new Error(`插件 ${plugin.manifest.name} 加载失败`)
+    return { def, ctx: this.for(plugin) }
+  }
 
   for(plugin: RegisteredPlugin): PluginContext<unknown> {
     const { name, version, defaultConfig, configSchema } = plugin.manifest
@@ -39,12 +101,16 @@ export class ContextFactory {
     if (existing) return existing
 
     const { env, execCtx, snapshot } = this.options
+    const coreTools = this.tools.for(name)
     const ctx: PluginContext<unknown> = {
       plugin: { name, version },
       botId: this.options.botId,
       ...(this.options.publicUrl ? { publicUrl: this.options.publicUrl } : {}),
       botAdmins: botAdminsOf(snapshot),
-      config: withConfigDefaults(snapshot.plugins[name]?.config, defaultConfig, configSchema) ?? defaultConfig ?? {},
+      config:
+        withConfigDefaults(snapshot.plugins[name]?.config, defaultConfig, configSchema) ??
+        defaultConfig ??
+        {},
       logger: createLogger(`plugin:${name}`),
       kv: createScopedKV(env.KV, name),
       db: createScopedDB(env.DB, name),
@@ -59,13 +125,18 @@ export class ContextFactory {
         if (!Object.hasOwn(plugin.manifest.depends ?? {}, serviceName)) {
           throw new Error(`插件 ${name} 没有在 depends 中声明服务 ${serviceName}`)
         }
+        if (serviceName === CORE_TOOLS_SERVICE) return coreTools as T
         if (!this.services.has(serviceName)) {
           const reason = this.unavailable.get(serviceName)
-          throw new Error(reason ? `服务 ${serviceName} 不可用：${reason}` : `服务 ${serviceName} 没有提供者（插件 ${name}）`)
+          throw new Error(
+            reason
+              ? `服务 ${serviceName} 不可用：${reason}`
+              : `服务 ${serviceName} 没有提供者（插件 ${name}）`,
+          )
         }
         return this.services.get(serviceName) as T
       },
-      waitUntil: (p) => execCtx.waitUntil(p),
+      waitUntil: p => execCtx.waitUntil(p),
     }
     this.contexts.set(name, ctx)
     return ctx
@@ -121,15 +192,33 @@ export class ContextFactory {
       if (!(this.options.snapshot.plugins[providerName]?.enabled ?? true)) {
         throw new Error(`服务 ${serviceName} 的提供者 ${providerName} 未启用`)
       }
-      const def = await provider.load()
-      const factory = def?.services?.[serviceName]
-      if (!factory) throw new Error(`插件 ${providerName} 加载失败，服务 ${serviceName} 不可用`)
-      this.services.set(serviceName, await factory(this.for(provider)))
+      this.services.set(serviceName, await this.resolveProviderService(provider, serviceName))
     })().catch((err: unknown) => {
       this.unavailable.set(serviceName, err instanceof Error ? err.message : String(err))
       throw err
     })
     this.pending.set(serviceName, task)
+    return task
+  }
+
+  /** 普通服务与工具绑定共享实例；同名服务的不同提供者各自缓存。 */
+  private resolveProviderService(
+    provider: RegisteredPlugin,
+    serviceName: string,
+  ): Promise<unknown> {
+    const key = JSON.stringify([provider.manifest.name, serviceName])
+    let task = this.providerServices.get(key)
+    if (!task) {
+      task = (async () => {
+        const def = await provider.load()
+        const factory = def?.services?.[serviceName]
+        if (typeof factory !== 'function') {
+          throw new Error(`插件 ${provider.manifest.name} 未提供服务 ${serviceName}`)
+        }
+        return factory(this.for(provider))
+      })()
+      this.providerServices.set(key, task)
+    }
     return task
   }
 }

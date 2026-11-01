@@ -581,3 +581,7 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | `ctx.botAdmins` | Bot 管理员的 openid 名单（只读）；判断当前发起人用 `session.isBotAdmin`，见第 3 节权限 |
 
 有疑问先看三份代码：[`templates/plugin/src/index.ts`](https://github.com/QFlareBot/QFlareBot/blob/main/templates/plugin/src/index.ts)（起步示例，含按键）、[`plugins/t2i`](https://github.com/QFlareBot/QFlareBot/tree/main/plugins/t2i)（对外提供服务 + 插件页面）、[`@qqbot/sdk`](https://github.com/QFlareBot/QFlareBot/tree/main/packages/sdk/src) 的类型注释（字段级真相）。内置插件做什么见[内置插件](./builtin-plugins.md)。
+
+## 给所有 Agent 提供工具
+
+在 `definePlugin.tools` 中声明能力，由框架 `core.tools` 统一发现和调用，无需向每个 Agent 单独注册。协议、权限、附件返回与恢复说明见[统一插件工具协议](./tools.md)。

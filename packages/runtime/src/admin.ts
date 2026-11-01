@@ -1,5 +1,6 @@
 import { QQApiError, QQBotClient, createBindTask, createTokenProvider, pollBindResult, type WebhookPayload } from '@qqbot/api'
 import type { Logger, OutgoingMessage, SendOptions, SendResult, SendTarget } from '@qqbot/sdk'
+import { validateToolValue, type PluginToolPolicy } from '@qqbot/sdk'
 import { authenticate, constantTimeEqual, issueBridge, issueSession, SESSION_TTL_SEC } from './auth.js'
 import {
   checkPluginUpdate,
@@ -534,6 +535,52 @@ export async function handleAdmin(request: Request, scope: RequestScope, deps: A
     const next = await writeSnapshot(scope.env, { ...current, plugins: { ...current.plugins, [name]: state } })
     const view = state.config === undefined ? state : { ...state, config: maskSecrets(plugin.manifest.configSchema, state.config) }
     return json({ ok: true, plugin: name, state: view, revision: next.revision })
+  }
+
+  if (sub === '/tools' && method === 'GET') {
+    const tools = await scope.contexts.tools.all()
+    return json({
+      ok: true,
+      policy: scope.snapshot.toolPolicy ?? {},
+      tools: tools.map(tool => ({
+        ...tool,
+        available:
+          !scope.snapshot.safeMode &&
+          scope.snapshot.plugins[tool.owner]?.enabled !== false &&
+          !scope.snapshot.toolPolicy?.disabled?.includes(tool.id),
+      })),
+    })
+  }
+  if (sub === '/tools/policy' && method === 'PUT') {
+    const body = await readJson<PluginToolPolicy>(request)
+    const names = {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      maxItems: 1000,
+      uniqueItems: true,
+    }
+    const problem = validateToolValue(
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          disabled: names,
+          consumers: {
+            type: 'object',
+            additionalProperties: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { enabled: { type: 'boolean' }, allow: names, deny: names },
+            },
+          },
+        },
+      },
+      body,
+    )
+    if (problem || !body) return error(problem ?? '工具策略必须是对象', 400)
+    const current = await readSnapshot(scope.env, true)
+    const written = await writeSnapshot(scope.env, { ...current, toolPolicy: body })
+    return json({ ok: true, policy: written.toolPolicy })
   }
 
   const serviceMatch = matchPath('/services/:name', sub)

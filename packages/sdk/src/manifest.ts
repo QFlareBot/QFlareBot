@@ -1,6 +1,9 @@
 import { PLUGIN_DURABLE_BASE } from './durable.js'
 import type { EventName } from './events.js'
 import { normalizePlugin } from './normalize.js'
+import { pluginToolMetadata } from './tools.js'
+import type { PluginToolManifest } from './tools.js'
+import { toolSchemaError } from './tool-schema.js'
 import {
   API_VERSION,
   type ButtonSpec,
@@ -40,6 +43,8 @@ export interface Manifest {
   ui?: PluginUiSpec
   hasMiddleware: boolean
   services: string[]
+  /** 旧清单缺省为空；函数留在插件定义，目录无需加载插件代码。 */
+  tools?: PluginToolManifest[]
   durableObjects: string[]
 }
 
@@ -106,6 +111,26 @@ export function extractManifest(
   if (def.defaultConfig !== undefined) manifest.defaultConfig = def.defaultConfig
   if (def.coreRange !== undefined) manifest.coreRange = def.coreRange
   if (def.ui !== undefined) manifest.ui = def.ui
+  if (def.tools && Object.keys(def.tools).length) {
+    manifest.tools = Object.entries(def.tools).map(([name, tool]) => {
+      const direct = typeof tool.handler === 'function'
+      const bound = typeof tool.service === 'string' && typeof tool.method === 'string'
+      if (
+        direct === bound ||
+        (direct && (tool.mapInput || tool.mapOutput || tool.service || tool.method))
+      ) {
+        throw new Error(`工具 ${name} 必须选择 handler 或 service/method 其中一种实现`)
+      }
+      if (
+        bound &&
+        (typeof tool.mapOutput !== 'function' ||
+          (tool.mapInput !== undefined && typeof tool.mapInput !== 'function'))
+      ) {
+        throw new Error(`服务工具 ${name} 需要 mapOutput，mapInput 必须为函数`)
+      }
+      return pluginToolMetadata(name, tool)
+    })
+  }
   return manifest
 }
 
@@ -127,6 +152,64 @@ export function validateManifest(m: Manifest): string[] {
   else if (m.apiVersion > API_VERSION) errors.push(`插件要求契约版本 ${m.apiVersion}，当前框架只支持到 ${API_VERSION}：请先升级机器人`)
 
   const seen = new Set<string>()
+  if (m.services.some(name => name.startsWith('core.')))
+    errors.push('core.* 是框架保留服务名，插件不能提供')
+  if (m.tools?.length && m.apiVersion < 5) errors.push('公开 tools 要求 apiVersion >= 5')
+  const toolNames = new Set<string>()
+  if (m.tools !== undefined && !Array.isArray(m.tools)) errors.push('tools 必须是数组')
+  for (const tool of Array.isArray(m.tools) ? m.tools : []) {
+    if (!tool || typeof tool !== 'object') {
+      errors.push('tools 条目必须是对象')
+      continue
+    }
+    if (typeof tool.name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(tool.name))
+      errors.push(`工具名非法：${tool.name}`)
+    if (toolNames.has(tool.name)) errors.push(`工具名重复：${tool.name}`)
+    toolNames.add(tool.name)
+    if (tool.service !== undefined || tool.method !== undefined) {
+      if (typeof tool.service !== 'string' || !m.services.includes(tool.service)) {
+        errors.push(`工具 ${tool.name} 只能绑定本插件声明的服务`)
+      }
+      if (
+        typeof tool.method !== 'string' ||
+        !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(tool.method) ||
+        ['constructor', '__proto__', 'prototype'].includes(tool.method)
+      ) {
+        errors.push(`工具 ${tool.name} 的 method 必须是公开方法名`)
+      }
+    }
+    if (
+      typeof tool.description !== 'string' ||
+      !tool.description.trim() ||
+      tool.description.length > 1000
+    )
+      errors.push(`工具 ${tool.name} 的描述需为 1–1000 字符`)
+    if (!['member', 'group_admin', 'bot_admin'].includes(tool.permission))
+      errors.push(`工具 ${tool.name} 缺少有效 permission`)
+    if (!['none', 'workspace_write', 'external_write', 'dangerous'].includes(tool.sideEffect))
+      errors.push(`工具 ${tool.name} 缺少有效 sideEffect`)
+    if (
+      tool.timeoutMs !== undefined &&
+      (!Number.isInteger(tool.timeoutMs) || tool.timeoutMs < 1 || tool.timeoutMs > 30_000)
+    )
+      errors.push(`工具 ${tool.name} 的 timeoutMs 应在 1–30000 之间`)
+    if (tool.version !== undefined && (!Number.isInteger(tool.version) || tool.version < 1))
+      errors.push(`工具 ${tool.name} 的 version 应为正整数`)
+    if (
+      tool.scenes !== undefined &&
+      (!Array.isArray(tool.scenes) ||
+        !tool.scenes.every(scene =>
+          ['group', 'c2c', 'guild', 'guild_dm', 'unknown'].includes(scene),
+        ))
+    )
+      errors.push(`工具 ${tool.name} 的 scenes 非法`)
+    if (tool.inputSchema?.type !== 'object')
+      errors.push(`工具 ${tool.name} 的 inputSchema 必须声明 type: object`)
+    for (const schema of [tool.inputSchema, tool.outputSchema].filter(s => s !== undefined)) {
+      const error = toolSchemaError(schema)
+      if (error) errors.push(`工具 ${tool.name}：${error}`)
+    }
+  }
   for (const cmd of m.commands) {
     for (const n of [cmd.name, ...(cmd.aliases ?? [])]) {
       const key = commandKey(n)

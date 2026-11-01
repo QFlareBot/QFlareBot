@@ -161,3 +161,22 @@ describe('Plugin Page API', () => {
     vi.unstubAllGlobals()
   })
 })
+
+it('工具调用取消时把 AbortSignal 传递给实际 HTTP 请求', async () => {
+  let started: () => void = () => {}
+  const ready = new Promise<void>(resolve => { started = resolve })
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    started()
+    return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    const controller = new AbortController()
+    const render = new T2I({ url: 'https://t2i.example.com' }).renderBase64('<p>hi</p>', { signal: controller.signal })
+    await ready
+    const assertion = expect(render).rejects.toThrow('已取消')
+    controller.abort()
+    await assertion
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+  } finally { vi.unstubAllGlobals() }
+})

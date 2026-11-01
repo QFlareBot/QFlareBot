@@ -125,6 +125,25 @@ export {
 export { commandKey, extractManifest, validateManifest, type Manifest } from './manifest.js'
 export { qqAvatar, qqAt, type AvatarSize } from './identity.js'
 export { meetsPermission } from './permission.js'
+export { CORE_TOOLS_SERVICE, TOOL_CONTRACT_VERSION, pluginToolMetadata } from './tools.js'
+export { toolSchemaError, validateToolValue, stableJson } from './tool-schema.js'
+export type {
+  PluginTool,
+  PluginHandlerTool,
+  PluginServiceTool,
+  PluginToolManifest,
+  PluginToolSpec,
+  PluginToolDescriptor,
+  PluginToolEffect,
+  PluginToolRegistry,
+  PluginToolInput,
+  PluginToolCallOptions,
+  PluginToolResult,
+  PluginToolArtifact,
+  PluginToolPolicy,
+  ToolInvocation,
+  ToolActor,
+} from './tools.js'
 export { mentionedUsers, type MentionedUser } from './mentions.js'
 export {
   normalizePlugin,

@@ -19,6 +19,7 @@ import {
 import { knownPluginNames } from './purge.js'
 import type { PluginRegistry } from './registry.js'
 import { optionalDepends, requiredDepends } from './services.js'
+import { CORE_TOOLS_SERVICE } from '@qqbot/sdk'
 import { prefixesCollide, tablePrefix } from './sqlScope.js'
 import type { RequestScope } from './scope.js'
 import type { AdminDeps } from './admin.js'
@@ -242,7 +243,7 @@ export function blockingProblem(inspected: Inspected, deps: AdminDeps): Failure 
   // 可选依赖不拦：没有提供者也照常能装，缺什么在 installWarnings 里提一句
   const services = providedElsewhere(declared.name, known)
   const missingDeps = requiredDepends(declared).filter(
-    (d) => !allNames.has(d) && !deps.registry.providerOf(d) && !services.has(d),
+    (d) => d !== CORE_TOOLS_SERVICE && !allNames.has(d) && !deps.registry.providerOf(d) && !services.has(d),
   )
   if (missingDeps.length > 0) {
     return {
@@ -313,7 +314,7 @@ export function installWarnings(inspected: Inspected, registry: PluginRegistry):
 
   // 可选依赖没人提供：照样能装，只是那部分功能用不了
   const provided = providedElsewhere(name, known)
-  const absent = optionalDepends(declared).filter((d) => !known.has(d) && !provided.has(d) && !registry.providerOf(d))
+  const absent = optionalDepends(declared).filter((d) => d !== CORE_TOOLS_SERVICE && !known.has(d) && !provided.has(d) && !registry.providerOf(d))
   if (absent.length > 0) warnings.push(`可选依赖 ${absent.join('、')} 目前没有插件提供，相关功能暂时用不了，装上提供者后自动可用`)
 
   warnings.push(...tablePrefixWarnings(name, inspected.knownNames, new Set([...records.map((r) => r.name), ...registry.all().map((p) => p.manifest.name)])))

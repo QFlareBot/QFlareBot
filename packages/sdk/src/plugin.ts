@@ -1,6 +1,7 @@
 import type { EventName } from './events.js'
 import type { Interaction, InteractionCode, OutgoingMessage, Scene, Session } from './session.js'
 import type { Awaitable, PluginContext } from './context.js'
+import type { PluginTool } from './tools.js'
 
 /**
  * 当前契约版本：给插件新增能力（ctx 字段、SDK 导出）时递增。
@@ -13,10 +14,12 @@ import type { Awaitable, PluginContext } from './context.js'
  *   （这两个在老机器人上读到 undefined，分别等于「不是管理员」「没引用」，只读它们的插件不必写 3）
  * - 4：`ctx.images`、`ctx.browser`（没绑定时是 undefined，老机器人上也是，判断过 undefined 的插件不必写 4）
  *
+ * - 5：声明式 `tools`、框架保留服务 `core.tools`（可选接入的消费者仍可声明较低最低版本）
+ *
  * SDK 导出的函数也算：构建插件时 `@qqbot/sdk` 一律解析成**机器人仓库里**那一份（见 apps/seed/scripts/build-plugin.mjs），
  * 老机器人上没有这个导出，构建就失败。命令上的 `panelOnlyAdmin` 这类纯数据字段不算：老 SDK 抽清单时原样带过去、老面板忽略它
  */
-export const API_VERSION = 4 as const
+export const API_VERSION = 5 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
 export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'
@@ -256,6 +259,8 @@ export interface PluginDefinition<C = unknown> {
    * 多个插件可以提供同名服务，面板上选由谁提供（没选时用先注册、且启用着的那个）
    */
   services?: Record<string, (ctx: PluginContext<C>) => unknown>
+  /** 向所有工具消费者公开的能力；由框架汇总，不需要依赖某个 Agent 插件。要求 apiVersion 5。 */
+  tools?: Record<string, PluginTool<C>>
   /** 自带的 Durable Object 类；投影时加前缀重导出并注册 */
   durableObjects?: Record<string, unknown>
 }

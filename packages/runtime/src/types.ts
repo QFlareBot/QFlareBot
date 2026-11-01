@@ -1,4 +1,4 @@
-import type { AnyPluginDefinition, Manifest } from '@qqbot/sdk'
+import type { AnyPluginDefinition, Manifest, PluginToolPolicy } from '@qqbot/sdk'
 import type { AssetBundle } from './assets.js'
 
 /** Worker 绑定：种子的 wrangler.jsonc 与投影器生成的元数据都遵循这些名字 */
@@ -94,6 +94,7 @@ export type ResolvedOptions = Required<Omit<RuntimeOptions, 'projection' | 'fetc
 
 /** 运行时快照：每个请求都会读，存 KV，isolate 内短暂缓存 */
 export interface Snapshot {
+  toolPolicy?: PluginToolPolicy
   revision: number
   plugins: Record<string, PluginState>
   commandPrefixes?: string[]

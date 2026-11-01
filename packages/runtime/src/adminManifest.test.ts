@@ -102,6 +102,7 @@ function setup(overrides: Record<string, unknown> = {}, plugins: Parameters<type
       // 另一个提供 greet 的；可选依赖 greet 的
       'raw.githubusercontent.com/me/qqbot-plugin-greeter2/a0b1c2d3e5/manifest.json': declaredManifest({ name: 'greeter2', services: ['greet'] }),
       'raw.githubusercontent.com/me/qqbot-plugin-curious/c3d4e5f6a8/manifest.json': declaredManifest({ name: 'curious', depends: { greet: 'optional' } }),
+      'raw.githubusercontent.com/me/qqbot-plugin-tools/c3d4e5f6a9/manifest.json': declaredManifest({ name: 'tools-client', depends: { 'core.tools': '*' } }),
       // 同名、别家仓库
       'raw.githubusercontent.com/other/qqbot-plugin-hello/a1b2c3d4e5/manifest.json': declaredManifest(),
       'raw.githubusercontent.com/me/qqbot-plugin-chatty/c0d1e2f3a4/manifest.json': declaredManifest({
@@ -1173,6 +1174,14 @@ describe('只提醒、不拦的情况（以前能装的现在照样能装）', (
     const { call } = setup({}, [deployed('chatty', { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a3' })])
     const { data } = await install(call, { source: 'git:me/qqbot-plugin-chatty@c0d1e2f3a4' })
     expect(data.warnings).toEqual([expect.stringContaining('新版本新增权限：kv')])
+  })
+
+  it('core.tools 是框架内置依赖，安装无需寻找提供者', async () => {
+    const { call } = setup()
+    const { res, data } = await install(call, { source: 'git:me/qqbot-plugin-tools@c3d4e5f6a9', dryRun: true })
+    expect(res.status).toBe(200)
+    expect(data.ok).toBe(true)
+    expect(JSON.stringify(data.warnings ?? [])).not.toContain('core.tools')
   })
 
   it('可选依赖没人提供：照装，提醒相关功能暂时用不了', async () => {

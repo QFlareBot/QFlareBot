@@ -45,6 +45,7 @@ export default defineConfig({
         text: '插件开发',
         items: [
           { text: '插件开发指南', link: '/plugin-guide' },
+          { text: '统一插件工具协议', link: '/tools' },
           { text: '平台能力对照', link: '/capabilities' },
           { text: '面板与插件页面', link: '/ui' },
           { text: '发布插件', link: '/publish' },

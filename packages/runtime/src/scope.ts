@@ -52,6 +52,7 @@ export class RequestScope {
       execCtx,
       registry,
       snapshot,
+      refreshSnapshot: () => readSnapshot(env, true),
       botId: bot?.appId ?? 'unconfigured',
       api: api ?? unavailableApi(),
       publicUrl: publicUrlFor(snapshot, requestOrigin),
