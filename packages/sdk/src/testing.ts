@@ -50,6 +50,7 @@ export interface MockSessionOptions {
   botAvatar?: string
   mentions?: Mention[]
   atMe?: boolean
+  addressedToOthers?: boolean
   raw?: unknown
   attachments?: Attachment[]
   /** 这条消息引用的消息；给了就有 `session.quote`，没给的字段取默认值（messageId 为 `mock-quoted-msg`） */
@@ -152,6 +153,7 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     // 默认事件是 at_message（已被 @），atMe 跟着默认走
     mentions: options.mentions ?? [],
     atMe: options.atMe ?? true,
+    addressedToOthers: options.addressedToOthers ?? false,
     attachments: options.attachments ?? [],
     interaction,
     replies,

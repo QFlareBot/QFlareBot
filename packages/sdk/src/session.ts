@@ -19,6 +19,8 @@ export interface Mention {
   username: string
   /** 平台标记的被 @ 者是否为机器人 */
   bot: boolean
+  /** 平台提供的提及范围；all 不是一个可用作命令目标的群友 */
+  scope?: 'single' | 'all'
 }
 
 /**
@@ -218,11 +220,19 @@ export interface Session {
   /** 消息里 @ 的对象（含机器人）；部分事件平台不下发，为空数组 */
   readonly mentions: ReadonlyArray<Mention>
   /**
-   * 这条消息是否在呼叫本机器人：单聊/频道私信天然是；@ 消息（at_message）由事件类型判定；
-   * 群全量消息看平台在 mentions 上标的 is_you；频道全量消息按 mentions 里的 bot 标记尽力推断。
+   * 这条消息是否在呼叫本机器人：单聊/频道私信天然是；群/频道全量消息只认单独 @ 自己
+   * （is_you 或自身 ID），不把 bot 标记、@全体或引用里的 @ 当成自己。专用 @ 事件可能省略自身提及，
+   * 不凭剩余的开头 @ 推翻此事件；单纯 @全体和引用回复除外。引用回复必须有当前消息的明确自身提及，
+   * 不以专用 @ 事件名作为唤醒依据。当前正文仍可用命令/唤醒前缀。
    * 非消息事件恒为 false。为 true 时命令不带前缀也能触发。
    */
   readonly atMe: boolean
+  /**
+   * 群/频道消息开头 @ 了别人，或 @ 全体，且没有单独 @ 本机器人。
+   * 此时不匹配命令/正则；聊天插件也应在前缀唤醒前跳过。引用内容不参与判断。
+   * 命令后面的 @群友仍可作为参数。旧运行时未提供此字段时为 undefined。
+   */
+  readonly addressedToOthers?: boolean
   readonly attachments: readonly Attachment[]
   /** 仅 INTERACTION_CREATE 事件有值 */
   readonly interaction: Interaction | undefined

@@ -28,6 +28,20 @@ describe('displayContent', () => {
       .toBe('hi @李四')
   })
 
+  it('与 AstrBot 一样识别新版 QQ 艾特；清理自身提及时保留单词边界', () => {
+    const s = session({
+      content: '<qqbot-at-user id="ABC" /> /echo before<@ABC>after <qqbot-at-user id="DEF" />',
+      mentions: [{ id: 'ABC', is_you: true }, { id: 'DEF', nickname: '群友' }],
+    })
+    expect(s.content).toBe('/echo before after')
+    expect(s.displayContent).toBe('/echo before after @群友')
+  })
+
+  it('QQ 全体标记不会被展示正文当作自身 @ 删除', () => {
+    expect(session({ content: '<@123> 公告', mentions: [{ id: '123', scope: 'all', is_you: true }] }).displayContent)
+      .toBe('<@123> 公告')
+  })
+
   it('UTF-8 表情描述可读，损坏的 base64/JSON 退化为表情占位，原 content 保留', () => {
     const ext = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify({ text: '满头问号' }))))
     const content = `你好<faceType=4,faceId="",ext="${ext}"><faceType=4,ext="???"><faceType=1,ext="bnVsbA==">`

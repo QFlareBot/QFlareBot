@@ -735,6 +735,22 @@ describe('无前缀命令（bare）', () => {
     expect((await testEvent(runtime, undefined, { content: 'SIGN' })).outbox[0]!.message).toBe('已签到')
   })
 
+  it.each([true, false])('频道全量消息只使用属于当前机器人的用户 ID（资料匹配：%s）', async (sameBot) => {
+    const { bare } = makeBarePlugins()
+    const runtime = createRuntime({ plugins: [bare] })
+    const env = createEnv()
+    env.KV.store.set('rt:snapshot', JSON.stringify({
+      revision: 1,
+      plugins: {},
+      bot: { appId: sameBot ? env.BOT_APPID : 'another-app', userId: '456' },
+    }))
+    const result = await testEvent(runtime, env, {
+      scene: 'guild', rawType: 'MESSAGE_CREATE', content: '<@!456> echo hi',
+      raw: { mentions: [{ id: '456', bot: true }] },
+    })
+    expect(result.outbox.map((item) => item.message)).toEqual(sameBot ? ['echo hi'] : [])
+  })
+
   it('bare 命令受 scenes 限制', async () => {
     const c2cOnly = definePlugin({
       name: 'c2conly',
@@ -998,7 +1014,7 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
   const sender = { sendMessage: async () => ({ ok: true, status: 200, raw: null }) }
   const opts = { botId: 'b', sender, maxPassiveReplies: 5 }
 
-  it('at_message 事件 atMe 恒为 true；群全量消息按 is_you，频道全量消息按 bot 标记', () => {
+  it('专用 @ 事件兼容省略自身提及；全量消息不能只凭 bot 标记认自己', () => {
     const at = buildSession(groupMessagePayload('hi'), opts)
     expect(at.atMe).toBe(true)
     expect(at.mentions).toEqual([])
@@ -1030,7 +1046,7 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
       },
       opts,
     )
-    expect(guildFull.atMe).toBe(true)
+    expect(guildFull.atMe).toBe(false)
   })
 
   it('群消息的被 @ 者取 member_openid / nickname，@ 本机器人的那一项标成 bot', () => {
@@ -1054,8 +1070,8 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
     )
     expect(s.content).toBe('/购买奴隶')
     expect(s.mentions).toEqual([
-      { id: 'B0AB0AB0', username: '机器人', bot: true },
-      { id: 'A1B2C3D4', username: '小明', bot: false },
+      { id: 'B0AB0AB0', username: '机器人', bot: true, scope: 'single' },
+      { id: 'A1B2C3D4', username: '小明', bot: false, scope: 'single' },
     ])
   })
 
@@ -1093,7 +1109,7 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
     )
     expect(await res.json()).toMatchObject({ ok: true, appId: '123' })
     expect(JSON.parse(env.KV.store.get('rt:snapshot')!)).toMatchObject({
-      bot: { name: '测试机器人', avatar: 'https://thirdqq.qlogo.cn/bot/640' },
+      bot: { userId: 'bot-1', name: '测试机器人', avatar: 'https://thirdqq.qlogo.cn/bot/640' },
     })
   })
 
@@ -1141,8 +1157,8 @@ describe('第一批打包：mentions / atMe / 机器人资料', () => {
 })
 
 describe('切换机器人', () => {
-  /** 按 AppID 回不同名字；bad 里的 AppID 换 token 失败 */
-  function botFetch(bad: Set<string> = new Set()) {
+  /** 按 AppID 回不同资料；bad 里的 AppID 换 token 失败 */
+  function botFetch(bad: Set<string> = new Set(), failedProfiles: Set<string> = new Set()) {
     let lastAppId = ''
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input)
@@ -1153,15 +1169,16 @@ describe('切换机器人', () => {
       }
       if (url.includes('/users/@me')) {
         const appId = new Headers(init?.headers).get('x-union-appid')
-        return new Response(JSON.stringify({ username: `机器人${appId}`, avatar: `https://a/${appId}` }))
+        if (failedProfiles.has(appId!)) return new Response('{}', { status: 500 })
+        return new Response(JSON.stringify({ id: `user-${appId}`, username: `机器人${appId}`, avatar: `https://a/${appId}` }))
       }
       return new Response('{}')
     }
     return fetchImpl
   }
 
-  function setup(bad?: Set<string>, env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined })) {
-    const runtime = createRuntime({ plugins: [], fetchImpl: botFetch(bad) })
+  function setup(bad?: Set<string>, env = createEnv({ BOT_APPID: undefined, BOT_SECRET: undefined }), failedProfiles?: Set<string>) {
+    const runtime = createRuntime({ plugins: [], fetchImpl: botFetch(bad, failedProfiles) })
     const call = async (method: string, path: string, body?: unknown) => {
       const res = await runtime.fetch!(
         new Request(`${BASE}/admin${path}`, {
@@ -1186,7 +1203,7 @@ describe('切换机器人', () => {
     await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
     expect(JSON.parse(env.KV.store.get('rt:bot')!)).toEqual({ appId: '222', secret: 'secret-222' })
     expect(JSON.parse(env.KV.store.get('rt:bot_saved')!)).toEqual([
-      { appId: '111', secret: 'secret-111b', name: '机器人111', avatar: 'https://a/111', savedAt: expect.any(Number) },
+      { appId: '111', secret: 'secret-111b', userId: 'user-111', name: '机器人111', avatar: 'https://a/111', savedAt: expect.any(Number) },
     ])
     const listed = await call('GET', '/bot/saved')
     expect(listed.body).toEqual({ ok: true, bots: [{ appId: '111', name: '机器人111', savedAt: expect.any(Number) }] })
@@ -1202,10 +1219,24 @@ describe('切换机器人', () => {
     expect(await call('POST', '/bot/switch', { appId: '111' })).toEqual({ status: 200, body: { ok: true, appId: '111' } })
     expect(JSON.parse(env.KV.store.get('rt:bot')!)).toEqual({ appId: '111', secret: 'secret-111' })
     expect((await call('GET', '/bot/saved')).body.bots).toEqual([{ appId: '222', name: '机器人222', savedAt: expect.any(Number) }])
-    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).bot).toEqual({ appId: '111', name: '机器人111', avatar: 'https://a/111' })
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).bot).toEqual({ appId: '111', userId: 'user-111', name: '机器人111', avatar: 'https://a/111' })
 
     expect((await call('POST', '/bot/switch', { appId: '333' })).status).toBe(404)
     expect((await call('POST', '/bot/switch', {})).status).toBe(400)
+  })
+
+  it('切回旧号时资料接口失败：恢复该号保存的用户 ID，不沿用当前号的 ID', async () => {
+    const failedProfiles = new Set<string>()
+    const { env, call } = setup(undefined, undefined, failedProfiles)
+    await call('PUT', '/bot', { appId: '111', secret: 'secret-111' })
+    await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
+    failedProfiles.add('111')
+
+    expect((await call('POST', '/bot/switch', { appId: '111' })).status).toBe(200)
+    expect(JSON.parse(env.KV.store.get('rt:snapshot')!).bot).toEqual({
+      appId: '111', userId: 'user-111', name: '机器人111', avatar: 'https://a/111',
+    })
+    expect(JSON.parse(env.KV.store.get('rt:bot_saved')!)[0]).toMatchObject({ appId: '222', userId: 'user-222' })
   })
 
   it('切换时鉴权失败（比如平台上重置了 AppSecret）：什么都不改', async () => {
@@ -1254,12 +1285,12 @@ describe('切换机器人', () => {
   it('老快照的机器人资料没标 appId：按属于当前机器人处理，换号时跟着存下来', async () => {
     const { env, call } = setup()
     env.KV.store.set('rt:bot', JSON.stringify({ appId: '111', secret: 'secret-111' }))
-    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { name: '老名字', avatar: 'https://old' } }))
+    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { userId: 'user-111', name: '老名字', avatar: 'https://old' } }))
     await call('PUT', '/bot', { appId: '222', secret: 'secret-222' })
     expect(JSON.parse(env.KV.store.get('rt:bot_saved')!)[0]).toMatchObject({ appId: '111', name: '老名字', avatar: 'https://old' })
   })
 
-  it('换号时拉不到新号资料：快照里不留上一个的名字', async () => {
+  it('换号时拉不到新号资料：快照里不留上一个的用户 ID 和名字', async () => {
     const { env, call } = setup()
     const runtime = createRuntime({
       plugins: [],
@@ -1269,7 +1300,7 @@ describe('切换机器人', () => {
           : new Response('{}', { status: 500 }),
     })
     env.KV.store.set('rt:bot', JSON.stringify({ appId: '111', secret: 'secret-111' }))
-    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { name: '老名字', avatar: 'https://old' } }))
+    env.KV.store.set('rt:snapshot', JSON.stringify({ revision: 3, plugins: {}, bot: { userId: 'user-111', name: '老名字', avatar: 'https://old' } }))
     const res = await runtime.fetch!(
       new Request(`${BASE}/admin/bot`, {
         method: 'PUT',

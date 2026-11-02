@@ -96,6 +96,7 @@ export class RequestScope {
     const profile = profileOf(this.snapshot, this.bot?.appId)
     const session = buildSession(payload, {
       botId: this.botId,
+      botUserId: profile?.userId ?? '',
       botName: profile?.name ?? '',
       botAvatar: profile?.avatar ?? '',
       botAdmins: botAdminsOf(this.snapshot),

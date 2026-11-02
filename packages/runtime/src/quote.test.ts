@@ -57,11 +57,14 @@ describe('buildQuote（session.quote）', () => {
     expect(quote).toMatchObject({ messageId: 'found', refIndex: 'REFIDX_q' })
   })
 
-  it('没引用、形状不对都是 undefined，不抛', () => {
+  it('没引用时返回 undefined', () => {
     expect(buildQuote(msg({}))).toBeUndefined()
     expect(buildQuote(msg({ message_scene: { ext: ['msg_idx=REFIDX_self'] } }))).toBeUndefined()
-    expect(buildQuote(msg({ message_type: 103, msg_elements: 'x' as never }))).toBeUndefined()
-    expect(buildQuote(msg({ message_type: 103, msg_elements: [null as never] }))).toBeUndefined()
+  })
+
+  it.each([undefined, [], 'x', [null]])('103 缺少有效原文时仍标记引用，不抛：%j', (elements) => {
+    expect(buildQuote(msg({ message_type: 103, msg_elements: elements as RawMessageEvent['msg_elements'] })))
+      .toEqual({ messageId: '', content: '', attachments: [], refIndex: undefined })
   })
 
   it('挂在 session 上', () => {

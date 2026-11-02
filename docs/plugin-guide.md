@@ -140,6 +140,14 @@ npm test                 # @qqbot/sdk/testing 提供 runCommand / createMockSess
 
 **@ 机器人或单聊时命令可以不带前缀**（规则同 AstrBot）："@机器人 签到"等同于"/签到"。群里没开"接收全部消息"的机器人收到的都是 @ 消息，所以群聊和单聊基本都不用打前缀；判断依据见下文 `session.atMe`。
 
+**收件人先于前缀**：群/频道消息开头 @ 了别人，或 @ 全体，且没有单独 @ 本机器人时，`session.addressedToOthers` 为 true，框架跳过命令和正则匹配（含 `bare` 命令）。消息事件仍会分发，聊天插件应在唤醒前检查此字段。`/命令 @群友` 中的提及仍可作为参数；引用里的 @ 不决定当前消息的收件人。
+
+这里“开头 @别人”的推断只用于全量消息。专用 `GROUP_AT_MESSAGE_CREATE` / `AT_MESSAGE_CREATE` 可能已省略自身 @，剩余开头的 @ 可能是参数，仍按本机器人已被呼叫处理（单纯 @全体除外）。同时支持 `<@id>`、`<@!id>` 和 `<qqbot-at-user id="id" />` 三种标记。
+
+**引用回复例外**：收到引用（含只有 `message_reference` 或 ref index、没有原文的情况）时，不仅凭专用 @ 事件名唤醒。当前消息必须带明确指向自己的提及，或当前正文使用命令/唤醒前缀。这样引用一条带 @全体的消息后只回复“收到”不会唤醒；若平台省略了当前自身 @ 且没有 `is_you`，用前缀明确调用。自身 @ 不要求在正文开头，前面的文字也不会丢失。
+
+频道全量消息若没有 `is_you`，使用保存凭证时从 `/users/@me` 取得的机器人用户 ID 匹配。旧部署可在面板重新保存一次机器人凭证以补齐此 ID；资料属于其他 AppID 时不会使用。
+
 **命令名带空格就是子命令**，每条都是普通命令，`permission`、`scenes`、`usage` 照常各写各的：
 
 ```ts
@@ -219,9 +227,9 @@ buttons: {
 
 `session` 只读字段（完整类型见 `@qqbot/sdk`）：
 
-- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑被 @ 的群友时把 `bot` 的滤掉）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，@ 消息由事件类型判定，群全量消息看平台在 mentions 上标的 `is_you`，频道全量消息按 mentions 里的 bot 标记尽力推断）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`。群、单聊的推送不带被引用消息的 id，`messageId` 是运行时拿 ref index 查内存里的对照表补上的，只有 2 分钟内（和平台的撤回时限一样）、机器人收到过或发出的消息查得到，查不到是空串，要准备好这种情况）
-- **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
-- **展示或交给 AI 的正文**：用 `session.displayContent ?? session.content`，保留其他人的 @ 和位置，有名字时显示 `@名字`，未知对象保留原始标记；只移除能确认是本机器人的提及。QQ 的编码表情会转为可读描述，坏数据显示 `[表情]`。原有 `content` 和命令匹配规则不变，原始数据仍在 `raw`。
+- **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot, scope? }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑群友时过滤 `bot` 和 `scope: all`）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，群/频道全量消息只认单独 @ 自己的 `is_you` 或自身 ID；`bot` 标记、@全体和引用里的 @ 都不算，无引用的专用 @ 事件兼容省略自身提及的推送；引用回复只认当前消息里的明确自身提及）、`addressedToOthers`（原文开头 @ 别人或 @ 全体，且未单独 @ 本机器人；聊天插件应先跳过，旧运行时可能为 undefined）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`。群、单聊的推送不带被引用消息的 id，`messageId` 是运行时拿 ref index 查内存里的对照表补上的，只有 2 分钟内（和平台的撤回时限一样）、机器人收到过或发出的消息查得到，查不到是空串，要准备好这种情况）
+- **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人和全体、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` / `<@!id>` / `<qqbot-at-user id="id" />` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
+- **展示或交给 AI 的正文**：用 `session.displayContent ?? session.content`，保留其他人的 @ 和位置，有名字时显示 `@名字`，未知对象保留原始标记；只移除能确认是本机器人的提及。QQ 的编码表情会转为可读描述，坏数据显示 `[表情]`。`content` 仍用于去 @ 后的命令匹配；框架先依据原始收件人过滤命令和正则，发给别人或全体的消息仍会交给事件观察者。原始数据仍在 `raw`。
 - **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 

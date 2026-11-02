@@ -182,7 +182,7 @@ interface CollectContext {
 
 /** 这条事件的命令解析结果；不是消息事件为 null。清单预筛和收集候选共用这一份 */
 function commandOf(session: Session, deps: DispatchDeps): ParsedCommand | null {
-  if (!isMessageEvent(session.event)) return null
+  if (!isMessageEvent(session.event) || session.addressedToOthers) return null
   const prefixes = deps.snapshot.commandPrefixes ?? deps.commandPrefixes
   return parseCommand(session.content, prefixes) ?? parseBareCommand(session.content)
 }
@@ -209,14 +209,14 @@ export function mayHandle(manifest: Manifest, session: Session, command: ParsedC
     if (!Array.isArray(commands) || !Array.isArray(regex) || !Array.isArray(events) || !Array.isArray(buttons)) return true
     if (typeof hasMiddleware !== 'boolean' || hasMiddleware) return true
 
-    if (command) {
+    if (command && !session.addressedToOthers) {
       for (const cmd of commands) {
         if (command.bare && !cmd.bare && !session.atMe) continue
         if (!sceneAllowed(cmd.scenes, session)) continue
         if ([cmd.name, ...(cmd.aliases ?? [])].some((c) => matchedWords(command, c) > 0)) return true
       }
     }
-    if (isMessageEvent(session.event)) {
+    if (isMessageEvent(session.event) && !session.addressedToOthers) {
       for (const rule of regex) {
         if (sceneAllowed(rule.scenes, session) && compileRegex(rule.pattern, rule.flags).test(session.content)) return true
       }
@@ -354,7 +354,7 @@ function collectForPlugin(
     }
   }
 
-  if (isMessageEvent(session.event)) {
+  if (isMessageEvent(session.event) && !session.addressedToOthers) {
     for (const rule of n.regex) {
       if (!sceneAllowed(rule.scenes, session)) continue
       const match = session.content.match(compileRegex(rule.pattern, rule.flags))

@@ -31,6 +31,8 @@ export interface RawMessageEvent {
   group_id?: string
   channel_id?: string
   guild_id?: string
+  /** 频道的 @全体标记；它不代表单独 @ 了本机器人 */
+  mention_everyone?: boolean
   attachments?: RawAttachment[]
   /**
    * `is_you`：被 @ 的是不是本机器人（群全量消息靠它判断，`bot` 只说明对方是机器人）。

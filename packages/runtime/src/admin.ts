@@ -157,6 +157,7 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
       const profile = profileOf(before, archive.appId)
       rest.unshift({
         ...archive,
+        ...(profile?.userId ? { userId: profile.userId } : {}),
         ...(profile?.name ? { name: profile.name } : {}),
         ...(profile?.avatar ? { avatar: profile.avatar } : {}),
         savedAt: Date.now(),
@@ -172,13 +173,16 @@ async function saveBotCredentials(scope: RequestScope, deps: AdminDeps, appId: s
     const me = await client.me()
     profile = {
       appId,
+      ...(typeof me.id === 'string' && me.id ? { userId: me.id } : {}),
       name: typeof me.username === 'string' ? me.username : '',
       avatar: typeof me.avatar === 'string' ? me.avatar : '',
     }
   } catch (err) {
-    deps.logger.warn('拉取机器人资料失败，session.botName/botAvatar 可能为空', { error: (err as Error).message })
+    deps.logger.warn('拉取机器人资料失败，用户 ID、名称或头像可能缺失', { error: (err as Error).message })
     // 换了号就不能用 profileOf(before, appId)：老快照没标 appId，会把上一个的资料认成这个的
-    profile = reused ? { appId, name: reused.name ?? '', avatar: reused.avatar ?? '' } : archive ? undefined : profileOf(before, appId)
+    profile = reused
+      ? { appId, ...(reused.userId ? { userId: reused.userId } : {}), name: reused.name ?? '', avatar: reused.avatar ?? '' }
+      : archive ? undefined : profileOf(before, appId)
   }
   const { bot: current, ...snapshot } = await readSnapshot(scope.env, true)
   if (JSON.stringify(current) !== JSON.stringify(profile)) await writeSnapshot(scope.env, profile ? { ...snapshot, bot: profile } : snapshot)

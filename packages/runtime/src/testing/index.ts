@@ -2,6 +2,7 @@
 export { ContextFactory } from '../context.js'
 export { PluginRegistry } from '../registry.js'
 export { dispatch } from '../dispatcher.js'
+export { buildSession } from '../session.js'
 export { resetLifecycle } from '../lifecycle.js'
 export { resetSnapshotCache } from '../store.js'
 export { unavailableApi } from '../unavailableApi.js'

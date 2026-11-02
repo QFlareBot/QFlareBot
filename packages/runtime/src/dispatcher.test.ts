@@ -16,6 +16,7 @@ import { createMockSession } from '@qqbot/sdk/testing'
 import type { ContextFactory } from './context.js'
 import { dispatch, type DispatchDeps } from './dispatcher.js'
 import { PluginRegistry } from './registry.js'
+import { buildSession } from './session.js'
 import type { LazyPluginEntry, RuntimeOptions, Snapshot } from './types.js'
 
 const accepted = (): SendResult => ({ ok: true, status: 200, messageId: 'm1', raw: null })
@@ -39,6 +40,45 @@ function makeDeps(plugins: RuntimeOptions['plugins'], snapshot?: Snapshot) {
   }
   return { deps, logged }
 }
+
+describe('明确发给别人的消息不能抢命令或正则', () => {
+  it.each(['/hi', 'hi', '/admin', 'ping'])('%s：禁止主动匹配和权限回复，但仍把事件交给观察者', async (content) => {
+    const observed: string[] = []
+    const replies: unknown[] = []
+    const plugin = definePlugin({
+      name: 'routing',
+      commands: {
+        hi: { bare: true, handler: () => '命令回复' },
+        admin: { permission: 'bot_admin', handler: () => '管理员回复' },
+      },
+      regex: { ping: () => '正则回复' },
+      events: { 'qq.group.message': ({ session }) => { observed.push(session.content) } },
+    })
+    const { deps } = makeDeps([plugin], { revision: 1, plugins: {}, permissionDeniedReply: '没有权限' })
+    const session = buildSession({
+      op: 0,
+      t: 'GROUP_MESSAGE_CREATE',
+      d: {
+        id: 'm1', group_openid: 'G1', content: `<@ABC> ${content}`,
+        mentions: [{ id: 'ABC', bot: true, is_you: false }],
+      },
+    }, {
+      botId: '123',
+      maxPassiveReplies: 5,
+      sender: {
+        sendMessage: async (_, message) => {
+          replies.push(message)
+          return accepted()
+        },
+      },
+    })
+    const report = await dispatch(session, deps)
+    expect(report.errors).toEqual([])
+    expect(report.matched).toEqual([{ plugin: 'routing', kind: 'event', name: 'qq.group.message' }])
+    expect(observed).toEqual([content])
+    expect(replies).toEqual([])
+  })
+})
 
 describe('dispatch 的容错', () => {
   it('单个插件正则非法，只废掉它自己，其他插件照常执行', async () => {
@@ -293,6 +333,19 @@ describe('按清单预筛：用不上的插件不加载', () => {
     loads.length = 0
     await dispatch(createMockSession({ content: '签到', atMe: true }), withPrepare(entries).deps)
     expect(loads.sort()).toEqual(['loose', 'plain'])
+  })
+
+  it('发给其他对象的消息不加载仅含命令/正则的插件，事件观察者照常加载', async () => {
+    const loads: string[] = []
+    const entries = [
+      lazy(definePlugin({ name: 'command', commands: { hi: () => '命令' } }), loads),
+      lazy(definePlugin({ name: 'regex', regex: { hi: () => '正则' } }), loads),
+      lazy(definePlugin({ name: 'observer', events: { 'qq.group.message': () => undefined } }), loads),
+    ]
+    const session = createMockSession({ event: 'qq.group.message', content: '/hi', atMe: false, addressedToOthers: true })
+    await dispatch(session, withPrepare(entries).deps)
+    expect(loads).toEqual(['observer'])
+    expect(session.replies).toEqual([])
   })
 
   it('权限不足的命令也要加载：它要参与「最长命令名胜出」和统一的权限不足回复', async () => {

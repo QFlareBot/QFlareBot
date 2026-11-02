@@ -144,7 +144,7 @@ export type {
   ToolInvocation,
   ToolActor,
 } from './tools.js'
-export { mentionedUsers, type MentionedUser } from './mentions.js'
+export { mentionedUsers, parseMentionTags, type MentionedUser } from './mentions.js'
 export {
   normalizePlugin,
   type NormalizedPlugin,

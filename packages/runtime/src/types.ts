@@ -114,7 +114,7 @@ export interface Snapshot {
    * 不做运行时拉取与缓存——改资料后重新保存一次凭证即可刷新。
    * appId 标明资料属于哪个机器人（换号后不能把上一个的名字安到新号头上）；老快照没有，按属于当前机器人处理。
    */
-  bot?: { appId?: string; name?: string; avatar?: string }
+  bot?: { appId?: string; userId?: string; name?: string; avatar?: string }
   /**
    * 同名服务由谁提供：服务名 → 插件名，面板上选的。没选、或选的插件已经不提供这个服务了，
    * 就用先注册、且启用着的那个（见 services.ts）
@@ -153,6 +153,8 @@ export interface BotConfig {
 
 /** 换下来的机器人：凭证连同当时的资料一起留着，面板可一键切回 */
 export interface SavedBot extends BotConfig {
+  /** /users/@me 的用户 ID，随所属机器人一起保存 */
+  userId?: string
   name?: string
   avatar?: string
   /** 被换下来的时刻（毫秒） */

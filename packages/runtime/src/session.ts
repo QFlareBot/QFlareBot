@@ -23,8 +23,9 @@ import {
   type StreamChunkOptions,
   type StreamWriter,
 } from '@qqbot/sdk'
+import { messageAddressing } from './addressing.js'
 import { toAttachments } from './attachments.js'
-import { displayContent } from './content.js'
+import { cleanContent, displayContent } from './content.js'
 import { buildQuote } from './quote.js'
 import type { RefIndexTable } from './refIndex.js'
 import { createStreamWriter } from './stream.js'
@@ -40,6 +41,8 @@ export interface Sender {
 
 export interface SessionOptions {
   botId: string
+  /** /users/@me 返回的机器人用户 ID（频道提及使用它，与 AppID 不同） */
+  botUserId?: string
   /** 机器人资料，来自快照（面板保存凭证时从 /users/@me 拉取）；未配置为空串 */
   botName?: string
   botAvatar?: string
@@ -103,14 +106,6 @@ function identify(rawType: string, d: RawMessageEvent & RawInteractionEvent & Ra
   return { scene: 'unknown', targetId: '', userId: userOpenid || author.id || '', userName }
 }
 
-/**
- * 去掉消息里的 <@id> 提及与首尾空白。ID 有两种形状：频道是纯数字（<@!123456>），
- * 群是 32 位十六进制 openid（<@1A2B…>），都按十六进制字符集匹配。
- */
-function cleanContent(content: string | undefined): string {
-  return (content ?? '').replace(/<@!?[0-9A-Fa-f]+>/g, '').trim()
-}
-
 function buildInteraction(d: RawInteractionEvent, sender: Sender): Interaction {
   const resolved = d.data?.resolved ?? {}
   const rawType = d.type ?? d.data?.type ?? 0
@@ -154,14 +149,9 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     id: str(m.member_openid) || str(m.id) || str(m.user_openid),
     username: str(m.nickname) || str(m.username),
     bot: m.bot === true || m.is_you === true,
+    ...(m.scope === 'single' || m.scope === 'all' ? { scope: m.scope } : {}),
   }))
   const event = toEventName(rawType)
-  // 是否在呼叫本机器人，规则照 AstrBot 的 QQ 官方适配器：单聊/频道私信天然是；at_message 事件平台只在被 @ 时推送；
-  // 群全量消息看 mentions 里平台标的 is_you——bot 标记只说明被 @ 的是机器人，群里有别的机器人时会误判。
-  // 频道全量消息（MESSAGE_CREATE）AstrBot 没接，仍按 bot 标记尽力推断
-  const mentionsMe =
-    rawType === 'GROUP_MESSAGE_CREATE' ? (d.mentions ?? []).some((m) => m.is_you === true) : mentions.some((m) => m.bot)
-  const atMe = isMessageEvent(event) && (scene === 'c2c' || scene === 'guild_dm' || rawType.includes('AT_MESSAGE') || mentionsMe)
   const eventId = payload.id ?? `${rawType}:${d.id ?? Date.now()}`
   const messageId = typeof d.id === 'string' && rawType.includes('MESSAGE') ? d.id : undefined
   const eventReplyId = !messageId && EVENT_ID_REPLYABLE.has(rawType) ? eventId : undefined
@@ -172,6 +162,16 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   const refIndex = extractRefIndex(d)
   // 记下这条消息，之后有人引用它时才查得到消息 id
   refIndexes?.remember(here, refIndex, messageId)
+  const quote = buildQuote(d, refIndexes && ((ref) => refIndexes.lookup(here, ref)))
+  const addressing = isMessageEvent(event)
+    ? messageAddressing(d, {
+        rawType,
+        scene,
+        botId: options.botId,
+        botUserId: options.botUserId ?? '',
+        hasQuote: quote !== undefined,
+      })
+    : { atMe: false, addressedToOthers: false }
 
   // 同一条消息/事件的被动回复由这里统一编号
   let seq = 0
@@ -218,12 +218,12 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     isBotAdmin: userId !== '' && (options.botAdmins?.includes(userId) ?? false),
     messageId,
     refIndex,
-    quote: buildQuote(d, refIndexes && ((ref) => refIndexes.lookup(here, ref))),
+    quote,
     canReply: passive() !== null,
     content: cleanContent(d.content),
-    displayContent: displayContent(d, options.botId),
+    displayContent: displayContent(d, options.botId, options.botUserId),
     mentions,
-    atMe,
+    ...addressing,
     attachments: toAttachments(d.attachments),
     interaction: rawType === 'INTERACTION_CREATE' ? buildInteraction(d, sender) : undefined,
 
