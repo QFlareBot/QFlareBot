@@ -81,7 +81,7 @@ export interface Projection {
   /** 本次实际拉取到的制品摘要（SRI），供上层回写清单锁定版本 */
   integrity: { core: string; ui?: string; plugins: Record<string, string> }
   /**
-   * 已卸载插件留下的 DO 类（Worker 导出名）。生成 wrangler 配置时为它们写
+   * 已卸载插件留下的 DO 类（Worker 导出名）。版本元数据与 wrangler 配置为它们写
    * `exports` 墓碑（`state: 'deleted'`），否则平台会因「新版本不导出某个已有命名空间的类」
    * 拒绝部署（错误码 10064）。
    *
@@ -109,10 +109,9 @@ export type WorkerBinding =
   | { type: 'plain_text'; name: string; text: string }
   | { type: 'durable_object_namespace'; name: string; class_name: string }
 
-export interface DurableObjectExportMeta {
-  type: 'durable-object'
-  storage: 'sqlite'
-}
+export type DurableObjectExportMeta =
+  | { type: 'durable-object'; storage: 'sqlite'; state?: 'created' }
+  | { type: 'durable-object'; state: 'deleted' }
 
 /**
  * 上传版本时按类型保留上一版的 binding。
@@ -131,7 +130,7 @@ export interface VersionMetadata {
   bindings: WorkerBinding[]
   /** 见 KEPT_BINDING_TYPES；不带它等于每次部署清空所有 secret */
   keep_bindings?: string[]
-  /** 仅在有 DO 时出现；平台据此自动创建/迁移命名空间 */
+  /** 有存活或退役 DO 类时出现；平台据此创建或删除命名空间 */
   exports?: Record<string, DurableObjectExportMeta>
   annotations: {
     'workers/message': string

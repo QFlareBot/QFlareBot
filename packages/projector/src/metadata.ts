@@ -1,6 +1,6 @@
 import { collectDurableObjects } from './glue.js'
 import { KEPT_BINDING_TYPES, type BaseBindings, type DeployManifest, type VersionMetadata, type WorkerBinding } from './types.js'
-import { PROVISIONED_PLACEHOLDER } from './wrangler.js'
+import { PROVISIONED_PLACEHOLDER, retiredTombstones } from './wrangler.js'
 
 /** `workers/tag` 取投影哈希前缀（平台上限 100 字符） */
 export const TAG_LENGTH = 20
@@ -57,5 +57,7 @@ export function buildVersionMetadata(opts: {
       durableObjects.map((d) => [d.exportName, { type: 'durable-object', storage: 'sqlite' }]),
     )
   }
+  const retired = retiredTombstones({ metadata, retiredDoClasses: opts.manifest.retiredDoClasses ?? [] })
+  if (Object.keys(retired).length > 0) metadata.exports = { ...metadata.exports, ...retired }
   return metadata
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { bindings, makePlugin } from './__fixtures__/manifest.js'
+import { CloudflareWorkersApi } from './cloudflare.js'
+import { project } from './project.js'
 import { generateWranglerConfig } from './wrangler.js'
-import type { Projection } from './types.js'
+import type { DeployManifest, Projection, VersionMetadata } from './types.js'
 
 /**
  * 卸载带 DO 的插件后，部署不能失败（Cloudflare 错误码 10064）。
@@ -57,5 +60,58 @@ describe('已卸载插件的 DO 墓碑', () => {
   it('没有退役名单时不写 exports（老部署行为不变）', () => {
     const config = generateWranglerConfig({ base, projection: proj(), mainPath: 'index.js' })
     expect(config.exports).toBeUndefined()
+  })
+})
+
+describe('退役 DO 类进入生产上传元数据', () => {
+  it.each([
+    {
+      name: '卸载最后一个 DO 类', live: false, className: 'P_old_Room',
+      expected: { P_old_Room: { type: 'durable-object', state: 'deleted' } },
+    },
+    {
+      name: '存活类与退役类并存', live: true, className: 'P_old_Room',
+      expected: {
+        P_foo_Game: { type: 'durable-object', storage: 'sqlite' },
+        P_old_Room: { type: 'durable-object', state: 'deleted' },
+      },
+    },
+    {
+      name: '重新装回同名类', live: true, className: 'P_foo_Game',
+      expected: { P_foo_Game: { type: 'durable-object', storage: 'sqlite' } },
+    },
+  ])('$name', async ({ live, className, expected }) => {
+    const manifest: DeployManifest = {
+      core: { version: '0.7.2' },
+      plugins: live ? [makePlugin('foo', { manifest: { durableObjects: ['Game'] } })] : [],
+      retiredDoClasses: [{ plugin: 'old', className }],
+    }
+    const options = { bindings, compatibilityDate: '2026-09-01', fetchArtifact: async () => 'export {}' }
+    const projection = await project({ ...options, manifest })
+    const withoutRetired = await project({ ...options, manifest: { ...manifest, retiredDoClasses: [] } })
+    expect(projection.hash).toBe(withoutRetired.hash)
+    expect(projection.modules).toEqual(withoutRetired.modules)
+
+    // CLI 先把元数据写入 projection.json，部署进程再读回并上传 multipart。
+    const serialized: Projection = JSON.parse(JSON.stringify(projection))
+    let uploaded: VersionMetadata | undefined
+    const api = new CloudflareWorkersApi({
+      accountId: 'test-account',
+      apiToken: 'test-token',
+      fetchImpl: async (_input, init) => {
+        const metadata = (init!.body as FormData).get('metadata') as Blob
+        uploaded = JSON.parse(await metadata.text())
+        return Response.json({ success: true, result: { id: 'test-version' } })
+      },
+    })
+    await api.uploadVersion({ scriptName: 'test-worker', projection: serialized })
+    expect(uploaded?.exports).toEqual(expected)
+    expect(uploaded?.bindings.filter(b => b.type === 'durable_object_namespace')).toEqual(
+      live ? [{ type: 'durable_object_namespace', name: 'P_foo_Game', class_name: 'P_foo_Game' }] : [],
+    )
+
+    const generated = generateWranglerConfig({ base, projection, mainPath: 'index.js' })
+    expect(generated.exports).toEqual(expected)
+    expect(generated.durable_objects?.bindings?.map(b => b.class_name) ?? []).toEqual(live ? ['P_foo_Game'] : [])
   })
 })

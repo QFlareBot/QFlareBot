@@ -35,6 +35,7 @@ export async function project(opts: ProjectOptions): Promise<Projection> {
   )
   const resolved: DeployManifest = { core: manifest.core, plugins: resolvedPlugins }
   if (manifest.ui) resolved.ui = manifest.ui
+  if (manifest.retiredDoClasses?.length) resolved.retiredDoClasses = manifest.retiredDoClasses.map(item => ({ ...item }))
   // 运行时 / 面板的实际内容也进哈希：它们从机器人仓库现编，改了代码不一定改版本号
   const coreIntegrity = await computeIntegrity(runtimeCode)
   const uiIntegrity = uiCode !== null ? await computeIntegrity(uiCode) : undefined

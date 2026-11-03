@@ -266,11 +266,13 @@ function checkDoMigrations(base: WranglerConfig, doNames: readonly string[], war
  * 但留着无害；删掉反而会让「类已经没了、名单也没有」这件事在下一次构建时
  * 变得不可判断（而多一条 stale 墓碑只是让平台多一句提示）。
  */
-function retiredTombstones(
-  projection: Projection,
+export function retiredTombstones(
+  projection: Pick<Projection, 'metadata' | 'retiredDoClasses'>,
 ): Record<string, { type: 'durable-object'; state: 'deleted' }> {
   const retired = projection.retiredDoClasses ?? []
-  const live = new Set(Object.keys(projection.metadata.exports ?? {}))
+  const live = new Set(
+    Object.entries(projection.metadata.exports ?? {}).filter(([, spec]) => spec.state !== 'deleted').map(([name]) => name),
+  )
   const out: Record<string, { type: 'durable-object'; state: 'deleted' }> = {}
   for (const item of retired) {
     // 类又回来了（重新装了同名插件）：以 live 为准，不能同时声明删除
@@ -297,7 +299,8 @@ export function generateWranglerConfig(opts: {
   warnings?: string[]
 }): WranglerConfig {
   const { base, projection } = opts
-  const doNames = Object.keys(projection.metadata.exports ?? {})
+  const doNames = Object.entries(projection.metadata.exports ?? {})
+    .filter(([, spec]) => spec.state !== 'deleted').map(([name]) => name)
 
   const config: WranglerConfig = {
     ...base,
