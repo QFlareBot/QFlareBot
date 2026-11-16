@@ -17,6 +17,8 @@ export interface Attachment {
 export interface Mention {
   id: string
   username: string
+  /** 被 @ 者在当前群的昵称；平台未提供时为 undefined */
+  groupNickname?: string
   /** 平台标记的被 @ 者是否为机器人 */
   bot: boolean
   /** 平台提供的提及范围；all 不是一个可用作命令目标的群友 */
@@ -182,9 +184,12 @@ export interface Session {
   /** 回复目标：group_openid / user_openid / channel_id */
   readonly targetId: string
   readonly userId: string
+  /** 个人 QQ 昵称；平台未提供时为空串 */
   readonly userName: string
+  /** 用户在当前群的昵称；群聊以外或平台未提供时为 undefined */
+  readonly groupNickname?: string
   /**
-   * 用户头像 CDN 直链（官方规范按 botId + userId 拼接，640 规格；userId 为空时是空串）。
+   * 优先使用 QQ 推送里的头像 URL，取不到时按 botId + userId 拼接 640 规格的 CDN 直链。
    * 其他尺寸用 `qqAvatar(session.botId, session.userId, 140)`。
    */
   readonly avatarUrl: string

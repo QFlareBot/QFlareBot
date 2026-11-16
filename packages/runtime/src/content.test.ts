@@ -28,6 +28,22 @@ describe('displayContent', () => {
       .toBe('hi @李四')
   })
 
+  it('被 @ 者的群昵称单独提供，展示时优先用群昵称', () => {
+    const result = session({
+      content: '<@ABC> 请提醒 <@DEF> 和 <@GHI>',
+      mentions: [
+        { id: 'ABC', is_you: true },
+        { id: 'DEF', username: '小林', member_nickname: '值班小林' },
+        { id: 'GHI', username: '小周', member_nickname: '  ' },
+      ],
+    })
+    expect(result.mentions.slice(1)).toEqual([
+      { id: 'DEF', username: '小林', groupNickname: '值班小林', bot: false },
+      { id: 'GHI', username: '小周', bot: false },
+    ])
+    expect(result.displayContent).toBe('请提醒 @值班小林 和 @小周')
+  })
+
   it('与 AstrBot 一样识别新版 QQ 艾特；清理自身提及时保留单词边界', () => {
     const s = session({
       content: '<qqbot-at-user id="ABC" /> /echo before<@ABC>after <qqbot-at-user id="DEF" />',

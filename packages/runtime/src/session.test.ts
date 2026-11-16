@@ -32,6 +32,48 @@ const c2cMessage: WebhookPayload = {
   d: { id: 'm1', content: 'hi', author: { user_openid: 'U1' } },
 }
 
+describe('session 用户资料', () => {
+  it.each(['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'])('%s 分别读取个人昵称和群昵称，优先使用推送的头像', (t) => {
+    const avatar = 'https://thirdqq.qlogo.cn/avatar/qq?size=140&token=test%2Bvalue'
+    const { session } = setup({
+      op: 0,
+      t,
+      d: {
+        id: 'm1',
+        group_openid: 'G1',
+        author: { member_openid: 'U1', username: '小林', member_nickname: ' 值班小林 ', avatar },
+      },
+    })
+    expect(session).toMatchObject({ userName: '小林', groupNickname: '值班小林', avatarUrl: avatar, userId: 'U1' })
+  })
+
+  it.each([undefined, '  '])('旧载荷或空白群昵称回退到原有个人昵称和头像：%j', (member_nickname) => {
+    const { session } = setup({
+      op: 0,
+      t: 'GROUP_AT_MESSAGE_CREATE',
+      d: { id: 'm1', group_openid: 'G1', username: '小林', author: { member_openid: 'U1', member_nickname } },
+    })
+    expect(session.userName).toBe('小林')
+    expect(session.groupNickname).toBeUndefined()
+    expect(session.avatarUrl).toBe('https://thirdqq.qlogo.cn/qqapp/b/U1/640')
+  })
+
+  it('单聊读取个人昵称和头像，群昵称为空', () => {
+    const avatar = 'https://thirdqq.qlogo.cn/avatar/qq'
+    const { session } = setup({
+      ...c2cMessage,
+      d: { id: 'm1', author: { user_openid: 'U1', username: '小林', member_nickname: '值班小林', avatar } },
+    })
+    expect(session).toMatchObject({ userName: '小林', avatarUrl: avatar })
+    expect(session.groupNickname).toBeUndefined()
+  })
+
+  it.each(['not a URL', 'data:image/png;base64,AA=='])('头像地址不可用时回退到 CDN：%s', (avatar) => {
+    const { session } = setup({ ...c2cMessage, d: { id: 'm1', author: { user_openid: 'U1', avatar } } })
+    expect(session.avatarUrl).toBe('https://thirdqq.qlogo.cn/qqapp/b/U1/640')
+  })
+})
+
 describe('session.typing 的 msg_seq', () => {
   it('typing 从同一个计数器取号，第一条回复不再撞 1', async () => {
     const { session, calls } = setup(c2cMessage)

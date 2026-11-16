@@ -1,5 +1,5 @@
 import type { RawMessageEvent } from '@qqbot/api'
-import { parseMentionTags } from '@qqbot/sdk'
+import { parseMentionTags, type Scene } from '@qqbot/sdk'
 
 function replaceMentions(content: string, replacement: (id: string, tag: string) => string): string {
   const parts: string[] = []
@@ -21,17 +21,21 @@ export function cleanContent(content: string | undefined): string {
   return replaceMentions(content ?? '', () => '').trim()
 }
 
+export function readGroupNickname(scene: Scene, value: unknown): string {
+  return scene === 'group' && typeof value === 'string' ? value.trim() : ''
+}
+
 /** 展示正文与命令正文分开：只删明确的自身提及，未知的 @ 保留，避免猜错后丢失对象。 */
-export function displayContent(message: RawMessageEvent, botId: string, botUserId?: string): string {
+export function displayContent(message: RawMessageEvent, scene: Scene, botId: string, botUserId?: string): string {
   const self = new Set([botId, ...(botUserId ? [botUserId] : [])])
   const notSelf = new Set<string>()
   const names = new Map<string, string>()
   for (const mention of message.mentions ?? []) {
+    const name = readGroupNickname(scene, mention.member_nickname) || mention.nickname || mention.username
     for (const id of [mention.id, mention.member_openid, mention.user_openid]) {
       if (!id) continue
       if (mention.scope === 'all' || mention.is_you === false) notSelf.add(id)
       else if (mention.is_you === true) self.add(id)
-      const name = mention.nickname || mention.username
       if (name) names.set(id, name)
     }
   }

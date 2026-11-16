@@ -22,9 +22,18 @@ describe('sid 插件', () => {
     expect(markdownOf(session.replies[0])).toContain('群主')
   })
 
-  it('单聊没有群角色，不输出该行', async () => {
+  it('群聊分别显示个人昵称与群昵称，并转义 markdown 符号', async () => {
+    const session = await runCommand(sid, 'sid', '', { session: { userName: '小_林', groupNickname: '*值班小林*' } })
+    const content = markdownOf(session.replies[0])
+    expect(content).toContain('个人昵称：小\\_林')
+    expect(content).toContain('群昵称：\\*值班小林\\*')
+  })
+
+  it('单聊显示个人昵称，没有群昵称和群角色', async () => {
     const session = await runCommand(sid, 'sid', '', { session: { scene: 'c2c', targetId: 'U1' } })
     const content = markdownOf(session.replies[0])
+    expect(content).toContain('个人昵称：测试用户')
+    expect(content).not.toContain('群昵称')
     expect(content).not.toContain('群角色')
     expect(content).toContain('```\nU1\n```')
   })

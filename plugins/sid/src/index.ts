@@ -4,7 +4,7 @@ import type { OutgoingMessage, Session } from '@qqbot/sdk'
 const SCENE_LABEL: Record<string, string> = { group: '群聊', c2c: '单聊', guild: '频道', guild_dm: '频道私聊' }
 const ROLE_LABEL: Record<string, string> = { owner: '群主', admin: '群管理员', member: '普通成员' }
 
-/** 机器人名是用户起的，可能带 markdown 符号 */
+/** 用户和机器人的名字可能带 markdown 符号 */
 const escapeMarkdown = (text: string) => text.replace(/[\\`*_~[\]()#>|<]/g, '\\$&')
 
 /**
@@ -14,7 +14,7 @@ const escapeMarkdown = (text: string) => text.replace(/[\\`*_~[\]()#>|<]/g, '\\$
 export default definePlugin({
   name: 'sid',
   displayName: '会话信息',
-  description: '查询自己的 OpenID、当前会话 ID、群角色与头像链接',
+  description: '查询自己的 OpenID、昵称、当前会话 ID、群角色与头像链接',
   commands: {
     sid: {
       description: '查看本会话的身份信息',
@@ -32,6 +32,8 @@ function textReply(session: Session): string {
     `用户 OpenID：${session.userId || '（未知）'}`,
     `${sceneLabel(session)} ID：${session.targetId || '（未知）'}`,
   ]
+  if (session.userName) lines.push(`个人昵称：${session.userName}`)
+  if (session.groupNickname) lines.push(`群昵称：${session.groupNickname}`)
   if (session.memberRole) lines.push(`群角色：${roleLabel(session)}`)
   lines.push(
     session.botName ? `机器人：${session.botName}（AppID：${session.botId}）` : `机器人 AppID：${session.botId}`,
@@ -48,6 +50,8 @@ function markdownReply(session: Session): OutgoingMessage {
     `${sceneLabel(session)} ID`,
     ...codeBlock(session.targetId),
   ]
+  if (session.userName) lines.push(`个人昵称：${escapeMarkdown(session.userName)}`)
+  if (session.groupNickname) lines.push(`群昵称：${escapeMarkdown(session.groupNickname)}`)
   if (session.memberRole) lines.push(`群角色：${roleLabel(session)}`)
   lines.push(
     session.botName

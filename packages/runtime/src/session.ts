@@ -25,7 +25,7 @@ import {
 } from '@qqbot/sdk'
 import { messageAddressing } from './addressing.js'
 import { toAttachments } from './attachments.js'
-import { cleanContent, displayContent } from './content.js'
+import { cleanContent, displayContent, readGroupNickname } from './content.js'
 import { buildQuote } from './quote.js'
 import type { RefIndexTable } from './refIndex.js'
 import { createStreamWriter } from './stream.js'
@@ -106,6 +106,16 @@ function identify(rawType: string, d: RawMessageEvent & RawInteractionEvent & Ra
   return { scene: 'unknown', targetId: '', userId: userOpenid || author.id || '', userName }
 }
 
+function eventAvatarUrl(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
 function buildInteraction(d: RawInteractionEvent, sender: Sender): Interaction {
   const resolved = d.data?.resolved ?? {}
   const rawType = d.type ?? d.data?.type ?? 0
@@ -134,6 +144,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   const rawType = payload.t ?? 'UNKNOWN'
   const d = (payload.d ?? {}) as RawMessageEvent & RawInteractionEvent & RawGroupEvent
   const { scene, targetId, userId, userName } = identify(rawType, d)
+  const groupNickname = readGroupNickname(scene, d.author?.member_nickname)
   // 群消息的 author 自带成员角色；单聊/频道没有，未知值归一化为 undefined。
   // 部分群事件（成员变动等）把角色放顶层，作回退读取。
   const rawRole = typeof d.author?.member_role === 'string' ? d.author.member_role : (d as { member_role?: unknown }).member_role
@@ -145,12 +156,16 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
   // 被 @ 者的 id / 名字：线上群全量消息带 id / username，腾讯官方适配器的类型里还有 member_openid / nickname，都读。
   // is_you（@ 的就是本机器人）也算 bot，插件过滤机器人时不会把自己当成被 @ 的群友
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
-  const mentions: Mention[] = (d.mentions ?? []).map((m) => ({
-    id: str(m.member_openid) || str(m.id) || str(m.user_openid),
-    username: str(m.nickname) || str(m.username),
-    bot: m.bot === true || m.is_you === true,
-    ...(m.scope === 'single' || m.scope === 'all' ? { scope: m.scope } : {}),
-  }))
+  const mentions: Mention[] = (d.mentions ?? []).map((m) => {
+    const groupNickname = readGroupNickname(scene, m.member_nickname)
+    return {
+      id: str(m.member_openid) || str(m.id) || str(m.user_openid),
+      username: str(m.nickname) || str(m.username),
+      ...(groupNickname ? { groupNickname } : {}),
+      bot: m.bot === true || m.is_you === true,
+      ...(m.scope === 'single' || m.scope === 'all' ? { scope: m.scope } : {}),
+    }
+  })
   const event = toEventName(rawType)
   const eventId = payload.id ?? `${rawType}:${d.id ?? Date.now()}`
   const messageId = typeof d.id === 'string' && rawType.includes('MESSAGE') ? d.id : undefined
@@ -213,7 +228,8 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     targetId,
     userId,
     userName,
-    avatarUrl: qqAvatar(options.botId, userId),
+    ...(groupNickname ? { groupNickname } : {}),
+    avatarUrl: eventAvatarUrl(d.author?.avatar) || qqAvatar(options.botId, userId),
     memberRole,
     isBotAdmin: userId !== '' && (options.botAdmins?.includes(userId) ?? false),
     messageId,
@@ -221,7 +237,7 @@ export function buildSession(payload: WebhookPayload, options: SessionOptions): 
     quote,
     canReply: passive() !== null,
     content: cleanContent(d.content),
-    displayContent: displayContent(d, options.botId, options.botUserId),
+    displayContent: displayContent(d, scene, options.botId, options.botUserId),
     mentions,
     ...addressing,
     attachments: toAttachments(d.attachments),

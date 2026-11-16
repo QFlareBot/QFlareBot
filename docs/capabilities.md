@@ -25,7 +25,8 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 | 输入中状态 `input_notify` | `session.typing(seconds)` | 仅单聊，≤60s |
 | **流式消息** | `const w = session.stream(); w.write(); w.end()` | 仅单聊，首片立即发送，后续按 500ms 合并；一个流共用一个 msg_seq、占一条回复额度；必须 await end；群聊退化为 end 时一次性回复 |
 | 撤回 | `session.recall(id?)` / `ctx.api.recallMessage()` | 2 分钟内；群管理员可撤成员消息 |
-| **用户头像**（官方 CDN 规范） | `session.avatarUrl`（640） / `qqAvatar(botId, openid, size)` | 纯拼接 `thirdqq.qlogo.cn/qqapp/{botId}/{openid}/{size}`（size 40/100/140/640），不发请求、无缓存 |
+| **用户昵称** | `session.userName` / `session.groupNickname` | 个人昵称与当前群昵称分别提供，平台未下发群昵称时为 `undefined` |
+| **用户头像** | `session.avatarUrl` / `qqAvatar(botId, openid, size)` | 优先使用推送里的头像 URL，取不到时拼接 640 规格的官方 CDN 链接；`qqAvatar()` 可指定 40/100/140/640，全程不发请求 |
 | **@ 提及**（拼接文本） | `qqAt(openid)` → `<@openid>` | 放进 text / markdown content 即可；`session.mentions` 反向读取消息里 @ 了谁 |
 | **机器人自身资料** `/users/@me` | `session.botName` / `botAvatar`（随快照下发）或 `ctx.api.me()` 直调（`BotProfile`） | 快照方案运行时零 API，改资料后重新保存凭证即可刷新；`api.me()` 不缓存，频率插件自控 |
 | Ark / Embed（频道） | raw | |
@@ -35,8 +36,8 @@ description: QQ 机器人 API v2 的各项能力在 QFlareBot 插件里怎么用
 
 | 平台事件 | 事件名 | Session 字段 |
 | --- | --- | --- |
-| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、displayContent、attachments、refIndex、quote、mentions、atMe、memberRole |
-| C2C_MESSAGE_CREATE | `qq.c2c.message` | 同上 |
+| GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `qq.group.at_message` / `qq.group.message` | content、displayContent、attachments、refIndex、quote、mentions、atMe、userName、groupNickname、avatarUrl、memberRole |
+| C2C_MESSAGE_CREATE | `qq.c2c.message` | content、displayContent、attachments、refIndex、quote、mentions、atMe、userName、avatarUrl |
 | AT_MESSAGE_CREATE / MESSAGE_CREATE / DIRECT_MESSAGE_CREATE | `qq.guild.*` | |
 | GROUP_ADD_ROBOT / GROUP_DEL_ROBOT | `qq.group.robot_added` / `robot_removed` | canReply（event_id） |
 | GROUP_MSG_RECEIVE / REJECT、C2C_MSG_RECEIVE / REJECT | `qq.group.msg_receive` … | |

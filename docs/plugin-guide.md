@@ -236,8 +236,8 @@ buttons: {
 
 - **消息**：`content`（去 @ 后正文）、`mentions`（@ 的对象列表 `{ id, username, bot, scope? }`；群里 `id` 就是被 @ 者的 member_openid，@ 本机器人的那一项 `bot` 为 true，挑群友时过滤 `bot` 和 `scope: all`）、`atMe`（是否在呼叫本机器人：单聊/频道私信恒为 true，群/频道全量消息只认单独 @ 自己的 `is_you` 或自身 ID；`bot` 标记、@全体和引用里的 @ 都不算，无引用的专用 @ 事件兼容省略自身提及的推送；引用回复只认当前消息里的明确自身提及）、`addressedToOthers`（原文开头 @ 别人或 @ 全体，且未单独 @ 本机器人；聊天插件应先跳过，旧运行时可能为 undefined）、`attachments`、`messageId`、`refIndex`、`quote`（这条消息引用的那条：`messageId` / `content` 原文 / `attachments` / `refIndex`，没引用时是 undefined；撤回被引用的消息就是 `session.recall(session.quote.messageId)`。群、单聊的推送不带被引用消息的 id，`messageId` 是运行时拿 ref index 查内存里的对照表补上的，只有 2 分钟内（和平台的撤回时限一样）、机器人收到过或发出的消息查得到，查不到是空串，要准备好这种情况）
 - **找被 @ 的人**：用 `mentionedUsers(session)`，返回 `{ id, username }[]`，已去掉机器人和全体、按在消息里出现的先后排。它把 `mentions` 和原始正文里的 `<@openid>` / `<@!id>` / `<qqbot-at-user id="id" />` 并起来——没开全量消息的群里「@机器人 摸 @群友」，被 @ 的群友可能只在正文里；正文开头那一串 @ 当作在叫机器人，不算
-- **展示或交给 AI 的正文**：用 `session.displayContent ?? session.content`，保留其他人的 @ 和位置，有名字时显示 `@名字`，未知对象保留原始标记；只移除能确认是本机器人的提及。QQ 的编码表情会转为可读描述，坏数据显示 `[表情]`。`content` 仍用于去 @ 后的命令匹配；框架先依据原始收件人过滤命令和正则，发给别人或全体的消息仍会交给事件观察者。原始数据仍在 `raw`。
-- **身份**：`userId`、`userName`、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（用户头像 CDN 直链，640 规格，纯拼接不发请求；其他尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）
+- **展示或交给 AI 的正文**：用 `session.displayContent ?? session.content`，保留其他人的 @ 和位置，优先展示 `@群昵称`，其次是 `@昵称`，未知对象保留原始标记；只移除能确认是本机器人的提及。被 @ 者的群昵称可从 `session.mentions[].groupNickname` 单独读取。QQ 的编码表情会转为可读描述，坏数据显示 `[表情]`。`content` 仍用于去 @ 后的命令匹配；框架先依据原始收件人过滤命令和正则，发给别人或全体的消息仍会交给事件观察者。原始数据仍在 `raw`。
+- **身份**：`userId`、`userName`（个人 QQ 昵称）、`groupNickname`（当前群昵称，平台未提供时为 `undefined`）、`memberRole`（群聊时的 owner/admin/member）、`isBotAdmin`（是不是 Bot 管理员，见上文权限）、`avatarUrl`（优先用 QQ 推送里的头像 URL，缺失时拼接 640 规格的 CDN 链接；指定尺寸用 `qqAvatar(botId, openid, 140)`，@ 人用 `qqAt(openid)`）、`botName` / `botAvatar`（机器人自己的资料）。插件可以用 `session.groupNickname ?? session.userName` 优先展示群昵称。
 - **事件与会话**：`event`、`scene`、`targetId`、`canReply`、`interaction`、`raw`（QQ 原始 `d`，标准化不够用时直接读它）
 
 ## 4. 回复消息

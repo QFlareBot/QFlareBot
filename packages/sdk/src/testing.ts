@@ -40,6 +40,7 @@ export interface MockSessionOptions {
   targetId?: string
   userId?: string
   userName?: string
+  groupNickname?: string
   memberRole?: 'owner' | 'admin' | 'member'
   /** 默认 false。和 ctx 的 `botAdmins` 不联动：测管理员分支就在这里设 true */
   isBotAdmin?: boolean
@@ -122,6 +123,8 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     }
   }
 
+  const scene = options.scene ?? 'group'
+  const groupNickname = scene === 'group' ? options.groupNickname?.trim() : undefined
   return {
     botId: options.botId ?? 'test-bot',
     botName: options.botName ?? '',
@@ -132,10 +135,11 @@ export function createMockSession(options: MockSessionOptions = {}): MockSession
     id: 'mock-event-id',
     timestamp: Date.now(),
     raw: options.raw ?? {},
-    scene: options.scene ?? 'group',
+    scene,
     targetId: options.targetId ?? 'mock-group',
     userId: options.userId ?? 'mock-user',
     userName: options.userName ?? '测试用户',
+    ...(groupNickname ? { groupNickname } : {}),
     avatarUrl: qqAvatar(options.botId ?? 'test-bot', options.userId ?? 'mock-user'),
     memberRole: options.memberRole,
     isBotAdmin: options.isBotAdmin ?? false,

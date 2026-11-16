@@ -21,7 +21,9 @@ export interface RawMessageEvent {
   author?: {
     id?: string
     username?: string
+    avatar?: string
     member_openid?: string
+    member_nickname?: string
     user_openid?: string
     union_openid?: string
     member_role?: string
@@ -45,6 +47,7 @@ export interface RawMessageEvent {
     user_openid?: string
     username?: string
     nickname?: string
+    member_nickname?: string
     bot?: boolean
     is_you?: boolean
     scope?: string
