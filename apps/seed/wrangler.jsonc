@@ -20,6 +20,9 @@
   "images": { "binding": "IMAGES" },
   "browser": { "binding": "BROWSER" },
 
+  // 插件通过 ctx.email 发送事务邮件。Free 套餐的收件地址须在 Cloudflare 账户内验证。
+  "send_email": [{ "name": "EMAIL" }],
+
   // 运行时只注册这一个 Cron Trigger，再按各插件声明的表达式分发
   "triggers": { "crons": ["* * * * *"] },
 

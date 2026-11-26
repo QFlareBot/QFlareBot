@@ -415,6 +415,7 @@ export interface MockContextOptions<C> {
   r2?: ScopedR2
   images?: ImagesBinding
   browser?: BrowserRun
+  email?: SendEmail
   botId?: string
   /** `ctx.publicUrl`，默认没有（和定时任务里、没填设置时一样） */
   publicUrl?: string
@@ -493,6 +494,7 @@ export function createMockContext<C = unknown>(
     r2: options.r2 ?? createMemoryR2(),
     ...(options.images ? { images: options.images } : {}),
     ...(options.browser ? { browser: options.browser } : {}),
+    ...(options.email ? { email: options.email } : {}),
     api: createRecordingApi(),
     durable,
     service<T>(name: string): T {

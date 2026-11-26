@@ -92,7 +92,7 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 - 写入 `<out>/index.js`、`runtime.js`、`plugins/*.js` 与 `projection.json`（hash、integrity、metadata）
 - 在 wrangler 文件同目录生成 `wrangler.generated.jsonc`：合并原配置并设置 `main`、`no_bundle: true`、`rules: [{ type: 'ESModule', globs: ['**/*.js'] }]`，追加插件 DO 的 `durable_objects.bindings`
 - **不合成 `migrations`**：迁移是只追加的历史，构建机没有「上次应用到哪个 tag」的持久状态，造不出来。模板里的 `migrations` 原样保留，并在插件 DO 类没被覆盖时**报错**（附上该追加的条目）。「覆盖」按顺序重放历史来算：`new_classes` / `new_sqlite_classes`、`renamed_classes` 的 `to`、`transferred_classes` 的 `to` 算现存，`deleted_classes` 与 `renamed_classes` 的 `from` 从现存里减掉。类建在 `new_classes`（KV 存储后端）而版本元数据按 sqlite 声明时给一条警告（不失败）。生产路径走 Versions API，用 `exports` 声明 DO 生命周期，不涉及 `migrations`
-- bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` / `images` / `browser` 推导；缺 id 时用 `<provisioned>` 占位并在摘要中提醒。Images 与 Browser 是账户自带的服务，绑定只有名字，没有资源 id
+- bindings 从 `kv_namespaces[0]` / `d1_databases[0]` / `r2_buckets[0]` / `vars` / `images` / `browser` / `send_email` 推导。缺资源 id 时用 `<provisioned>` 占位并在摘要中提醒。每个邮件绑定的名字和收发地址限制都会写入版本元数据。
 - `CF_D1_ID=none` / `CF_R2_NAME=none` 是「显式跳过该可选资源」的哨兵：它优先于模板里硬编码的值，命中就把对应字段从生成配置里剥掉。所以**模板只该声明 binding 名，别硬编码 `bucket_name` / `database_id`**——硬编码会让剥离分支永远进不去，「R2 不可用即不绑定」的降级随之失效
 - KV 没有这个哨兵：运行时无条件用它，`CF_KV_ID=none` 不受支持，按「没解析出来」处理（`projection.json` 的 `bindings.kv` 是 `unresolved`，部署护栏拒绝）
 - JSONC 解析先去注释、再单独扫一遍去尾随逗号，逗号与 `]` / `}` 之间隔着注释（`[1, // 说明\n]`）也认得出
@@ -103,4 +103,4 @@ qqbot-project build --manifest ./deploy.json --wrangler ./wrangler.jsonc --out .
 - 上传版本 → 预览健康检查 → 切流量这条路已在线上跑通（seed 自部署用的就是它）；带插件 DO 的 `exports` 声明还没在线上实测过
 - 含 Durable Object 的 Worker 平台不生成版本预览 URL，因此 `deploy()` 在未显式传 `healthCheck` 时会对含 DO 的投影自动跳过健康检查（显式传对象则强制检查）
 - `wrangler deploy` 路径下，含插件 DO 的投影需要**人工维护 `migrations`**（生成器只校验，缺类即报错）。这是 Cloudflare 的模型决定的：迁移是只追加的历史，平台靠「上次应用过的 tag」算增量，而构建机没有这个状态。通过 Versions API 部署不受影响——那条路用 `exports` 声明 DO 生命周期，`migrations` 与 `exports` 互斥，由平台按 `exports` 自动 reconcile（此路径尚未对线上实测）
-- 版本元数据 bindings 目前只覆盖 KV / D1 / R2 / plain_text / 插件 DO；`vars` 中非字符串值会被 JSON 序列化为文本
+- 版本元数据支持 KV、D1、R2、Images、Browser、Email、plain_text 和插件 DO 绑定。`vars` 中非字符串值会被 JSON 序列化为文本。

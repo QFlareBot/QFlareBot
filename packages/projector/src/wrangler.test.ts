@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { makeProjection } from './__fixtures__/manifest.js'
 import { parseJsonc, stripJsonComments } from './jsonc.js'
+import { project } from './project.js'
 import type { BaseBindings } from './types.js'
-import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig, resolveState } from './wrangler.js'
+import { PROVISIONED_PLACEHOLDER, deriveBindings, generateWranglerConfig, resolveState, type WranglerConfig } from './wrangler.js'
 
 describe('jsonc', () => {
   it('去掉行注释、块注释与尾随逗号，保留字符串内容', () => {
@@ -146,6 +147,35 @@ describe('deriveBindings', () => {
     } finally {
       delete process.env.CF_KV_ID
     }
+  })
+})
+
+describe('投影邮件绑定', () => {
+  const fixed = { name: 'ALERTS', destination_address: 'admin@example.com' }
+  const allowlist = {
+    name: 'SUPPORT',
+    allowed_sender_addresses: ['support@example.com'],
+    allowed_destination_addresses: ['team@example.com'],
+  }
+  it.each([
+    { label: '旧模板未声明', config: {}, expected: [] },
+    {
+      label: '多个绑定与收发地址限制',
+      config: { send_email: [{ name: 'EMAIL' }, { ...fixed, remote: true }, allowlist] },
+      expected: [{ type: 'send_email', name: 'EMAIL' }, { type: 'send_email', ...fixed }, { type: 'send_email', ...allowlist }],
+    },
+  ])('$label', async ({ config, expected }) => {
+    const base: WranglerConfig = { ...config, kv_namespaces: [{ binding: 'KV', id: 'kv-id' }] }
+    const { bindings } = deriveBindings(base)
+    const projection = await project({
+      manifest: { core: { version: '1.0.0' }, plugins: [] },
+      fetchArtifact: async () => 'export {}',
+      compatibilityDate: '2026-09-01',
+      bindings,
+    })
+    expect(projection.metadata.bindings.filter(b => b.type === 'send_email')).toEqual(expected)
+    const generated = generateWranglerConfig({ base, bindings, projection, mainPath: 'dist/index.js' })
+    expect(generated.send_email).toEqual(base.send_email)
   })
 })
 
@@ -595,6 +625,7 @@ describe('generateWranglerConfig', () => {
       r2_buckets?: Array<Record<string, unknown>>
       images?: Record<string, unknown>
       browser?: Record<string, unknown>
+      send_email?: Array<Record<string, unknown>>
     }>(readFileSync(new URL('../../../apps/seed/wrangler.jsonc', import.meta.url), 'utf8'))
 
     expect(seedTemplate.kv_namespaces?.[0]).toEqual({ binding: 'KV' })
@@ -603,6 +634,7 @@ describe('generateWranglerConfig', () => {
     // 运行时按这两个名字取 env.IMAGES / env.BROWSER
     expect(seedTemplate.images).toEqual({ binding: 'IMAGES' })
     expect(seedTemplate.browser).toEqual({ binding: 'BROWSER' })
+    expect(seedTemplate.send_email).toEqual([{ name: 'EMAIL' }])
   })
 })
 

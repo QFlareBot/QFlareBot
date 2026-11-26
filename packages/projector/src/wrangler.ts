@@ -1,4 +1,4 @@
-import type { BaseBindings, Projection } from './types.js'
+import type { BaseBindings, Projection, SendEmailBinding } from './types.js'
 
 /** 只描述本包会读写的字段，其余原样透传 */
 export interface WranglerConfig {
@@ -13,6 +13,7 @@ export interface WranglerConfig {
   r2_buckets?: Array<{ binding: string; bucket_name?: string }>
   images?: { binding: string; remote?: boolean }
   browser?: { binding: string; remote?: boolean }
+  send_email?: Array<SendEmailBinding & { remote?: boolean }>
   vars?: Record<string, unknown>
   durable_objects?: { bindings?: Array<{ name: string; class_name: string; script_name?: string }> }
   migrations?: WranglerMigration[]
@@ -144,6 +145,7 @@ export function deriveBindings(config: WranglerConfig): DerivedBindings {
   if (Object.keys(vars).length) bindings.vars = vars
   if (config.images) bindings.images = { binding: config.images.binding }
   if (config.browser) bindings.browser = { binding: config.browser.binding }
+  if (config.send_email?.length) bindings.sendEmail = config.send_email
   return { bindings, warnings }
 }
 

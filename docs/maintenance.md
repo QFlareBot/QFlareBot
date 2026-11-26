@@ -19,6 +19,7 @@ description: 部署之后的日常：同步上游升级框架、重跑引导、�
 
 - **面板里装的插件都还在。** 构建机每次都从你机器人的 D1 读已装插件清单，和仓库里的内置插件合并后一起构建。插件钉在各自的提交上，不会跟着升级；它们会用新版框架重新编译，契约只增不改，插件不需要重新打包。
 - **数据库表结构自己升级。** 运行时用到时自动建表、补字段，不用重跑引导工作流。
+- **邮件绑定随同步更新。** 新版构建会把 `EMAIL` 绑定写入 Worker 版本，已有实例按上面的步骤同步即可。要实际发信，发件地址须属于已接入 Cloudflare Email Service 的域名，Workers Free 的收件地址须在同一账户完成验证。已启用 Email Routing 的域名也可以用这个绑定向已验证地址发信。[Cloudflare 收件地址说明](https://developers.cloudflare.com/email-service/configuration/destination-addresses/)
 - **概览页的最近事件要构建 Token 多一项权限。** 事件摘要改从 Workers Logs 读之后，构建 Token 要带「Workers Observability → Edit」。更早部署的 Token 没有这一项，概览页会提示：到 Cloudflare 后台 → My Profile → API Tokens 编辑这个 Token 勾上即可，Token 的值不变，不用重新部署。不补也不影响收发消息和构建，只是看不到最近事件和 24 小时统计。
 - **只改了文档的更新不会触发构建。** `docs/`、`templates/`、`.github/`、`scripts/`、`design-system/`、`*.md`、`LICENSE` 在构建的排除路径里。
 - **构建缓存会自动打开。** 引导部署时就会打开；更早部署的机器人，下一次从面板触发构建时补上。它缓存下载过的依赖，装依赖快十秒左右，其余步骤不受影响。怀疑缓存出了问题（比如装依赖报文件损坏），到 Cloudflare 后台 → Workers → 你的 Worker → Settings → Build → Build cache 点 Clear Cache；不想要就在同一处关掉，之后不会再被自动打开。

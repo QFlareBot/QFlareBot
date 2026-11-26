@@ -15,11 +15,12 @@ import type { PluginTool } from './tools.js'
  * - 4：`ctx.images`、`ctx.browser`（没绑定时是 undefined，老机器人上也是，判断过 undefined 的插件不必写 4）
  *
  * - 5：声明式 `tools`、框架保留服务 `core.tools`（可选接入的消费者仍可声明较低最低版本）
+ * - 6：`ctx.email`（绑定缺失时是 undefined，能在缺少邮件时继续运行的插件可声明较低版本）
  *
  * SDK 导出的函数也算：构建插件时 `@qqbot/sdk` 一律解析成**机器人仓库里**那一份（见 apps/seed/scripts/build-plugin.mjs），
  * 老机器人上没有这个导出，构建就失败。命令上的 `panelOnlyAdmin` 这类纯数据字段不算：老 SDK 抽清单时原样带过去、老面板忽略它
  */
-export const API_VERSION = 5 as const
+export const API_VERSION = 6 as const
 
 /** 声明式权限：同 isolate 下不是强制隔离，用于安装时知情同意与审核 */
 export type Permission = 'net' | 'proactive' | 'kv' | 'db' | 'durable' | 'admin' | 'group_manage' | 'recall'

@@ -332,6 +332,8 @@ export interface PluginContext<C = unknown> {
    * 没绑 BROWSER 时是 undefined，0.6 以前的机器人上也是，同上。额度全机器人共用（免费版每天 10 分钟）
    */
   readonly browser?: BrowserRun
+  /** Cloudflare Email Sending 绑定。绑定缺失时为 undefined，发送时还需满足账号的发件域名和收件地址要求。 */
+  readonly email?: SendEmail
   readonly api: BotApi
   /** 本插件声明的 Durable Object；未声明该类名或绑定缺失时抛错 */
   readonly durable: ScopedDurableObjects

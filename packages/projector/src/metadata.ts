@@ -24,6 +24,14 @@ export function buildBindings(bindings: BaseBindings, manifest: DeployManifest):
   }
   if (bindings.images) out.push({ type: 'images', name: bindings.images.binding })
   if (bindings.browser) out.push({ type: 'browser', name: bindings.browser.binding })
+  for (const email of bindings.sendEmail ?? []) {
+    // 与 Wrangler 上传时的字段一致；remote 只供本地开发使用。
+    const binding: WorkerBinding = { type: 'send_email', name: email.name }
+    if (email.allowed_sender_addresses !== undefined) binding.allowed_sender_addresses = email.allowed_sender_addresses
+    if (email.destination_address !== undefined) binding.destination_address = email.destination_address
+    else if (email.allowed_destination_addresses !== undefined) binding.allowed_destination_addresses = email.allowed_destination_addresses
+    out.push(binding)
+  }
   for (const d of collectDurableObjects(manifest.plugins)) {
     out.push({ type: 'durable_object_namespace', name: d.exportName, class_name: d.exportName })
   }

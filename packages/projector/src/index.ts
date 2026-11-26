@@ -5,6 +5,7 @@ export type {
   ArtifactRef,
   FetchArtifact,
   BaseBindings,
+  SendEmailBinding,
   ProjectOptions,
   Projection,
   DurableObjectExport,
