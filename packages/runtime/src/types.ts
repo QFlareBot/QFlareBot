@@ -9,6 +9,7 @@ export interface RuntimeEnv {
   R2?: R2Bucket
   IMAGES?: ImagesBinding
   BROWSER?: BrowserRun
+  EMAIL?: SendEmail
   /** 优先用 secret；未设置时回退到 KV 中面板保存的配置 */
   BOT_APPID?: string
   BOT_SECRET?: string

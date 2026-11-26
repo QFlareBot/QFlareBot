@@ -14,7 +14,7 @@ const USAGE = `用法：
 
 选项：
   --manifest   部署清单（DeployManifest JSON），source 支持 file:（相对清单文件）与 npm:/github:/url:
-  --wrangler   基础 wrangler.jsonc；bindings 从 kv_namespaces[0]/d1_databases[0]/r2_buckets[0]/vars/images/browser 推导
+  --wrangler   基础 wrangler.jsonc；bindings 从 kv_namespaces[0]/d1_databases[0]/r2_buckets[0]/vars/images/browser/send_email 推导
   --out        投影输出目录（写入 index.js、runtime.js、plugins/*.js、projection.json）
 `
 

@@ -117,6 +117,7 @@ export class ContextFactory {
       r2: createScopedR2(env.R2, name),
       ...(env.IMAGES ? { images: env.IMAGES } : {}),
       ...(env.BROWSER ? { browser: env.BROWSER } : {}),
+      ...(env.EMAIL ? { email: env.EMAIL } : {}),
       api: this.options.api,
       durable: createScopedDurable(env, name, plugin.manifest.durableObjects),
       service: <T>(serviceName: string): T => {

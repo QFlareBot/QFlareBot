@@ -32,16 +32,19 @@ function recordingDB() {
 
 const plugin = { name: 'hello' }
 
-describe('mock ctx.images / ctx.browser', () => {
+describe('mock ctx.images / ctx.browser / ctx.email', () => {
   it('注入了给注入的，不注入是 undefined（和线上没绑定时一样）', () => {
     const images = {} as ImagesBinding
     const browser = {} as BrowserRun
-    const ctx = createMockContext(plugin, { images, browser })
+    const email: SendEmail = { send: async () => ({ messageId: 'test-message' }) }
+    const ctx = createMockContext(plugin, { images, browser, email })
     expect(ctx.images).toBe(images)
     expect(ctx.browser).toBe(browser)
+    expect(ctx.email).toBe(email)
     const bare = createMockContext(plugin)
     expect(bare.images).toBeUndefined()
     expect(bare.browser).toBeUndefined()
+    expect(bare.email).toBeUndefined()
   })
 })
 

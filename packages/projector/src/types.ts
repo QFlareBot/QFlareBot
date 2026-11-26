@@ -52,12 +52,20 @@ export type ArtifactRef = {
 
 export type FetchArtifact = (ref: ArtifactRef) => Promise<string>
 
+export interface SendEmailBinding {
+  name: string
+  destination_address?: string
+  allowed_destination_addresses?: string[]
+  allowed_sender_addresses?: string[]
+}
+
 export interface BaseBindings {
   kv: { binding: string; namespaceId: string }
   d1: { binding: string; databaseId: string }
   r2?: { binding: string; bucketName: string }
   images?: { binding: string }
   browser?: { binding: string }
+  sendEmail?: SendEmailBinding[]
   vars?: Record<string, string>
 }
 
@@ -106,6 +114,7 @@ export type WorkerBinding =
   | { type: 'r2_bucket'; name: string; bucket_name: string }
   | { type: 'images'; name: string }
   | { type: 'browser'; name: string }
+  | ({ type: 'send_email' } & SendEmailBinding)
   | { type: 'plain_text'; name: string; text: string }
   | { type: 'durable_object_namespace'; name: string; class_name: string }
 
