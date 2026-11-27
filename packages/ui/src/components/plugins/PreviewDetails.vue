@@ -11,10 +11,10 @@ defineProps<{ preview: InstallPreview; notice?: string | null }>()
     <p v-if="preview.manifest.description" class="text-xs text-fg-muted">{{ preview.manifest.description }}</p>
     <dl class="flex flex-col gap-1.5 text-xs">
       <div class="flex flex-wrap items-center gap-1">
-        <dt class="mr-1 text-fg-muted">权限</dt>
+        <dt class="mr-1 text-fg-muted">声明的权限</dt>
         <dd class="flex flex-wrap gap-1">
           <QBadge v-for="perm in preview.manifest.permissions" :key="perm">{{ perm }}</QBadge>
-          <span v-if="!preview.manifest.permissions.length" class="text-fg-subtle">无</span>
+          <span v-if="!preview.manifest.permissions?.length" class="text-fg-subtle">未声明</span>
         </dd>
       </div>
       <div v-if="preview.manifest.commands.length" class="flex flex-wrap items-baseline gap-1">
