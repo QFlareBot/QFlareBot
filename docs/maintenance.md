@@ -19,11 +19,16 @@ description: 部署之后的日常：同步上游升级框架、重跑引导、�
 
 - **面板里装的插件都还在。** 构建机每次都从你机器人的 D1 读已装插件清单，和仓库里的内置插件合并后一起构建。插件钉在各自的提交上，不会跟着升级；它们会用新版框架重新编译，契约只增不改，插件不需要重新打包。
 - **数据库表结构自己升级。** 运行时用到时自动建表、补字段，不用重跑引导工作流。
-- **邮件绑定随同步更新。** 新版构建会把 `EMAIL` 绑定写入 Worker 版本，已有实例按上面的步骤同步即可。要实际发信，发件地址须属于已接入 Cloudflare Email Service 的域名，Workers Free 的收件地址须在同一账户完成验证。已启用 Email Routing 的域名也可以用这个绑定向已验证地址发信。[Cloudflare 收件地址说明](https://developers.cloudflare.com/email-service/configuration/destination-addresses/)
 - **概览页的最近事件要构建 Token 多一项权限。** 事件摘要改从 Workers Logs 读之后，构建 Token 要带「Workers Observability → Edit」。更早部署的 Token 没有这一项，概览页会提示：到 Cloudflare 后台 → My Profile → API Tokens 编辑这个 Token 勾上即可，Token 的值不变，不用重新部署。不补也不影响收发消息和构建，只是看不到最近事件和 24 小时统计。
 - **只改了文档的更新不会触发构建。** `docs/`、`templates/`、`.github/`、`scripts/`、`design-system/`、`*.md`、`LICENSE` 在构建的排除路径里。
 - **构建缓存会自动打开。** 引导部署时就会打开；更早部署的机器人，下一次从面板触发构建时补上。它缓存下载过的依赖，装依赖快十秒左右，其余步骤不受影响。怀疑缓存出了问题（比如装依赖报文件损坏），到 Cloudflare 后台 → Workers → 你的 Worker → Settings → Build → Build cache 点 Clear Cache；不想要就在同一处关掉，之后不会再被自动打开。
 - **同步触发的构建不在面板的「构建记录」里**，面板只记它自己触发的构建。这次构建的进度和日志到 Cloudflare 后台看，见下一节。
+
+### 启用邮件发送
+
+1. 确认 Workers Builds 跟踪的生产分支包含 SDK 契约 v6 的邮件支持。该提交进入生产分支后，普通构建会把 `EMAIL` 绑定和运行时代码一起部署，已有机器人可以沿用原来的 Bootstrap 配置。[包含邮件支持的测试版源码](https://github.com/clown145/QFlareBot-test/tree/72b592a338a2f2a0aea836d04b89ef00313438f3)
+2. 在 Cloudflare 为发件域名启用 Email Service。Workers Free 只能向**本账户已验证的目标地址**发送。若发件域名已使用 Email Routing，直接在其「Destination addresses」中添加邮箱并完成邮件验证即可。[域名配置](https://developers.cloudflare.com/email-service/configuration/domains/) · [收件地址验证](https://developers.cloudflare.com/email-service/configuration/destination-addresses/)
+3. 要在 QQ 测试发信，在面板「添加插件」中粘贴邮件插件仓库链接并安装，填写发件邮箱和默认测试收件邮箱，再用 Bot 管理员账号私聊机器人发 `/邮件测试`。回执中的邮件 ID 可用于核对 Cloudflare 的邮件活动记录。[邮件插件及 Agent 配置](https://github.com/clown145/qflarebot-plugin-email)
 
 ### 同步时有冲突
 
