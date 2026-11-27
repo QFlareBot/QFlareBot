@@ -24,7 +24,7 @@ const meta = computed(() => {
     p.stars !== undefined ? `★ ${p.stars}` : '',
     p.license ?? '',
     p.updatedAt ? `${new Date(p.updatedAt).toLocaleDateString('zh-CN')} 更新` : '',
-    p.permissions?.length ? `权限：${p.permissions.join('、')}` : '',
+    p.status === 'error' && !p.permissions ? '' : `声明的权限：${p.permissions?.join('、') || '未声明'}`,
   ]
     .filter(Boolean)
     .join(' · ')

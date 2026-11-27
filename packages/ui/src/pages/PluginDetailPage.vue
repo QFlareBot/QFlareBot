@@ -71,10 +71,10 @@ async function toggle(enabled: boolean) {
               <div class="flex justify-between gap-3"><dt class="text-fg-muted">版本</dt><dd class="font-mono text-xs">{{ plugin.version }}</dd></div>
               <div class="flex justify-between gap-3"><dt class="text-fg-muted">来源</dt><dd class="text-xs">{{ plugin.installed ? '面板安装' : '仓库内置' }}</dd></div>
               <div class="flex justify-between gap-3">
-                <dt class="text-fg-muted">权限</dt>
+                <dt class="text-fg-muted">声明的权限</dt>
                 <dd class="flex flex-wrap justify-end gap-1">
                   <QBadge v-for="perm in plugin.permissions" :key="perm">{{ perm }}</QBadge>
-                  <span v-if="!plugin.permissions.length" class="text-fg-subtle">无</span>
+                  <span v-if="!plugin.permissions?.length" class="text-fg-subtle">未声明</span>
                 </dd>
               </div>
             </dl>
