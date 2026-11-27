@@ -26,7 +26,7 @@ description: 部署之后的日常：同步上游升级框架、重跑引导、�
 
 ### 启用邮件发送
 
-1. 确认 Workers Builds 跟踪的生产分支包含 SDK 契约 v6 的邮件支持。该提交进入生产分支后，普通构建会把 `EMAIL` 绑定和运行时代码一起部署，已有机器人可以沿用原来的 Bootstrap 配置。[包含邮件支持的测试版源码](https://github.com/clown145/QFlareBot-test/tree/72b592a338a2f2a0aea836d04b89ef00313438f3)
+1. 将 Workers Builds 跟踪的生产分支同步到 QFlareBot 0.8.0 或更新版本。普通构建会把 `EMAIL` 绑定和运行时代码一起部署，已有机器人可以沿用原来的 Bootstrap 配置。[v0.8.0 发布说明](https://github.com/QFlareBot/QFlareBot/releases/tag/v0.8.0)
 2. 在 Cloudflare 为发件域名启用 Email Service。Workers Free 只能向**本账户已验证的目标地址**发送。若发件域名已使用 Email Routing，直接在其「Destination addresses」中添加邮箱并完成邮件验证即可。[域名配置](https://developers.cloudflare.com/email-service/configuration/domains/) · [收件地址验证](https://developers.cloudflare.com/email-service/configuration/destination-addresses/)
 3. 要在 QQ 测试发信，在面板「添加插件」中粘贴邮件插件仓库链接并安装，填写发件邮箱和默认测试收件邮箱，再用 Bot 管理员账号私聊机器人发 `/邮件测试`。回执中的邮件 ID 可用于核对 Cloudflare 的邮件活动记录。[邮件插件及 Agent 配置](https://github.com/clown145/qflarebot-plugin-email)
 
