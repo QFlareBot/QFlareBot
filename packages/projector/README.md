@@ -41,7 +41,11 @@ import { project, deploy, CloudflareWorkersApi, createHttpFetcher } from '@qqbot
 const projection = await project({
   manifest,                              // DeployManifest
   fetchArtifact: createHttpFetcher(),    // (ref) => Promise<源码>
-  bindings: { kv: { binding: 'KV', namespaceId }, d1: { binding: 'DB', databaseId }, r2?, vars? },
+  bindings: {
+    kv: { binding: 'KV', namespaceId },
+    d1: { binding: 'DB', databaseId },
+    sendEmail: [{ name: 'EMAIL', allowed_sender_addresses: ['bot@example.com'] }],
+  },
   compatibilityDate: '2025-09-01',
   compatibilityFlags: ['nodejs_compat'],
 })

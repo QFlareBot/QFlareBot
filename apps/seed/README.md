@@ -7,6 +7,8 @@
 - `src/index.ts`：静态入口，直接 import 工作区插件，供 `wrangler dev` 与快速部署。
 - `dist/index.js`：由清单投影生成（本地 `pnpm project`，或构建机上的 `manifest:prepare`），用 `wrangler.generated.jsonc` 或自部署脚本部署。
 
+支持契约 v6 的种子配置在 `send_email` 中声明名为 `EMAIL` 的绑定。普通 Workers Builds 部署会把它交给运行时，插件通过 `ctx.email` 调用。发件域名和已验证的收件地址由 Cloudflare Email Service 管理。[启用邮件发送](../../docs/maintenance.md#启用邮件发送)
+
 ## 首次部署：引导工作流（推荐）
 
 仓库根目录的 [`.github/workflows/bootstrap.yml`](../../.github/workflows/bootstrap.yml) 会把资源创建、

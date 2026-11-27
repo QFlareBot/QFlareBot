@@ -531,6 +531,7 @@ if (base) return { image: { url: `${base}/p/${ctx.plugin.name}/img/${id}` } }
 | R2 | 存储 10 GB·月；Class A（写/列）1,000,000 次/月；Class B（读）10,000,000 次/月 |
 | Images（`ctx.images`） | 不重复的变换 5,000 次/月；超了新变换报错（不扣费），缓存过的照常出 |
 | Browser Run（`ctx.browser`） | 浏览器时间 10 分钟/天；Quick Actions（`quickAction()` 截图、转 PDF 等）每 10 秒 1 次；自己开浏览器会话每 20 秒新开 1 个、同时最多 3 个 |
+| Email Sending（`ctx.email`） | 只向本账户已验证的目标地址发送。这些邮件免计月度配额和每日发送限额。[Cloudflare 收件地址说明](https://developers.cloudflare.com/email-service/configuration/destination-addresses/) |
 
 Cron Triggers 免费版每账户只有 5 个——框架只注册一个每分钟触发器、再按插件的 cron 表达式内部分发，插件随便声明都不会撞这个限制，但**每次调度同样只有 10 ms CPU**。
 
@@ -597,6 +598,8 @@ D1 按**改动的行数**计费，不按语句条数：`DELETE` 也算写入，�
 | `ctx.botAdmins` | Bot 管理员的 openid 名单（只读）；判断当前发起人用 `session.isBotAdmin`，见第 3 节权限 |
 
 有疑问先看三份代码：[`templates/plugin/src/index.ts`](https://github.com/QFlareBot/QFlareBot/blob/main/templates/plugin/src/index.ts)（起步示例，含按键）、[`plugins/t2i`](https://github.com/QFlareBot/QFlareBot/tree/main/plugins/t2i)（对外提供服务 + 插件页面）、[`@qqbot/sdk`](https://github.com/QFlareBot/QFlareBot/tree/main/packages/sdk/src) 的类型注释（字段级真相）。内置插件做什么见[内置插件](./builtin-plugins.md)。
+
+自带发信逻辑的插件可以直接使用可选的 `ctx.email`。如果希望复用管理员在面板设置的发件人，可以安装邮件插件，并在调用方声明 `depends: { email: '*' }`。随后调用 `ctx.service<EmailService>('email').send({ to, subject, text })` 即可。`EmailService` 是邮件插件导出的类型，调用方负责限制哪些用户或事件可以触发发送。[邮件插件服务与完整示例](https://github.com/clown145/qflarebot-plugin-email)
 
 ## 给所有 Agent 提供工具
 

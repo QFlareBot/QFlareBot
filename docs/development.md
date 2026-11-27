@@ -36,6 +36,12 @@ pnpm dev                                             # 打开 http://localhost:8
 | `templates/plugin` | 插件仓库模板 |
 | `docs/` | 本文档站（VitePress） |
 
+## 新增 Cloudflare 绑定
+
+以邮件为例，`apps/seed/wrangler.jsonc` 中的 `send_email` 供首次部署使用。普通升级通过 Workers Versions API 上传版本，投影器的 `deriveBindings` 读取同一份配置，`buildBindings` 将名字和收发地址限制写入上传元数据。改动这条链路时，检查 `wrangler.generated.jsonc` 和 `dist/projection.json` 的 `metadata.bindings` 是否使用相同的绑定名和限制。版本上传会替换绑定清单，已有资源需继续列出，Secret 由 `metadata.keep_bindings` 保留。
+
+给插件新增可选字段时，在 SDK 定义类型，在运行时按实际绑定注入，并让 `createMockContext` 支持同名测试替身。用绑定存在和缺失两种环境验证插件。若某项能力还需账户开通或域名验证，可在该能力的配置说明中列出这些步骤。[插件的最低契约版本](./plugin-guide.md#_2-规则)
+
 ## 文档站
 
 `docs/` 的依赖独立于 workspace，Workers Builds 装依赖时不会带上 VitePress。安装时必须带 `--ignore-workspace`，否则会写进根目录的 lockfile：
